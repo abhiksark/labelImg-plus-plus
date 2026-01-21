@@ -1,3 +1,6 @@
+# libs/toolBar.py
+"""Custom toolbar and button classes for labelImg++."""
+
 try:
     from PyQt5.QtGui import *
     from PyQt5.QtCore import *
@@ -7,15 +10,22 @@ except ImportError:
     from PyQt4.QtCore import *
 
 
+# Icon size for toolbar buttons (Feather icons are 24x24)
+ICON_SIZE = 24
+# Minimum button size for comfortable clicking
+MIN_BUTTON_SIZE = 44
+
+
 class ToolBar(QToolBar):
+    """Custom toolbar with modern styling support."""
 
     def __init__(self, title):
         super(ToolBar, self).__init__(title)
         layout = self.layout()
-        m = (0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.setContentsMargins(*m)
-        self.setContentsMargins(*m)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
 
     def addAction(self, action):
@@ -28,12 +38,12 @@ class ToolBar(QToolBar):
 
 
 class ToolButton(QToolButton):
-    """ToolBar companion class which ensures all buttons have the same size."""
-    minSize = (60, 60)
+    """Custom toolbar button with consistent sizing."""
+
+    def __init__(self):
+        super(ToolButton, self).__init__()
+        self.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
+        self.setMinimumSize(MIN_BUTTON_SIZE, MIN_BUTTON_SIZE)
 
     def minimumSizeHint(self):
-        ms = super(ToolButton, self).minimumSizeHint()
-        w1, h1 = ms.width(), ms.height()
-        w2, h2 = self.minSize
-        ToolButton.minSize = max(w1, w2), max(h1, h2)
-        return QSize(*ToolButton.minSize)
+        return QSize(MIN_BUTTON_SIZE, MIN_BUTTON_SIZE)

@@ -39,6 +39,7 @@ from libs.labelDialog import LabelDialog
 from libs.colorDialog import ColorDialog
 from libs.labelFile import LabelFile, LabelFileError, LabelFileFormat
 from libs.toolBar import ToolBar
+from libs.styles import TOOLBAR_STYLE
 from libs.pascal_voc_io import PascalVocReader
 from libs.pascal_voc_io import XML_EXT
 from libs.yolo_io import YoloReader
@@ -469,6 +470,7 @@ class MainWindow(QMainWindow, WindowMixin):
             action('&Move here', self.move_shape)))
 
         self.tools = self.toolbar('Tools')
+        self.tools.setStyleSheet(TOOLBAR_STYLE)
         self.actions.beginner = (
             open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,

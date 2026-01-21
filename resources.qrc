@@ -1,40 +1,46 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource>
 
-<file alias="help">resources/icons/help.png</file>
+<!-- Feather Icons (modern toolbar) -->
+<file alias="help">resources/icons/feather/help-circle.svg</file>
+<file alias="expert">resources/icons/feather/sliders.svg</file>
+<file alias="done">resources/icons/feather/check.svg</file>
+<file alias="file">resources/icons/feather/file.svg</file>
+<file alias="labels">resources/icons/feather/grid.svg</file>
+<file alias="new">resources/icons/feather/plus-square.svg</file>
+<file alias="close">resources/icons/feather/x.svg</file>
+<file alias="fit-width">resources/icons/feather/maximize.svg</file>
+<file alias="fit-window">resources/icons/feather/maximize-2.svg</file>
+<file alias="undo">resources/icons/feather/rotate-ccw.svg</file>
+<file alias="hide">resources/icons/feather/eye-off.svg</file>
+<file alias="quit">resources/icons/feather/log-out.svg</file>
+<file alias="copy">resources/icons/feather/copy.svg</file>
+<file alias="edit">resources/icons/feather/edit-3.svg</file>
+<file alias="open">resources/icons/feather/folder.svg</file>
+<file alias="save">resources/icons/feather/save.svg</file>
+<file alias="save-as">resources/icons/feather/download.svg</file>
+<file alias="color">resources/icons/feather/droplet.svg</file>
+<file alias="color_line">resources/icons/feather/edit-2.svg</file>
+<file alias="zoom">resources/icons/feather/search.svg</file>
+<file alias="zoom-in">resources/icons/feather/zoom-in.svg</file>
+<file alias="zoom-out">resources/icons/feather/zoom-out.svg</file>
+<file alias="light_reset">resources/icons/feather/sun.svg</file>
+<file alias="light_lighten">resources/icons/feather/sun.svg</file>
+<file alias="light_darken">resources/icons/feather/moon.svg</file>
+<file alias="delete">resources/icons/feather/trash-2.svg</file>
+<file alias="next">resources/icons/feather/chevron-right.svg</file>
+<file alias="prev">resources/icons/feather/chevron-left.svg</file>
+<file alias="resetall">resources/icons/feather/refresh-cw.svg</file>
+<file alias="verify">resources/icons/feather/check-circle.svg</file>
+<file alias="settings">resources/icons/feather/settings.svg</file>
+
+<!-- Keep original app icon and format icons -->
 <file alias="app">resources/icons/app.png</file>
-<file alias="expert">resources/icons/expert2.png</file>
-<file alias="done">resources/icons/done.png</file>
-<file alias="file">resources/icons/file.png</file>
-<file alias="labels">resources/icons/labels.png</file>
-<file alias="new">resources/icons/objects.png</file>
-<file alias="close">resources/icons/close.png</file>
-<file alias="fit-width">resources/icons/fit-width.png</file>
-<file alias="fit-window">resources/icons/fit-window.png</file>
-<file alias="undo">resources/icons/undo.png</file>
-<file alias="hide">resources/icons/eye.png</file>
-<file alias="quit">resources/icons/quit.png</file>
-<file alias="copy">resources/icons/copy.png</file>
-<file alias="edit">resources/icons/edit.png</file>
-<file alias="open">resources/icons/open.png</file>
-<file alias="save">resources/icons/save.png</file>
 <file alias="format_voc">resources/icons/format_voc.png</file>
 <file alias="format_yolo">resources/icons/format_yolo.png</file>
 <file alias="format_createml">resources/icons/format_createml.png</file>
-<file alias="save-as">resources/icons/save-as.png</file>
-<file alias="color">resources/icons/color.png</file>
-<file alias="color_line">resources/icons/color_line.png</file>
-<file alias="zoom">resources/icons/zoom.png</file>
-<file alias="zoom-in">resources/icons/zoom-in.png</file>
-<file alias="zoom-out">resources/icons/zoom-out.png</file>
-<file alias="light_reset">resources/icons/light_reset.png</file>
-<file alias="light_lighten">resources/icons/light_lighten.png</file>
-<file alias="light_darken">resources/icons/light_darken.png</file>
-<file alias="delete">resources/icons/cancel.png</file>
-<file alias="next">resources/icons/next.png</file>
-<file alias="prev">resources/icons/prev.png</file>
-<file alias="resetall">resources/icons/resetall.png</file>
-<file alias="verify">resources/icons/verify.png</file>
+
+<!-- String resources -->
 <file alias="strings">resources/strings/strings.properties</file>
 <file alias="strings-zh-TW">resources/strings/strings-zh-TW.properties</file>
 <file alias="strings-zh-CN">resources/strings/strings-zh-CN.properties</file>
