@@ -53,7 +53,7 @@ Reporting Issues
 Original Contributors
 ---------------------
 
-- TzuTa Lin (original LabelImg creator)
+- `Tzutalin <https://github.com/tzutalin>`_ (original LabelImg creator)
 - `LabelMe <http://labelme2.csail.mit.edu/Release3.0/index.php>`_
 - Ryan Flynn
 - All contributors to the original LabelImg project

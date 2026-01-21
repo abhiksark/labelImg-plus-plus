@@ -140,4 +140,4 @@ License
 
 `MIT License <https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE>`_
 
-Based on LabelImg by Tzutalin (2015).
+Based on `LabelImg <https://github.com/HumanSignal/labelImg>`__ by `Tzutalin <https://github.com/tzutalin>`__ (2015).
