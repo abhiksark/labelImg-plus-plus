@@ -21,11 +21,33 @@ Getting Started
 
     python3 labelImg.py
 
+Branching Workflow
+------------------
+
+We use the following branch structure::
+
+    master           <- stable releases only
+      │
+      ├── develop    <- integration branch
+      │     │
+      │     └── feature/*   <- your features
+      │
+      └── release/*  <- release preparation
+
+**Branch Rules:**
+
+- ``master`` - Production-ready code only. Never commit directly.
+- ``develop`` - Integration branch. All features merge here first.
+- ``feature/*`` - Individual feature branches (e.g., ``feature/dark-mode``)
+- ``release/*`` - Release stabilization (e.g., ``release/v2.1.0``)
+
 Making Changes
 --------------
 
-1. Create a new branch::
+1. Start from develop::
 
+    git checkout develop
+    git pull origin develop
     git checkout -b feature/your-feature-name
 
 2. Make your changes
@@ -34,7 +56,12 @@ Making Changes
 
     git commit -m "Add: description of your change"
 
-5. Push and create a Pull Request
+5. Push and create a Pull Request **to develop branch**::
+
+    git push origin feature/your-feature-name
+    # Create PR: feature/your-feature-name -> develop
+
+**Important:** Always target ``develop`` branch for feature PRs, not ``master``.
 
 Code Style
 ----------
