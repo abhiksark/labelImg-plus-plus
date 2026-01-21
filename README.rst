@@ -1,6 +1,15 @@
 labelImg++
 ==========
 
+.. image:: https://img.shields.io/pypi/v/labelImgPlusPlus.svg
+        :target: https://pypi.org/project/labelImgPlusPlus/
+
+.. image:: https://img.shields.io/pypi/dm/labelImgPlusPlus.svg
+        :target: https://pypi.org/project/labelImgPlusPlus/
+
+.. image:: https://github.com/abhiksark/labelImg-plus-plus/actions/workflows/ci.yaml/badge.svg
+        :target: https://github.com/abhiksark/labelImg-plus-plus/actions
+
 .. image:: https://img.shields.io/badge/python-3.6+-blue.svg
         :target: https://www.python.org/downloads/
 
