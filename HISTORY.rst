@@ -1,8 +1,18 @@
 History
 =======
 
-2.0.0a1 (2025-01-22)
---------------------
+2.0.1 (2025-01-22)
+------------------
+
+* Update all references to labelImgPlusPlus
+* Add PyPI and CI badges to README
+* Update build-tools for labelImgPlusPlus
+* Update Chinese and Japanese translations
+* Add comprehensive developer documentation
+
+
+2.0.0 (2025-01-22)
+------------------
 
 * Rebrand to labelImg++
 * Add Gallery Mode - full-screen thumbnail browser with Ctrl+G

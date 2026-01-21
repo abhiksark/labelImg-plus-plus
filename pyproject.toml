@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "labelImgPlusPlus"
-version = "2.0.0"
+version = "2.0.1"
 description = "labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images"
 readme = "README.rst"
 license = {file = "LICENSE"}
