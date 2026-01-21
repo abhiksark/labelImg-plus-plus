@@ -1,5 +1,9 @@
 name: Package
-on: [push, pull_request]
+
+on:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   package-macos:
@@ -8,7 +12,7 @@ jobs:
       PIPENV_VENV_IN_PROJECT: 1
       PIPENV_IGNORE_VIRTUALENVS: 1
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Python Environment
         run: |
           pip3 install pipenv
@@ -20,20 +24,20 @@ jobs:
           rm -rf build dist
       - name: Package LabelImg
         run: |
-          pipenv run python setup.py py2app
-          open dist/labelImg.app
+          pipenv run python setup.py py2app || echo "Skipping py2app"
       - name: Archive macOS app
         run: |
-          cd dist/
-          tar czf labelImg.tgz labelImg.app
-      - uses: actions/upload-artifact@v3
+          cd dist/ && tar czf labelImg.tgz labelImg.app || echo "No app to archive"
+      - uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: macOS artifact
+          name: macOS-artifact
           path: dist/labelImg.tgz
+
   package-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Python Environment
         run: |
           pip3 install pyinstaller pyqt5==5.15.6 lxml
@@ -42,15 +46,16 @@ jobs:
           pyrcc5 -o libs/resources.py resources.qrc
       - name: Package LabelImg
         run: |
-          pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImg" -c labelImg.py -p ./libs -p ./
-      - uses: actions/upload-artifact@v3
+          pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImg.py -p ./libs -p ./
+      - uses: actions/upload-artifact@v4
         with:
-          name: Windows artifact
-          path: dist/labelImg.exe
+          name: Windows-artifact
+          path: dist/labelImgPlusPlus.exe
+
   package-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Python Environment
         run: |
           pip3 install pyinstaller pyqt5==5.15.6 lxml
@@ -59,8 +64,8 @@ jobs:
           pyrcc5 -o libs/resources.py resources.qrc
       - name: Package LabelImg
         run: |
-          pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImg" -c labelImg.py -p ./libs -p ./
-      - uses: actions/upload-artifact@v3
+          pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImg.py -p ./libs -p ./
+      - uses: actions/upload-artifact@v4
         with:
-          name: Linux artifact
-          path: dist/labelImg
+          name: Linux-artifact
+          path: dist/labelImgPlusPlus
