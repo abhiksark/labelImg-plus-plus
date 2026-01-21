@@ -1,30 +1,29 @@
 #!/bin/sh
 
-brew install python@2
 pip install --upgrade virtualenv
 
-# clone labelimg source
-rm -rf /tmp/labelImgSetup
-mkdir /tmp/labelImgSetup
-cd /tmp/labelImgSetup
-curl https://codeload.github.com/tzutalin/labelImg/zip/master --output labelImg.zip
-unzip labelImg.zip
-rm labelImg.zip
+# clone labelImgPlusPlus source
+rm -rf /tmp/labelImgPlusPlusSetup
+mkdir /tmp/labelImgPlusPlusSetup
+cd /tmp/labelImgPlusPlusSetup
+curl https://codeload.github.com/abhiksark/labelImg-plus-plus/zip/master --output labelImgPlusPlus.zip
+unzip labelImgPlusPlus.zip
+rm labelImgPlusPlus.zip
 
 # setup python3 space
-virtualenv --system-site-packages  -p python3 /tmp/labelImgSetup/labelImg-py3
-source /tmp/labelImgSetup/labelImg-py3/bin/activate
-cd labelImg-master
+virtualenv --system-site-packages -p python3 /tmp/labelImgPlusPlusSetup/venv
+source /tmp/labelImgPlusPlusSetup/venv/bin/activate
+cd labelImg-plus-plus-master
 
-# build labelImg app
+# build labelImgPlusPlus app
 pip install py2app
 pip install PyQt5 lxml
 make qt5py3
 rm -rf build dist
 python setup.py py2app -A
-mv "/tmp/labelImgSetup/labelImg-master/dist/labelImg.app" /Applications
+mv "/tmp/labelImgPlusPlusSetup/labelImg-plus-plus-master/dist/labelImgPlusPlus.app" /Applications
 # deactivate python3
 deactivate
 cd ../
-rm -rf /tmp/labelImgSetup
+rm -rf /tmp/labelImgPlusPlusSetup
 echo 'DONE'

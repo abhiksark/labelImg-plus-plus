@@ -1,35 +1,49 @@
-### Deploy to PyPI
+# labelImgPlusPlus Build Tools
 
-```
+## Deploy to PyPI
+
+```bash
 cd [ROOT]
 sh build-tools/build-for-pypi.sh
 ```
 
-### Build for Ubuntu
-
+Or use the CI/CD pipeline by tagging a release:
+```bash
+git tag v2.0.1
+git push origin v2.0.1
 ```
+
+## Build for Ubuntu
+
+```bash
 cd build-tools
-sh run-in-container.sh
-sh envsetup.sh
+pip install pyinstaller
 sh build-ubuntu-binary.sh
 ```
 
-### Build for Windows
+## Build for Windows
 
-```
+```bash
 cd build-tools
-sh run-in-container.sh
-sh envsetup.sh
+pip install pyinstaller
 sh build-windows-binary.sh
 ```
 
-### Build for macOS High Sierra
-```
+## Build for macOS
+
+```bash
 cd build-tools
 ./build-for-macos.sh
 ```
 
-Note: If there are some problems, try to
-```
-sudo rm -rf virtual-wne venv_wine
+## Prerequisites
+
+- Python 3.6+
+- PyQt5
+- lxml
+- pyinstaller (for binary builds)
+- build & twine (for PyPI uploads)
+
+```bash
+pip install pyinstaller build twine
 ```

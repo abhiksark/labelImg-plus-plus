@@ -1,49 +1,53 @@
-LabelImg
-========
+labelImg++
+==========
 
-.. image:: https://img.shields.io/pypi/v/labelimg.svg
-        :target: https://pypi.python.org/pypi/labelimg
+.. image:: https://img.shields.io/pypi/v/labelImgPlusPlus.svg
+        :target: https://pypi.org/project/labelImgPlusPlus/
 
-.. image:: https://img.shields.io/github/workflow/status/tzutalin/labelImg/Package?style=for-the-badge   :alt: GitHub Workflow Status
+.. image:: https://img.shields.io/pypi/dm/labelImgPlusPlus.svg
+        :target: https://pypi.org/project/labelImgPlusPlus/
 
-.. image:: https://img.shields.io/badge/lang-en-blue.svg
-        :target: https://github.com/tzutalin/labelImg
+.. image:: https://github.com/abhiksark/labelImg-plus-plus/actions/workflows/ci.yaml/badge.svg
+        :target: https://github.com/abhiksark/labelImg-plus-plus/actions
 
-.. image:: https://img.shields.io/badge/lang-zh-green.svg
-        :target: https://github.com/tzutalin/labelImg/blob/master/readme/README.zh.rst
+**labelImg++** 是增強版影像標註工具，基於 `LabelImg <https://github.com/tzutalin/labelImg>`__ 開發。
 
-.. image:: https://img.shields.io/badge/lang-jp-green.svg
-        :target: https://github.com/tzutalin/labelImg/blob/master/readme/README.jp.rst
-
-.. image:: /resources/icons/app.png
-    :width: 200px
-    :align: center
-
-LabelImg 是影像標註工具，它是用python 和 QT 寫成的.
-
-支持的儲存格式包括PASCAL VOC format, YOLO, createML.
+使用 Python 和 PyQt5 開發，支持 PASCAL VOC、YOLO、CreateML 格式。
 
 .. image:: https://raw.githubusercontent.com/tzutalin/labelImg/master/demo/demo3.jpg
      :alt: Demo Image
 
-.. image:: https://raw.githubusercontent.com/tzutalin/labelImg/master/demo/demo.jpg
-     :alt: Demo Image
+labelImg++ 新功能
+-----------------
 
-`展示影片 <https://youtu.be/p0nR2YsCY_U>`__
+圖庫模式
+~~~~~~~~
+
+按 **Ctrl+G** 或點擊工具欄中的 **圖庫模式** 按鈕，打開全屏圖庫視圖。
+
+- 縮略圖顯示標註狀態：
+  - **灰色邊框**：無標籤
+  - **藍色邊框**：有標籤
+  - **綠色邊框**：已驗證
+- 使用滑塊調整縮略圖大小（40px - 300px）
+- **雙擊** 縮略圖載入該圖像
 
 安裝
-------------------
+----
 
+從 PyPI 安裝（Python 3.6+）
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-透過編譯原始碼
-~~~~~~~~~~~~~~~~~
+.. code:: shell
 
-Linux/Ubuntu/Mac 需要 Python 和 `PyQt <https://pypi.org/project/PyQt5/>`__
+    pip3 install labelImgPlusPlus
+    labelImgPlusPlus
+    labelImgPlusPlus [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
 
-Ubuntu Linux
-^^^^^^^^^^^^
+從源碼編譯
+~~~~~~~~~~
 
-Python 3 + Qt5
+**Ubuntu/Linux:**
 
 .. code:: shell
 
@@ -51,115 +55,25 @@ Python 3 + Qt5
     sudo pip3 install -r requirements/requirements-linux-python3.txt
     make qt5py3
     python3 labelImg.py
-    python3 labelImg.py [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
 
-macOS
-^^^^^
-
-Python 3 + Qt5
+**macOS:**
 
 .. code:: shell
 
-    brew install qt  # Install qt-5.x.x by Homebrew
-    brew install libxml2
-
-    or using pip
-
-    pip3 install pyqt5 lxml # Install qt and lxml by pip
-
+    pip3 install pyqt5 lxml
     make qt5py3
     python3 labelImg.py
-    python3 labelImg.py [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
 
-
-Python 3 Virtualenv (推薦方法)
-
-Virtualenv 可以避免版本和相依性問題
+**Windows:**
 
 .. code:: shell
 
-    brew install python3
-    pip3 install pipenv
-    pipenv run pip install pyqt5==5.15.2 lxml
-    pipenv run make qt5py3
-    pipenv run python3 labelImg.py
-    [Optional] rm -rf build dist; python setup.py py2app -A;mv "dist/labelImg.app" /Applications
-
-
-Windows
-^^^^^^^
-
-安裝 `Python <https://www.python.org/downloads/windows/>`__,
-`PyQt5 <https://www.riverbankcomputing.com/software/pyqt/download5>`__
-和 `install lxml <http://lxml.de/installation.html>`__.
-
-安裝並到 `labelImg <#labelimg>`__ 目錄
-
-.. code:: shell
-
-    pyrcc4 -o libs/resources.py resources.qrc
-    For pyqt5, pyrcc5 -o libs/resources.py resources.qrc
-
-    python labelImg.py
-    python labelImg.py [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
-
-Windows + Anaconda
-^^^^^^^^^^^^^^^^^^
-
-下載並安裝 `Anaconda <https://www.anaconda.com/download/#download>`__ (Python 3+)
-
-打開 Anaconda Prompt 然後到 `labelImg <#labelimg>`__ 目錄
-
-.. code:: shell
-
-    conda install pyqt=5
-    conda install -c anaconda lxml
+    pip install pyqt5 lxml
     pyrcc5 -o libs/resources.py resources.qrc
     python labelImg.py
-    python labelImg.py [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
-
-Get from PyPI but only python3.0 or above
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code:: shell
-
-    pip3 install labelImg
-    labelImg
-    labelImg [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
-
-
-Use Docker
-~~~~~~~~~~~~~~~~~
-.. code:: shell
-
-    docker run -it \
-    --user $(id -u) \
-    -e DISPLAY=unix$DISPLAY \
-    --workdir=$(pwd) \
-    --volume="/home/$USER:/home/$USER" \
-    --volume="/etc/group:/etc/group:ro" \
-    --volume="/etc/passwd:/etc/passwd:ro" \
-    --volume="/etc/shadow:/etc/shadow:ro" \
-    --volume="/etc/sudoers.d:/etc/sudoers.d:ro" \
-    -v /tmp/.X11-unix:/tmp/.X11-unix \
-    tzutalin/py2qt4
-
-    make qt4py2;./labelImg.py
-
-`你可以參考影片  <https://youtu.be/nw1GexJzbCI>`__
-
-
-使用方法
------
-
-你可以先產生標籤
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-修改這個檔案
-`data/predefined\_classes.txt <https://github.com/tzutalin/labelImg/blob/master/data/predefined_classes.txt>`__
 
 快捷鍵
-~~~~~~~
+------
 
 +--------------------+--------------------------------------------+
 | Ctrl + u           | 讀取所有影像從每個目錄                     |
@@ -172,6 +86,8 @@ Use Docker
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + d   | 刪除目前影像                               |
 +--------------------+--------------------------------------------+
+| Ctrl + g           | 切換圖庫模式                               |
++--------------------+--------------------------------------------+
 | Space              | 標示目前照片已經處理過                     |
 +--------------------+--------------------------------------------+
 | w                  | 產生新的物件區塊                           |
@@ -182,14 +98,16 @@ Use Docker
 +--------------------+--------------------------------------------+
 | del                | 刪除所選的物件區塊                         |
 +--------------------+--------------------------------------------+
-| Ctrl++             | 放大影像                                   |
+| Ctrl + +           | 放大影像                                   |
 +--------------------+--------------------------------------------+
-| Ctrl--             | 縮小影像                                   |
+| Ctrl + -           | 縮小影像                                   |
 +--------------------+--------------------------------------------+
 | ↑→↓←               | 移動所選的物件區塊                         |
 +--------------------+--------------------------------------------+
 
-如何貢獻
-~~~~~~~~~~~~~~~~~
+授權
+----
 
-歡迎上傳程式碼直接貢獻
+`MIT License <https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE>`_
+
+基於 `Tzutalin <https://github.com/tzutalin>`__ 的 LabelImg (2015)。
