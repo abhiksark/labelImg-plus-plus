@@ -47,6 +47,7 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
+from libs.galleryWidget import GalleryWidget, AnnotationStatus
 
 __appname__ = 'labelImg'
 
@@ -105,6 +106,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self._no_selection_slot = False
         self._beginner = True
+        self.gallery_mode_enabled = False
+        self._normal_central_widget = None
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
         # Load predefined classes to the list
@@ -169,11 +172,25 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dock.setObjectName(get_str('labels'))
         self.dock.setWidget(label_list_container)
 
+        # File list widget (existing list view)
         self.file_list_widget = QListWidget()
         self.file_list_widget.itemDoubleClicked.connect(self.file_item_double_clicked)
+        self.file_list_widget.itemClicked.connect(self.file_item_clicked)
+
+        # Gallery widget (new thumbnail view)
+        self.gallery_widget = GalleryWidget()
+        self.gallery_widget.image_selected.connect(self.gallery_image_selected)
+        self.gallery_widget.image_activated.connect(self.gallery_image_activated)
+
+        # Tab widget to hold both views
+        self.file_view_tabs = QTabWidget()
+        self.file_view_tabs.addTab(self.file_list_widget, get_str('listView'))
+        self.file_view_tabs.addTab(self.gallery_widget, get_str('galleryView'))
+        self.file_view_tabs.currentChanged.connect(self.on_file_view_tab_changed)
+
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
-        file_list_layout.addWidget(self.file_list_widget)
+        file_list_layout.addWidget(self.file_view_tabs)
         file_list_container = QWidget()
         file_list_container.setLayout(file_list_layout)
         self.file_dock = QDockWidget(get_str('fileList'), self)
@@ -287,6 +304,10 @@ class MainWindow(QMainWindow, WindowMixin):
                                'Ctrl+Shift+A', 'expert', get_str('advancedModeDetail'),
                                checkable=True)
 
+        gallery_mode = action(get_str('galleryMode'), self.toggle_gallery_mode,
+                              'Ctrl+G', 'labels', get_str('galleryModeDetail'),
+                              checkable=True)
+
         hide_all = action(get_str('hideAllBox'), partial(self.toggle_polygons, False),
                           'Ctrl+H', 'hide', get_str('hideAllBoxDetail'),
                           enabled=False)
@@ -382,7 +403,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
-                              createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
+                              createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode, galleryMode=gallery_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
                               fitWindow=fit_window, fitWidth=fit_width,
@@ -433,7 +454,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_saving,
             self.single_class_mode,
             self.display_label_option,
-            labels, advanced_mode, None,
+            labels, advanced_mode, gallery_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
@@ -449,12 +470,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.tools = self.toolbar('Tools')
         self.actions.beginner = (
-            open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
+            open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
             light_brighten, light, light_darken, light_org)
 
         self.actions.advanced = (
-            open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
+            open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, save, save_format, None,
             create_mode, edit_mode, None,
             hide_all, show_all)
 
@@ -515,6 +536,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if xbool(settings.get(SETTING_ADVANCE_MODE, False)):
             self.actions.advancedMode.setChecked(True)
             self.toggle_advanced_mode()
+
+        if xbool(settings.get(SETTING_GALLERY_MODE, False)):
+            self.actions.galleryMode.setChecked(True)
+            self.toggle_gallery_mode()
 
         # Populate the File menu dynamically.
         self.update_file_menu()
@@ -593,6 +618,51 @@ class MainWindow(QMainWindow, WindowMixin):
             self.dock.setFeatures(self.dock.features() | self.dock_features)
         else:
             self.dock.setFeatures(self.dock.features() ^ self.dock_features)
+
+    def toggle_gallery_mode(self, value=True):
+        """Toggle between normal view and full-screen gallery mode."""
+        self.gallery_mode_enabled = value
+
+        if value:
+            # Create full-screen gallery as a regular window (not dialog)
+            self.gallery_window = QMainWindow(self)
+            self.gallery_window.setWindowTitle("Gallery Mode - Double-click to select, Press Escape or close to exit")
+
+            self.full_gallery = GalleryWidget(show_size_slider=True)
+            self.full_gallery.set_image_list(self.m_img_list)
+            self.full_gallery.image_selected.connect(self.gallery_image_selected)
+            self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
+            self._refresh_full_gallery_statuses()
+
+            # Select current image in full gallery
+            if self.file_path:
+                self.full_gallery.select_image(self.file_path)
+
+            self.gallery_window.setCentralWidget(self.full_gallery)
+
+            # Show maximized
+            self.gallery_window.showMaximized()
+        else:
+            # Close gallery window
+            if hasattr(self, 'gallery_window') and self.gallery_window:
+                self.gallery_window.close()
+                self.gallery_window = None
+            if hasattr(self, 'full_gallery') and self.full_gallery:
+                self.full_gallery = None
+
+    def _exit_gallery_and_load(self, image_path):
+        """Exit gallery mode and load the selected image."""
+        self.actions.galleryMode.setChecked(False)
+        self.toggle_gallery_mode(False)
+        self.gallery_image_activated(image_path)
+
+    def _refresh_full_gallery_statuses(self):
+        """Update statuses for full-screen gallery."""
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            statuses = {}
+            for img_path in self.m_img_list:
+                statuses[img_path] = self._get_annotation_status(img_path)
+            self.full_gallery.update_all_statuses(statuses)
 
     def populate_mode_actions(self):
         if self.beginner():
@@ -768,6 +838,106 @@ class MainWindow(QMainWindow, WindowMixin):
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
             self.load_file(filename)
+
+    def file_item_clicked(self, item=None):
+        """Handle single click on file list item - sync gallery selection."""
+        if item is not None:
+            item_path = ustr(item.text())
+            if item_path in self.m_img_list:
+                self.cur_img_idx = self.m_img_list.index(item_path)
+                self.gallery_widget.select_image(item_path)
+
+    def gallery_image_selected(self, image_path):
+        """Handle single click on gallery thumbnail - sync all views."""
+        if image_path in self.m_img_list:
+            self.cur_img_idx = self.m_img_list.index(image_path)
+            # Sync list selection
+            for i in range(self.file_list_widget.count()):
+                item = self.file_list_widget.item(i)
+                if ustr(item.text()) == image_path:
+                    self.file_list_widget.setCurrentItem(item)
+                    break
+            # Sync all gallery selections
+            self.gallery_widget.select_image(image_path)
+            if hasattr(self, 'full_gallery') and self.full_gallery:
+                self.full_gallery.select_image(image_path)
+
+    def gallery_image_activated(self, image_path):
+        """Handle double-click on gallery thumbnail - load image."""
+        if image_path in self.m_img_list:
+            self.cur_img_idx = self.m_img_list.index(image_path)
+            self.load_file(image_path)
+
+    def on_file_view_tab_changed(self, index):
+        """Handle tab switch between list and gallery view."""
+        if index == 1:  # Gallery tab
+            self._refresh_gallery_statuses()
+
+    def _get_annotation_status(self, image_path):
+        """Determine annotation status for an image."""
+        basename = os.path.splitext(os.path.basename(image_path))[0]
+
+        # Determine annotation directory
+        if self.default_save_dir is not None:
+            ann_dir = self.default_save_dir
+        else:
+            ann_dir = os.path.dirname(image_path)
+
+        # Check for annotation files
+        xml_path = os.path.join(ann_dir, basename + XML_EXT)
+        txt_path = os.path.join(ann_dir, basename + TXT_EXT)
+        json_path = os.path.join(ann_dir, 'annotations.json')
+
+        has_labels = False
+        verified = False
+
+        # Check PASCAL VOC
+        if os.path.isfile(xml_path):
+            has_labels = True
+            try:
+                reader = PascalVocReader(xml_path)
+                verified = reader.verified
+            except Exception:
+                pass
+        # Check YOLO
+        elif os.path.isfile(txt_path):
+            has_labels = os.path.getsize(txt_path) > 0
+        # Check CreateML
+        elif os.path.isfile(json_path):
+            try:
+                import json
+                with open(json_path, 'r') as f:
+                    data = json.load(f)
+                    for item in data:
+                        if item.get('image') == os.path.basename(image_path):
+                            has_labels = len(item.get('annotations', [])) > 0
+                            verified = item.get('verified', False)
+                            break
+            except Exception:
+                pass
+
+        if verified:
+            return AnnotationStatus.VERIFIED
+        elif has_labels:
+            return AnnotationStatus.HAS_LABELS
+        else:
+            return AnnotationStatus.NO_LABELS
+
+    def _refresh_gallery_statuses(self):
+        """Update all gallery thumbnail statuses."""
+        statuses = {}
+        for img_path in self.m_img_list:
+            statuses[img_path] = self._get_annotation_status(img_path)
+        self.gallery_widget.update_all_statuses(statuses)
+
+    def _update_current_image_gallery_status(self):
+        """Update gallery status for current image after save/verify."""
+        if self.file_path:
+            status = self._get_annotation_status(self.file_path)
+            self.gallery_widget.update_status(self.file_path, status)
+            # Also update full-screen gallery if active
+            if hasattr(self, 'full_gallery') and self.full_gallery:
+                self.full_gallery.update_status(self.file_path, status)
 
     # Add chris
     def button_state(self, item=None):
@@ -1109,6 +1279,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 index = self.m_img_list.index(unicode_file_path)
                 file_widget_item = self.file_list_widget.item(index)
                 file_widget_item.setSelected(True)
+                # Sync gallery selection
+                self.gallery_widget.select_image(unicode_file_path)
             else:
                 self.file_list_widget.clear()
                 self.m_img_list.clear()
@@ -1259,6 +1431,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_FILL_COLOR] = self.fill_color
         settings[SETTING_RECENT_FILES] = self.recent_files
         settings[SETTING_ADVANCE_MODE] = not self._beginner
+        settings[SETTING_GALLERY_MODE] = self.gallery_mode_enabled
         if self.default_save_dir and os.path.exists(self.default_save_dir):
             settings[SETTING_SAVE_DIR] = ustr(self.default_save_dir)
         else:
@@ -1371,10 +1544,22 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
-        self.open_next_image()
+
+        # Populate file list widget
         for imgPath in self.m_img_list:
             item = QListWidgetItem(imgPath)
             self.file_list_widget.addItem(item)
+
+        # Populate gallery widget
+        self.gallery_widget.set_image_list(self.m_img_list)
+        self._refresh_gallery_statuses()
+
+        # Update full-screen gallery if active
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_image_list(self.m_img_list)
+            self._refresh_full_gallery_statuses()
+
+        self.open_next_image()
 
     def verify_image(self, _value=False):
         # Proceeding next image without dialog if having any label
@@ -1393,6 +1578,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.verified = self.label_file.verified
             self.paint_canvas()
             self.save_file()
+            # Update gallery status after verify
+            self._update_current_image_gallery_status()
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
@@ -1506,6 +1693,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_clean()
             self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
             self.statusBar().show()
+            # Update gallery status after save
+            self._update_current_image_gallery_status()
 
     def close_file(self, _value=False):
         if not self.may_continue():
