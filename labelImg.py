@@ -757,10 +757,18 @@ class MainWindow(QMainWindow, WindowMixin):
     def set_beginner(self):
         self.tools.clear()
         add_actions(self.tools, self.actions.beginner)
+        self.tools.add_expand_button()
+        # Restore expanded state
+        if self.settings.get(SETTING_TOOLBAR_EXPANDED, False):
+            self.tools.set_expanded(True)
 
     def set_advanced(self):
         self.tools.clear()
         add_actions(self.tools, self.actions.advanced)
+        self.tools.add_expand_button()
+        # Restore expanded state
+        if self.settings.get(SETTING_TOOLBAR_EXPANDED, False):
+            self.tools.set_expanded(True)
 
     def set_dirty(self):
         self.dirty = True
@@ -1554,6 +1562,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
+        settings[SETTING_TOOLBAR_EXPANDED] = self.tools.is_expanded()
         settings.save()
 
     def load_recent(self, filename):

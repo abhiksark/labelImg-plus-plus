@@ -32,6 +32,8 @@
 <file alias="delete">resources/icons/feather/trash-2.svg</file>
 <file alias="next">resources/icons/feather/chevron-right.svg</file>
 <file alias="prev">resources/icons/feather/chevron-left.svg</file>
+<file alias="chevron-down">resources/icons/feather/chevron-down.svg</file>
+<file alias="chevron-up">resources/icons/feather/chevron-up.svg</file>
 <file alias="resetall">resources/icons/feather/refresh-cw.svg</file>
 <file alias="verify">resources/icons/feather/check-circle.svg</file>
 <file alias="settings">resources/icons/feather/settings.svg</file>
