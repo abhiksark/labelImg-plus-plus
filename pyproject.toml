@@ -38,11 +38,14 @@ Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
 Repository = "https://github.com/abhiksark/labelImg-plus-plus"
 
 [project.scripts]
-labelImgPlusPlus = "labelImg.labelImg:main"
+labelImgPlusPlus = "labelImg:main"
+
+[tool.setuptools]
+py-modules = ["labelImg"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["labelImg*", "libs*"]
+include = ["libs*"]
 
 [tool.setuptools.package-data]
 "*" = ["data/*.txt", "resources/**/*"]
