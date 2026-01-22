@@ -1,10 +1,8 @@
-.. raw:: html
+============
+labelImg++
+============
 
-   <p align="center">
-     <img src="resources/logo/labelimg_logo.png" alt="labelImg++ Logo" width="120">
-     <h1>labelImg++</h1>
-     <p><em>A modern, enhanced image annotation tool for machine learning</em></p>
-   </p>
+*A modern, enhanced image annotation tool for machine learning*
 
 .. image:: https://img.shields.io/pypi/v/labelImgPlusPlus.svg
         :target: https://pypi.org/project/labelImgPlusPlus/
