@@ -12,6 +12,7 @@
 <file alias="fit-width">resources/icons/feather/maximize.svg</file>
 <file alias="fit-window">resources/icons/feather/maximize-2.svg</file>
 <file alias="undo">resources/icons/feather/rotate-ccw.svg</file>
+<file alias="redo">resources/icons/feather/rotate-cw.svg</file>
 <file alias="hide">resources/icons/feather/eye-off.svg</file>
 <file alias="quit">resources/icons/feather/log-out.svg</file>
 <file alias="copy">resources/icons/feather/copy.svg</file>
@@ -24,6 +25,7 @@
 <file alias="zoom">resources/icons/feather/search.svg</file>
 <file alias="zoom-in">resources/icons/feather/zoom-in.svg</file>
 <file alias="zoom-out">resources/icons/feather/zoom-out.svg</file>
+<file alias="sun">resources/icons/feather/sun.svg</file>
 <file alias="light_reset">resources/icons/feather/sun.svg</file>
 <file alias="light_lighten">resources/icons/feather/sun.svg</file>
 <file alias="light_darken">resources/icons/feather/moon.svg</file>

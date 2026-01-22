@@ -49,6 +49,7 @@ from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
 from libs.galleryWidget import GalleryWidget, AnnotationStatus
+from libs.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
 
 __appname__ = 'labelImg'
 
@@ -222,6 +223,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
+        # Initialize undo/redo system
+        self.undo_stack = UndoStack(max_size=50)
+        self.undo_stack.add_callback(self.update_undo_redo_actions)
+
         self.setCentralWidget(scroll)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
@@ -300,6 +305,11 @@ class MainWindow(QMainWindow, WindowMixin):
         copy = action(get_str('dupBox'), self.copy_selected_shape,
                       'Ctrl+D', 'copy', get_str('dupBoxDetail'),
                       enabled=False)
+
+        undo = action(get_str('undo'), self.undo_action,
+                      'Ctrl+Z', 'undo', get_str('undoDetail'), enabled=False)
+        redo = action(get_str('redo'), self.redo_action,
+                      'Ctrl+Shift+Z', 'redo', get_str('redoDetail'), enabled=False)
 
         advanced_mode = action(get_str('advancedMode'), self.toggle_advanced_mode,
                                'Ctrl+Shift+A', 'expert', get_str('advancedModeDetail'),
@@ -411,6 +421,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
+                              undo=undo, redo=redo,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode, galleryMode=gallery_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
@@ -421,7 +432,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
-                              editMenu=(edit, copy, delete,
+                              editMenu=(undo, redo, None, edit, copy, delete,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, edit, copy, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy,
@@ -753,6 +764,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.reset_state()
         self.label_coordinates.clear()
         self.combo_box.cb.clear()
+        # Clear undo stack when loading new file
+        self.undo_stack.clear()
 
     def current_item(self):
         items = self.label_list.selectedItems()
@@ -1133,7 +1146,13 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
 
     def copy_selected_shape(self):
-        self.add_label(self.canvas.copy_selected_shape())
+        shape = self.canvas.copy_selected_shape()
+        self.add_label(shape)
+
+        # Push command for undo support (shape already created, so just push)
+        cmd = CreateShapeCommand(self, shape)
+        self.undo_stack.push(cmd)
+
         # fix copy and delete
         self.shape_selection_changed(True)
 
@@ -1163,8 +1182,14 @@ class MainWindow(QMainWindow, WindowMixin):
         shape = self.items_to_shapes[item]
         label = item.text()
         if label != shape.label:
+            old_label = shape.label
             shape.label = item.text()
             shape.line_color = generate_color_by_text(shape.label)
+
+            # Push command for undo support (change already made, so just push)
+            cmd = EditLabelCommand(self, shape, old_label, label)
+            self.undo_stack.push(cmd)
+
             self.set_dirty()
         else:  # User probably changed item visibility
             self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
@@ -1196,6 +1221,11 @@ class MainWindow(QMainWindow, WindowMixin):
             generate_color = generate_color_by_text(text)
             shape = self.canvas.set_last_label(text, generate_color, generate_color)
             self.add_label(shape)
+
+            # Push command for undo support (shape already created, so just push)
+            cmd = CreateShapeCommand(self, shape)
+            self.undo_stack.push(cmd)
+
             if self.beginner():  # Switch to edit mode.
                 self.canvas.set_editing(True)
                 self.actions.create.setEnabled(True)
@@ -1808,11 +1838,53 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_dirty()
 
     def delete_selected_shape(self):
-        self.remove_label(self.canvas.delete_selected())
+        """Delete the currently selected shape with undo support."""
+        if self.canvas.selected_shape is None:
+            return
+        shape = self.canvas.selected_shape
+        index = self.canvas.shapes.index(shape) if shape in self.canvas.shapes else None
+
+        # Create and push command (command handles the actual deletion)
+        cmd = DeleteShapeCommand(self, shape, index)
+        cmd.execute()
+        self.undo_stack.push(cmd)
         self.set_dirty()
+
         if self.no_shapes():
             for action in self.actions.onShapesPresent:
                 action.setEnabled(False)
+
+    def undo_action(self):
+        """Undo the last action."""
+        if self.undo_stack.can_undo():
+            self.undo_stack.undo()
+            self.set_dirty()
+            self.canvas.update()
+
+    def redo_action(self):
+        """Redo the last undone action."""
+        if self.undo_stack.can_redo():
+            self.undo_stack.redo()
+            self.set_dirty()
+            self.canvas.update()
+
+    def update_undo_redo_actions(self):
+        """Update the enabled state of undo/redo actions."""
+        self.actions.undo.setEnabled(self.undo_stack.can_undo())
+        self.actions.redo.setEnabled(self.undo_stack.can_redo())
+
+        # Update tooltips with descriptions
+        if self.undo_stack.can_undo():
+            desc = self.undo_stack.get_undo_description()
+            self.actions.undo.setToolTip(f"Undo: {desc}")
+        else:
+            self.actions.undo.setToolTip("Undo")
+
+        if self.undo_stack.can_redo():
+            desc = self.undo_stack.get_redo_description()
+            self.actions.redo.setToolTip(f"Redo: {desc}")
+        else:
+            self.actions.redo.setToolTip("Redo")
 
     def choose_shape_line_color(self):
         color = self.color_dialog.getColor(self.line_color, u'Choose Line Color',
