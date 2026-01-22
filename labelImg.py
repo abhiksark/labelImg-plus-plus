@@ -97,6 +97,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # For loading all image under a directory
         self.m_img_list = []
+        self._path_to_idx = {}  # O(1) lookup: path -> index
+        self._annotation_status_cache = {}  # Cache: path -> status (reduces I/O)
         self.dir_name = None
         self.label_hist = []
         self.last_open_dir = None
@@ -859,10 +861,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def update_image_count(self):
         """Update image counter in status bar."""
         if self.m_img_list and self.file_path:
-            try:
-                idx = self.m_img_list.index(self.file_path) + 1
-            except ValueError:
-                idx = 0
+            idx = self._path_to_idx.get(self.file_path, -1) + 1
             self.label_image_count.setText(f'Image: {idx} / {len(self.m_img_list)}')
         else:
             self.label_image_count.setText('Image: 0 / 0')
@@ -1015,7 +1014,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
-        self.cur_img_idx = self.m_img_list.index(ustr(item.text()))
+        item_path = ustr(item.text())
+        self.cur_img_idx = self._path_to_idx.get(item_path, 0)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
             self.load_file(filename)
@@ -1027,8 +1027,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if item is not None:
             item_path = ustr(item.text())
-            if item_path in self.m_img_list:
-                self.cur_img_idx = self.m_img_list.index(item_path)
+            if item_path in self._path_to_idx:
+                self.cur_img_idx = self._path_to_idx[item_path]
                 self.gallery_widget.select_image(item_path)
 
     def gallery_image_selected(self, image_path):
@@ -1038,8 +1038,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         self._selecting_gallery = True
         try:
-            if image_path in self.m_img_list:
-                self.cur_img_idx = self.m_img_list.index(image_path)
+            if image_path in self._path_to_idx:
+                self.cur_img_idx = self._path_to_idx[image_path]
                 # Sync list selection - block signals to prevent triggering file_item_clicked
                 self.file_list_widget.blockSignals(True)
                 for i in range(self.file_list_widget.count()):
@@ -1057,8 +1057,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def gallery_image_activated(self, image_path):
         """Handle double-click on gallery thumbnail - load image."""
-        if image_path in self.m_img_list:
-            self.cur_img_idx = self.m_img_list.index(image_path)
+        if image_path in self._path_to_idx:
+            self.cur_img_idx = self._path_to_idx[image_path]
             self.load_file(image_path)
 
     def on_file_view_tab_changed(self, index):
@@ -1066,8 +1066,12 @@ class MainWindow(QMainWindow, WindowMixin):
         if index == 1:  # Gallery tab
             self._refresh_gallery_statuses()
 
-    def _get_annotation_status(self, image_path):
-        """Determine annotation status for an image."""
+    def _get_annotation_status(self, image_path, use_cache=True):
+        """Determine annotation status for an image with optional caching."""
+        # Check cache first for O(1) lookup
+        if use_cache and image_path in self._annotation_status_cache:
+            return self._annotation_status_cache[image_path]
+
         basename = os.path.splitext(os.path.basename(image_path))[0]
 
         # Determine annotation directory
@@ -1110,11 +1114,22 @@ class MainWindow(QMainWindow, WindowMixin):
                 pass
 
         if verified:
-            return AnnotationStatus.VERIFIED
+            status = AnnotationStatus.VERIFIED
         elif has_labels:
-            return AnnotationStatus.HAS_LABELS
+            status = AnnotationStatus.HAS_LABELS
         else:
-            return AnnotationStatus.NO_LABELS
+            status = AnnotationStatus.NO_LABELS
+
+        # Cache the result
+        self._annotation_status_cache[image_path] = status
+        return status
+
+    def _invalidate_status_cache(self, image_path=None):
+        """Invalidate annotation status cache for a path or all paths."""
+        if image_path:
+            self._annotation_status_cache.pop(image_path, None)
+        else:
+            self._annotation_status_cache.clear()
 
     def _refresh_gallery_statuses(self):
         """Update all gallery thumbnail statuses."""
@@ -1126,6 +1141,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def _update_current_image_gallery_status(self):
         """Update gallery status for current image after save/verify."""
         if self.file_path:
+            # Invalidate cache for this file to get fresh status
+            self._invalidate_status_cache(self.file_path)
             status = self._get_annotation_status(self.file_path)
             self.gallery_widget.update_status(self.file_path, status)
             # Also update full-screen gallery if active
@@ -1530,8 +1547,8 @@ class MainWindow(QMainWindow, WindowMixin):
         # Tzutalin 20160906 : Add file list and dock to move faster
         # Highlight the file item
         if unicode_file_path and self.file_list_widget.count() > 0:
-            if unicode_file_path in self.m_img_list:
-                index = self.m_img_list.index(unicode_file_path)
+            if unicode_file_path in self._path_to_idx:
+                index = self._path_to_idx[unicode_file_path]
                 file_widget_item = self.file_list_widget.item(index)
                 file_widget_item.setSelected(True)
                 # Sync gallery selection
@@ -1738,6 +1755,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            # Clear status cache since annotation directory changed
+            self._invalidate_status_cache()
             # Update gallery to reload thumbnails with annotations from new dir
             self.gallery_widget.set_save_dir(self.default_save_dir)
 
@@ -1807,6 +1826,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_path = None
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
+        self._path_to_idx = {path: idx for idx, path in enumerate(self.m_img_list)}
+        self._annotation_status_cache.clear()  # Clear cache for new directory
         self.img_count = len(self.m_img_list)
 
         # Populate file list widget
@@ -2154,7 +2175,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.verified = create_ml_parse_reader.verified
 
     def copy_previous_bounding_boxes(self):
-        current_index = self.m_img_list.index(self.file_path)
+        current_index = self._path_to_idx.get(self.file_path, 0)
         if current_index - 1 >= 0:
             prev_file_path = self.m_img_list[current_index - 1]
             self.show_bounding_box_from_annotation_file(prev_file_path)

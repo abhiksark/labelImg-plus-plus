@@ -14,6 +14,7 @@ except ImportError:
 
 import os
 import hashlib
+from collections import OrderedDict
 from enum import IntEnum
 try:
     from xml.etree import ElementTree
@@ -147,42 +148,36 @@ class AnnotationStatus(IntEnum):
 
 
 class ThumbnailCache:
-    """LRU cache for thumbnail images with memory management."""
+    """LRU cache for thumbnail images with O(1) operations using OrderedDict."""
 
     def __init__(self, max_size=200):
         self.max_size = max_size
-        self._cache = {}
-        self._access_order = []
+        self._cache = OrderedDict()
 
     def get(self, path):
-        """Retrieve thumbnail from cache."""
+        """Retrieve thumbnail from cache (O(1) with LRU update)."""
         if path in self._cache:
-            self._access_order.remove(path)
-            self._access_order.append(path)
+            self._cache.move_to_end(path)  # O(1) instead of O(n)
             return self._cache[path]
         return None
 
     def put(self, path, pixmap):
-        """Store thumbnail in cache with LRU eviction."""
+        """Store thumbnail in cache with O(1) LRU eviction."""
         if path in self._cache:
-            self._access_order.remove(path)
-        elif len(self._cache) >= self.max_size:
-            oldest = self._access_order.pop(0)
-            del self._cache[oldest]
-
-        self._cache[path] = pixmap
-        self._access_order.append(path)
+            self._cache.move_to_end(path)  # O(1)
+            self._cache[path] = pixmap
+        else:
+            if len(self._cache) >= self.max_size:
+                self._cache.popitem(last=False)  # O(1) eviction
+            self._cache[path] = pixmap
 
     def clear(self):
         """Clear all cached thumbnails."""
         self._cache.clear()
-        self._access_order.clear()
 
     def remove(self, path):
         """Remove specific thumbnail from cache."""
-        if path in self._cache:
-            del self._cache[path]
-            self._access_order.remove(path)
+        self._cache.pop(path, None)  # O(1)
 
 
 class ThumbnailLoaderSignals(QObject):
