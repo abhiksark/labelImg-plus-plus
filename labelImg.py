@@ -106,6 +106,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Whether we need to save or not.
         self.dirty = False
 
+        # Clipboard for copy/paste annotations across images
+        self.clipboard_shapes = []
+
         self._no_selection_slot = False
         self._beginner = True
         self.gallery_mode_enabled = False
@@ -251,7 +254,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         open_annotation = action(get_str('openAnnotation'), self.open_annotation_dialog,
                                  'Ctrl+Shift+O', 'open', get_str('openAnnotationDetail'))
-        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+v', 'copy', get_str('copyPrevBounding'))
+        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+Shift+V', 'copy', get_str('copyPrevBounding'))
 
         open_next_image = action(get_str('nextImg'), self.open_next_image,
                                  'd', 'next', get_str('nextImgDetail'))
@@ -305,6 +308,16 @@ class MainWindow(QMainWindow, WindowMixin):
         copy = action(get_str('dupBox'), self.copy_selected_shape,
                       'Ctrl+D', 'copy', get_str('dupBoxDetail'),
                       enabled=False)
+
+        copy_to_clipboard = action(get_str('copyBox'), self.copy_to_clipboard,
+                                   'Ctrl+C', 'copy', get_str('copyBoxDetail'),
+                                   enabled=False)
+        paste_from_clipboard = action(get_str('pasteBox'), self.paste_from_clipboard,
+                                      'Ctrl+V', 'paste', get_str('pasteBoxDetail'),
+                                      enabled=False)
+        copy_all_to_clipboard = action(get_str('copyAllBoxes'), self.copy_all_to_clipboard,
+                                       'Ctrl+Shift+C', 'copy', get_str('copyAllBoxesDetail'),
+                                       enabled=False)
 
         undo = action(get_str('undo'), self.undo_action,
                       'Ctrl+Z', 'undo', get_str('undoDetail'), enabled=False)
@@ -421,6 +434,8 @@ class MainWindow(QMainWindow, WindowMixin):
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
+                              copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
+                              copyAllToClipboard=copy_all_to_clipboard,
                               undo=undo, redo=redo,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode, galleryMode=gallery_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
@@ -432,11 +447,12 @@ class MainWindow(QMainWindow, WindowMixin):
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
-                              editMenu=(undo, redo, None, edit, copy, delete,
+                              editMenu=(undo, redo, None, edit, copy, copy_to_clipboard,
+                                        paste_from_clipboard, copy_all_to_clipboard, delete,
                                         None, color1, self.draw_squares_option),
-                              beginnerContext=(create, edit, copy, delete),
-                              advancedContext=(create_mode, edit_mode, edit, copy,
-                                               delete, shape_line_color, shape_fill_color),
+                              beginnerContext=(create, edit, copy, copy_to_clipboard, paste_from_clipboard, delete),
+                              advancedContext=(create_mode, edit_mode, edit, copy, copy_to_clipboard,
+                                               paste_from_clipboard, delete, shape_line_color, shape_fill_color),
                               onLoadActive=(
                                   close, create, create_mode, edit_mode),
                               onShapesPresent=(save_as, hide_all, show_all))
@@ -821,6 +837,12 @@ class MainWindow(QMainWindow, WindowMixin):
             z.setEnabled(value)
         for action in self.actions.onLoadActive:
             action.setEnabled(value)
+        # Enable paste if clipboard has shapes and image is loaded
+        if value and self.clipboard_shapes:
+            self.actions.pasteFromClipboard.setEnabled(True)
+        # Enable copy all if there are shapes
+        if value and self.canvas.shapes:
+            self.actions.copyAllToClipboard.setEnabled(True)
 
     def queue_event(self, function):
         QTimer.singleShot(0, function)
@@ -1149,9 +1171,14 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.label_list.clearSelection()
         self.actions.delete.setEnabled(selected)
         self.actions.copy.setEnabled(selected)
+        self.actions.copyToClipboard.setEnabled(selected)
         self.actions.edit.setEnabled(selected)
         self.actions.shapeLineColor.setEnabled(selected)
         self.actions.shapeFillColor.setEnabled(selected)
+        # Enable paste if clipboard has shapes
+        self.actions.pasteFromClipboard.setEnabled(len(self.clipboard_shapes) > 0)
+        # Enable copy all if there are shapes
+        self.actions.copyAllToClipboard.setEnabled(len(self.canvas.shapes) > 0)
 
     def add_label(self, shape):
         shape.paint_label = self.display_label_option.isChecked()
@@ -1268,6 +1295,46 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # fix copy and delete
         self.shape_selection_changed(True)
+
+    def copy_to_clipboard(self):
+        """Copy selected shape to clipboard for pasting across images."""
+        if self.canvas.selected_shape is None:
+            return
+        # Store a copy of the selected shape
+        self.clipboard_shapes = [self.canvas.selected_shape.copy()]
+        self.actions.pasteFromClipboard.setEnabled(True)
+        self.statusBar().showMessage(f'Copied 1 annotation to clipboard', 3000)
+
+    def copy_all_to_clipboard(self):
+        """Copy all shapes to clipboard for pasting across images."""
+        if not self.canvas.shapes:
+            return
+        # Store copies of all shapes
+        self.clipboard_shapes = [shape.copy() for shape in self.canvas.shapes]
+        self.actions.pasteFromClipboard.setEnabled(True)
+        self.statusBar().showMessage(f'Copied {len(self.clipboard_shapes)} annotations to clipboard', 3000)
+
+    def paste_from_clipboard(self):
+        """Paste shapes from clipboard to current image."""
+        if not self.clipboard_shapes:
+            return
+        if not self.canvas.pixmap or self.canvas.pixmap.isNull():
+            return
+
+        for clipboard_shape in self.clipboard_shapes:
+            # Create a new copy for each paste
+            shape = clipboard_shape.copy()
+            # Add shape to canvas
+            self.canvas.shapes.append(shape)
+            self.add_label(shape)
+            # Push command for undo support
+            cmd = CreateShapeCommand(self, shape)
+            self.undo_stack.push(cmd)
+
+        self.set_dirty()
+        self.canvas.update()
+        self.update_box_count()
+        self.statusBar().showMessage(f'Pasted {len(self.clipboard_shapes)} annotations', 3000)
 
     def combo_selection_changed(self, index):
         text = self.combo_box.cb.itemText(index)
