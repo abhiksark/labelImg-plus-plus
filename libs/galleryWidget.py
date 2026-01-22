@@ -3,7 +3,7 @@
 
 try:
     from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush
-    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool
+    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer
     from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
                                   QListView, QSlider, QLabel)
 except ImportError:
@@ -127,6 +127,7 @@ class GalleryWidget(QWidget):
         self._image_list = []
         self._loading_paths = set()
         self._statuses = {}
+        self._loading_thumbnails = False  # Guard against re-entrant calls
 
         self._setup_ui()
 
@@ -209,7 +210,8 @@ class GalleryWidget(QWidget):
         for path in image_paths:
             self._add_item(path)
 
-        self._load_visible_thumbnails()
+        # Defer thumbnail loading to next event loop cycle to prevent blocking
+        QTimer.singleShot(0, self._load_visible_thumbnails)
 
     def _add_item(self, image_path):
         """Add an item to the list widget."""
@@ -244,21 +246,29 @@ class GalleryWidget(QWidget):
 
     def _load_visible_thumbnails(self):
         """Load thumbnails for visible items."""
-        viewport_rect = self.list_widget.viewport().rect()
+        # Guard against re-entrant calls during layout/scroll cascades
+        if self._loading_thumbnails:
+            return
+        self._loading_thumbnails = True
+        try:
+            viewport_rect = self.list_widget.viewport().rect()
+            count = self.list_widget.count()
 
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            item_rect = self.list_widget.visualItemRect(item)
+            for i in range(count):
+                item = self.list_widget.item(i)
+                item_rect = self.list_widget.visualItemRect(item)
 
-            # Check if item is visible (with some buffer)
-            if item_rect.intersects(viewport_rect.adjusted(0, -200, 0, 200)):
-                path = item.data(Qt.UserRole)
-                if path and path not in self._loading_paths:
-                    cached = self.thumbnail_cache.get(path)
-                    if cached:
-                        self._set_item_icon(item, cached, path)
-                    else:
-                        self._load_thumbnail_async(path)
+                # Check if item is visible (with some buffer)
+                if item_rect.intersects(viewport_rect.adjusted(0, -200, 0, 200)):
+                    path = item.data(Qt.UserRole)
+                    if path and path not in self._loading_paths:
+                        cached = self.thumbnail_cache.get(path)
+                        if cached:
+                            self._set_item_icon(item, cached, path)
+                        else:
+                            self._load_thumbnail_async(path)
+        finally:
+            self._loading_thumbnails = False
 
     def _load_thumbnail_async(self, image_path):
         """Load thumbnail in background thread."""
@@ -320,7 +330,13 @@ class GalleryWidget(QWidget):
         if image_path in self._path_to_item:
             item = self._path_to_item[image_path]
             self.list_widget.setCurrentItem(item)
+            # Block scroll signals to prevent cascade during programmatic scroll
+            scrollbar = self.list_widget.verticalScrollBar()
+            scrollbar.blockSignals(True)
             self.list_widget.scrollToItem(item)
+            scrollbar.blockSignals(False)
+            # Load visible thumbnails once after scrolling
+            self._load_visible_thumbnails()
 
     def update_status(self, image_path, status):
         """Update annotation status for an image."""
@@ -360,9 +376,11 @@ class GalleryWidget(QWidget):
     def showEvent(self, event):
         """Load visible thumbnails when widget becomes visible."""
         super().showEvent(event)
-        self._load_visible_thumbnails()
+        # Defer to prevent blocking during rapid show/hide
+        QTimer.singleShot(10, self._load_visible_thumbnails)
 
     def resizeEvent(self, event):
         """Handle resize."""
         super().resizeEvent(event)
-        self._load_visible_thumbnails()
+        # Defer to prevent blocking during resize cascade
+        QTimer.singleShot(10, self._load_visible_thumbnails)

@@ -368,15 +368,15 @@ class MainWindow(QMainWindow, WindowMixin):
         light_org.setChecked(True)
 
         # Create brightness dropdown button for toolbar
-        self.brightness_dropdown = DropdownToolButton(
-            'Brightness',
-            new_icon('light_reset'),
-            [light_brighten, light_darken, light_org]
+        brightness_dropdown = DropdownToolButton(
+            "Brightness",
+            new_icon('sun'),
+            [light_brighten, light_darken, None, light_org]
         )
 
         # Group light controls into a list for easier toggling.
         light_actions = (self.light_widget, light_brighten,
-                         light_darken, light_org)
+                         light_darken, light_org, brightness_dropdown)
 
         edit = action(get_str('editLabel'), self.edit_label,
                       'Ctrl+E', 'edit', get_str('editLabelDetail'),
@@ -481,7 +481,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.beginner = (
             open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
-            self.brightness_dropdown)
+            brightness_dropdown)
 
         self.actions.advanced = (
             open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, save, save_format, None,
@@ -630,34 +630,58 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_gallery_mode(self, value=True):
         """Toggle between normal view and full-screen gallery mode."""
-        self.gallery_mode_enabled = value
+        # Guard against rapid toggling
+        if hasattr(self, '_toggling_gallery') and self._toggling_gallery:
+            return
+        self._toggling_gallery = True
+        try:
+            self.gallery_mode_enabled = value
 
-        if value:
-            # Create full-screen gallery as a regular window (not dialog)
-            self.gallery_window = QMainWindow(self)
-            self.gallery_window.setWindowTitle("Gallery Mode - Double-click to select, Press Escape or close to exit")
+            if value:
+                # Cleanup any existing gallery first
+                if hasattr(self, 'full_gallery') and self.full_gallery:
+                    try:
+                        self.full_gallery.image_selected.disconnect()
+                        self.full_gallery.image_activated.disconnect()
+                    except TypeError:
+                        pass  # Already disconnected
+                    self.full_gallery = None
+                if hasattr(self, 'gallery_window') and self.gallery_window:
+                    self.gallery_window.close()
+                    self.gallery_window = None
 
-            self.full_gallery = GalleryWidget(show_size_slider=True)
-            self.full_gallery.set_image_list(self.m_img_list)
-            self.full_gallery.image_selected.connect(self.gallery_image_selected)
-            self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
-            self._refresh_full_gallery_statuses()
+                # Create full-screen gallery as a regular window (not dialog)
+                self.gallery_window = QMainWindow(self)
+                self.gallery_window.setWindowTitle("Gallery Mode - Double-click to select, Press Escape or close to exit")
 
-            # Select current image in full gallery
-            if self.file_path:
-                self.full_gallery.select_image(self.file_path)
+                self.full_gallery = GalleryWidget(show_size_slider=True)
+                self.full_gallery.set_image_list(self.m_img_list)
+                self.full_gallery.image_selected.connect(self.gallery_image_selected)
+                self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
+                self._refresh_full_gallery_statuses()
 
-            self.gallery_window.setCentralWidget(self.full_gallery)
+                # Select current image in full gallery
+                if self.file_path:
+                    self.full_gallery.select_image(self.file_path)
 
-            # Show maximized
-            self.gallery_window.showMaximized()
-        else:
-            # Close gallery window
-            if hasattr(self, 'gallery_window') and self.gallery_window:
-                self.gallery_window.close()
-                self.gallery_window = None
-            if hasattr(self, 'full_gallery') and self.full_gallery:
-                self.full_gallery = None
+                self.gallery_window.setCentralWidget(self.full_gallery)
+
+                # Show maximized
+                self.gallery_window.showMaximized()
+            else:
+                # Close gallery window
+                if hasattr(self, 'full_gallery') and self.full_gallery:
+                    try:
+                        self.full_gallery.image_selected.disconnect()
+                        self.full_gallery.image_activated.disconnect()
+                    except TypeError:
+                        pass
+                    self.full_gallery = None
+                if hasattr(self, 'gallery_window') and self.gallery_window:
+                    self.gallery_window.close()
+                    self.gallery_window = None
+        finally:
+            self._toggling_gallery = False
 
     def _exit_gallery_and_load(self, image_path):
         """Exit gallery mode and load the selected image."""
@@ -850,6 +874,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def file_item_clicked(self, item=None):
         """Handle single click on file list item - sync gallery selection."""
+        # Skip if we're already in a gallery selection operation
+        if hasattr(self, '_selecting_gallery') and self._selecting_gallery:
+            return
         if item is not None:
             item_path = ustr(item.text())
             if item_path in self.m_img_list:
@@ -858,18 +885,27 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def gallery_image_selected(self, image_path):
         """Handle single click on gallery thumbnail - sync all views."""
-        if image_path in self.m_img_list:
-            self.cur_img_idx = self.m_img_list.index(image_path)
-            # Sync list selection
-            for i in range(self.file_list_widget.count()):
-                item = self.file_list_widget.item(i)
-                if ustr(item.text()) == image_path:
-                    self.file_list_widget.setCurrentItem(item)
-                    break
-            # Sync all gallery selections
-            self.gallery_widget.select_image(image_path)
-            if hasattr(self, 'full_gallery') and self.full_gallery:
-                self.full_gallery.select_image(image_path)
+        # Prevent recursive calls
+        if hasattr(self, '_selecting_gallery') and self._selecting_gallery:
+            return
+        self._selecting_gallery = True
+        try:
+            if image_path in self.m_img_list:
+                self.cur_img_idx = self.m_img_list.index(image_path)
+                # Sync list selection - block signals to prevent triggering file_item_clicked
+                self.file_list_widget.blockSignals(True)
+                for i in range(self.file_list_widget.count()):
+                    item = self.file_list_widget.item(i)
+                    if ustr(item.text()) == image_path:
+                        self.file_list_widget.setCurrentItem(item)
+                        break
+                self.file_list_widget.blockSignals(False)
+                # Sync all gallery selections
+                self.gallery_widget.select_image(image_path)
+                if hasattr(self, 'full_gallery') and self.full_gallery:
+                    self.full_gallery.select_image(image_path)
+        finally:
+            self._selecting_gallery = False
 
     def gallery_image_activated(self, image_path):
         """Handle double-click on gallery thumbnail - load image."""
