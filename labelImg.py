@@ -521,13 +521,20 @@ class MainWindow(QMainWindow, WindowMixin):
         if saved_icon_size > 0:
             self.tools.update_icon_size(saved_icon_size)
 
+        # Create dropdown for file/directory operations
+        file_dropdown = DropdownToolButton(
+            text=get_str('openFile'),
+            icon=new_icon('file'),
+            actions=[open, open_dir, change_save_dir]
+        )
+
         self.actions.beginner = (
-            open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
+            file_dropdown, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
             brightness_dropdown)
 
         self.actions.advanced = (
-            open, open_dir, change_save_dir, gallery_mode, None, open_next_image, open_prev_image, save, save_format, None,
+            file_dropdown, gallery_mode, None, open_next_image, open_prev_image, save, save_format, None,
             create_mode, edit_mode, None,
             hide_all, show_all)
 
@@ -698,6 +705,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.gallery_window.setWindowTitle("Gallery Mode - Double-click to select, Press Escape or close to exit")
 
                 self.full_gallery = GalleryWidget(show_size_slider=True)
+                self.full_gallery.set_save_dir(self.default_save_dir)
                 self.full_gallery.set_image_list(self.m_img_list)
                 self.full_gallery.image_selected.connect(self.gallery_image_selected)
                 self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
@@ -1594,6 +1602,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            # Update gallery to reload thumbnails with annotations from new dir
+            self.gallery_widget.set_save_dir(self.default_save_dir)
 
         self.show_bounding_box_from_annotation_file(self.file_path)
 
@@ -1668,12 +1678,14 @@ class MainWindow(QMainWindow, WindowMixin):
             item = QListWidgetItem(imgPath)
             self.file_list_widget.addItem(item)
 
-        # Populate gallery widget
+        # Populate gallery widget with annotation directory
+        self.gallery_widget.set_save_dir(self.default_save_dir)
         self.gallery_widget.set_image_list(self.m_img_list)
         self._refresh_gallery_statuses()
 
         # Update full-screen gallery if active
         if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_save_dir(self.default_save_dir)
             self.full_gallery.set_image_list(self.m_img_list)
             self._refresh_full_gallery_statuses()
 

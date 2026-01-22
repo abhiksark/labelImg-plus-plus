@@ -2,18 +2,141 @@
 """Gallery view widget for image thumbnail display with annotation status."""
 
 try:
-    from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush
-    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer
+    from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush, QPolygonF
+    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer, QPointF
     from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
                                   QListView, QSlider, QLabel)
 except ImportError:
     from PyQt4.QtGui import (QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush,
                               QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-                              QListView, QSlider, QLabel)
-    from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool
+                              QListView, QSlider, QLabel, QPolygonF)
+    from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPointF
 
 import os
+import hashlib
 from enum import IntEnum
+try:
+    from xml.etree import ElementTree
+except ImportError:
+    ElementTree = None
+
+
+def generate_color_by_text(text):
+    """Generate a consistent color based on text hash."""
+    hash_val = int(hashlib.md5(text.encode('utf-8')).hexdigest()[:8], 16)
+    r = (hash_val & 0xFF0000) >> 16
+    g = (hash_val & 0x00FF00) >> 8
+    b = hash_val & 0x0000FF
+    # Ensure colors are bright enough
+    r = max(100, r)
+    g = max(100, g)
+    b = max(100, b)
+    return QColor(r, g, b)
+
+
+def parse_yolo_annotations(txt_path, classes_path=None):
+    """Parse YOLO format annotations.
+
+    Returns list of (label, normalized_bbox) where bbox is (x_center, y_center, w, h).
+    """
+    annotations = []
+    if not os.path.isfile(txt_path):
+        return annotations
+
+    # Load class names
+    classes = []
+    if classes_path and os.path.isfile(classes_path):
+        with open(classes_path, 'r') as f:
+            classes = [line.strip() for line in f if line.strip()]
+
+    with open(txt_path, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                class_idx = int(parts[0])
+                x_center = float(parts[1])
+                y_center = float(parts[2])
+                w = float(parts[3])
+                h = float(parts[4])
+                label = classes[class_idx] if class_idx < len(classes) else f"class_{class_idx}"
+                annotations.append((label, (x_center, y_center, w, h)))
+    return annotations
+
+
+def parse_voc_annotations(xml_path):
+    """Parse Pascal VOC format annotations.
+
+    Returns list of (label, normalized_bbox) where bbox is (x_center, y_center, w, h).
+    """
+    annotations = []
+    if not os.path.isfile(xml_path) or ElementTree is None:
+        return annotations
+
+    try:
+        tree = ElementTree.parse(xml_path)
+        root = tree.getroot()
+
+        # Get image size for normalization
+        size_elem = root.find('size')
+        if size_elem is None:
+            return annotations
+        img_w = int(size_elem.find('width').text)
+        img_h = int(size_elem.find('height').text)
+
+        if img_w <= 0 or img_h <= 0:
+            return annotations
+
+        for obj in root.iter('object'):
+            label = obj.find('name').text
+            bbox = obj.find('bndbox')
+            xmin = float(bbox.find('xmin').text)
+            ymin = float(bbox.find('ymin').text)
+            xmax = float(bbox.find('xmax').text)
+            ymax = float(bbox.find('ymax').text)
+
+            # Convert to normalized center format
+            x_center = (xmin + xmax) / 2 / img_w
+            y_center = (ymin + ymax) / 2 / img_h
+            w = (xmax - xmin) / img_w
+            h = (ymax - ymin) / img_h
+            annotations.append((label, (x_center, y_center, w, h)))
+    except Exception:
+        pass
+
+    return annotations
+
+
+def find_annotation_file(image_path, save_dir=None):
+    """Find annotation file for an image.
+
+    Returns (annotation_path, format) or (None, None) if not found.
+    Format is 'yolo', 'voc', or 'createml'.
+    """
+    base = os.path.splitext(os.path.basename(image_path))[0]
+    img_dir = os.path.dirname(image_path)
+
+    # Directories to search
+    search_dirs = [img_dir]
+    if save_dir and save_dir != img_dir:
+        search_dirs.append(save_dir)
+
+    # Check for YOLO format (.txt)
+    for search_dir in search_dirs:
+        txt_path = os.path.join(search_dir, base + '.txt')
+        if os.path.isfile(txt_path):
+            # Find classes.txt
+            classes_path = os.path.join(search_dir, 'classes.txt')
+            if not os.path.isfile(classes_path):
+                classes_path = os.path.join(img_dir, 'classes.txt')
+            return txt_path, 'yolo', classes_path if os.path.isfile(classes_path) else None
+
+    # Check for Pascal VOC format (.xml)
+    for search_dir in search_dirs:
+        xml_path = os.path.join(search_dir, base + '.xml')
+        if os.path.isfile(xml_path):
+            return xml_path, 'voc', None
+
+    return None, None, None
 
 
 class AnnotationStatus(IntEnum):
@@ -68,16 +191,17 @@ class ThumbnailLoaderSignals(QObject):
 
 
 class ThumbnailLoaderWorker(QRunnable):
-    """Worker for async thumbnail generation."""
+    """Worker for async thumbnail generation with annotation overlay."""
 
-    def __init__(self, image_path, size=100):
+    def __init__(self, image_path, size=100, save_dir=None):
         super().__init__()
         self.image_path = image_path
         self.size = size
+        self.save_dir = save_dir
         self.signals = ThumbnailLoaderSignals()
 
     def run(self):
-        """Load and scale image in background thread."""
+        """Load, scale image, and draw annotations in background thread."""
         try:
             reader = QImageReader(self.image_path)
             reader.setAutoTransform(True)
@@ -92,9 +216,59 @@ class ThumbnailLoaderWorker(QRunnable):
 
             image = reader.read()
             if not image.isNull():
+                # Draw annotations on thumbnail
+                image = self._draw_annotations(image)
                 self.signals.thumbnail_ready.emit(self.image_path, image)
         except Exception:
             pass
+
+    def _draw_annotations(self, image):
+        """Draw bounding boxes on the thumbnail image."""
+        # Find annotation file
+        ann_path, ann_format, classes_path = find_annotation_file(
+            self.image_path, self.save_dir
+        )
+        if not ann_path:
+            return image
+
+        # Parse annotations
+        if ann_format == 'yolo':
+            annotations = parse_yolo_annotations(ann_path, classes_path)
+        elif ann_format == 'voc':
+            annotations = parse_voc_annotations(ann_path)
+        else:
+            return image
+
+        if not annotations:
+            return image
+
+        # Draw on image
+        img_w = image.width()
+        img_h = image.height()
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        for label, bbox in annotations:
+            x_center, y_center, w, h = bbox
+
+            # Convert normalized coords to pixel coords
+            x1 = int((x_center - w / 2) * img_w)
+            y1 = int((y_center - h / 2) * img_h)
+            x2 = int((x_center + w / 2) * img_w)
+            y2 = int((y_center + h / 2) * img_h)
+
+            # Get color for this label
+            color = generate_color_by_text(label)
+            pen = QPen(color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+
+            # Draw rectangle
+            painter.drawRect(x1, y1, x2 - x1, y2 - y1)
+
+        painter.end()
+        return image
 
 
 class GalleryWidget(QWidget):
@@ -118,6 +292,7 @@ class GalleryWidget(QWidget):
 
         self._icon_size = self.DEFAULT_ICON_SIZE
         self._show_size_slider = show_size_slider
+        self._save_dir = None  # Directory where annotations are saved
 
         self.thumbnail_cache = ThumbnailCache(max_size=300)
         self.thread_pool = QThreadPool.globalInstance()
@@ -276,7 +451,7 @@ class GalleryWidget(QWidget):
             return
 
         self._loading_paths.add(image_path)
-        worker = ThumbnailLoaderWorker(image_path, self._icon_size)
+        worker = ThumbnailLoaderWorker(image_path, self._icon_size, self._save_dir)
         worker.signals.thumbnail_ready.connect(self._on_thumbnail_loaded)
         self.thread_pool.start(worker)
 
@@ -384,3 +559,15 @@ class GalleryWidget(QWidget):
         super().resizeEvent(event)
         # Defer to prevent blocking during resize cascade
         QTimer.singleShot(10, self._load_visible_thumbnails)
+
+    def set_save_dir(self, save_dir):
+        """Set the annotation save directory.
+
+        When changed, clears the cache to reload thumbnails with annotations.
+        """
+        if self._save_dir != save_dir:
+            self._save_dir = save_dir
+            # Clear cache so thumbnails reload with annotations
+            self.thumbnail_cache.clear()
+            self._loading_paths.clear()
+            self._reload_all_thumbnails()
