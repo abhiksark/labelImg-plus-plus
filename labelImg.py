@@ -476,6 +476,41 @@ class MainWindow(QMainWindow, WindowMixin):
         self.auto_saving = QAction(get_str('autoSaveMode'), self)
         self.auto_saving.setCheckable(True)
         self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, False))
+
+        # Auto-save timer (Issue #13)
+        self.auto_save_timer = QTimer(self)
+        self.auto_save_timer.timeout.connect(self._auto_save_triggered)
+
+        # Auto-save enabled toggle
+        self.auto_save_enabled = QAction(get_str('autoSaveEnabled'), self)
+        self.auto_save_enabled.setCheckable(True)
+        self.auto_save_enabled.setChecked(settings.get(SETTING_AUTO_SAVE_ENABLED, False))
+        self.auto_save_enabled.triggered.connect(self._toggle_auto_save_timer)
+
+        # Auto-save interval submenu
+        self.auto_save_interval_menu = QMenu(get_str('autoSaveInterval'), self)
+        self.auto_save_interval_group = QActionGroup(self)
+        self.auto_save_interval_group.setExclusive(True)
+        auto_save_intervals = [
+            (get_str('autoSave30s'), 30),
+            (get_str('autoSave1m'), 60),
+            (get_str('autoSave2m'), 120),
+            (get_str('autoSave5m'), 300),
+        ]
+        saved_interval = settings.get(SETTING_AUTO_SAVE_INTERVAL, 60)
+        for name, interval in auto_save_intervals:
+            interval_action = QAction(name, self)
+            interval_action.setCheckable(True)
+            interval_action.setData(interval)
+            interval_action.triggered.connect(self._set_auto_save_interval)
+            self.auto_save_interval_group.addAction(interval_action)
+            self.auto_save_interval_menu.addAction(interval_action)
+            if interval == saved_interval:
+                interval_action.setChecked(True)
+        # Default to 1 minute if nothing selected
+        if not any(a.isChecked() for a in self.auto_save_interval_group.actions()):
+            self.auto_save_interval_group.actions()[1].setChecked(True)  # 1 minute
+
         # Sync single class mode from PR#106
         self.single_class_mode = QAction(get_str('singleClsMode'), self)
         self.single_class_mode.setShortcut("Ctrl+Shift+S")
@@ -519,6 +554,7 @@ class MainWindow(QMainWindow, WindowMixin):
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
             self.auto_saving,
+            self.auto_save_enabled,
             self.single_class_mode,
             self.display_label_option,
             labels, advanced_mode, gallery_mode, None,
@@ -526,6 +562,7 @@ class MainWindow(QMainWindow, WindowMixin):
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
             light_brighten, light_darken, light_org, None))
+        self.menus.view.addMenu(self.auto_save_interval_menu)
         self.menus.view.addMenu(self.icon_size_menu)
 
         self.menus.file.aboutToShow.connect(self.update_file_menu)
@@ -668,6 +705,10 @@ class MainWindow(QMainWindow, WindowMixin):
         # Open Dir if default file
         if self.file_path and os.path.isdir(self.file_path):
             self.open_dir_dialog(dir_path=self.file_path, silent=True)
+
+        # Start auto-save timer if enabled (Issue #13)
+        if self.auto_save_enabled.isChecked():
+            self._toggle_auto_save_timer()
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -1755,6 +1796,8 @@ class MainWindow(QMainWindow, WindowMixin):
             settings[SETTING_LAST_OPEN_DIR] = ''
 
         settings[SETTING_AUTO_SAVE] = self.auto_saving.isChecked()
+        settings[SETTING_AUTO_SAVE_ENABLED] = self.auto_save_enabled.isChecked()
+        settings[SETTING_AUTO_SAVE_INTERVAL] = self._get_current_auto_save_interval()
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
@@ -2256,6 +2299,49 @@ class MainWindow(QMainWindow, WindowMixin):
             # Update toolbar icon size
             if hasattr(self, 'tools') and self.tools:
                 self.tools.update_icon_size(size)
+
+    # Auto-save timer methods (Issue #13)
+    def _toggle_auto_save_timer(self):
+        """Toggle timer-based auto-save."""
+        if self.auto_save_enabled.isChecked():
+            interval = self._get_current_auto_save_interval()
+            self.auto_save_timer.start(interval * 1000)  # Convert to ms
+        else:
+            self.auto_save_timer.stop()
+
+    def _set_auto_save_interval(self):
+        """Set auto-save interval from menu selection."""
+        action = self.sender()
+        if action:
+            interval = action.data()
+            if self.auto_save_enabled.isChecked():
+                self.auto_save_timer.start(interval * 1000)
+
+    def _get_current_auto_save_interval(self):
+        """Get currently selected auto-save interval in seconds."""
+        for action in self.auto_save_interval_group.actions():
+            if action.isChecked():
+                return action.data()
+        return 60  # Default 1 minute
+
+    def _auto_save_triggered(self):
+        """Called by timer to perform auto-save."""
+        if not self.dirty:
+            return  # Nothing to save
+
+        if not self.file_path:
+            return  # No file loaded
+
+        # Determine save path
+        if self.default_save_dir:
+            save_path = self._generate_save_path()
+        else:
+            save_path = self.file_path
+
+        if save_path:
+            self.status("Auto-saving...")
+            if self._save_file(save_path):
+                self.status("Auto-saved to %s" % os.path.basename(save_path))
 
 
 def inverted(color):
