@@ -144,6 +144,7 @@ python3 -m unittest discover tests -v
 - [Adding Formats](guides/adding-formats.md) - Create new annotation formats
 - [Adding Features](guides/adding-features.md) - Add new actions and UI
 - [i18n Guide](guides/i18n-guide.md) - Add new languages
+- [Testing Plan](testing-plan.md) - Test audit findings and roadmap
 
 ### Reference
 - [Keyboard Shortcuts](reference/keyboard-shortcuts.md) - Complete hotkey reference

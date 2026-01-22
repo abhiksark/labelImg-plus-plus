@@ -345,5 +345,160 @@ class TestEditLabelCommand(unittest.TestCase):
         self.assertEqual(shape.label, 'new_label')
 
 
+class TestUndoStackEdgeCases(unittest.TestCase):
+    """Edge case tests for UndoStack."""
+
+    def test_undo_empty_stack(self):
+        """Test that undo on empty stack does nothing."""
+        stack = UndoStack()
+
+        # Should not raise
+        stack.undo()
+
+        self.assertFalse(stack.can_undo())
+
+    def test_redo_empty_stack(self):
+        """Test that redo on empty stack does nothing."""
+        stack = UndoStack()
+
+        # Should not raise
+        stack.redo()
+
+        self.assertFalse(stack.can_redo())
+
+    def test_multiple_undo_redo_cycles(self):
+        """Test multiple undo/redo cycles."""
+        stack = UndoStack()
+        mw = MockMainWindow()
+
+        shape = create_test_shape()
+        mw.canvas.shapes.append(shape)
+        mw.add_label(shape)
+        cmd = CreateShapeCommand(mw, shape)
+        stack.push(cmd)
+
+        # Multiple cycles
+        for _ in range(3):
+            stack.undo()
+            self.assertEqual(len(mw.canvas.shapes), 0)
+
+            stack.redo()
+            self.assertEqual(len(mw.canvas.shapes), 1)
+
+    def test_undo_sequence(self):
+        """Test undoing a sequence of commands."""
+        stack = UndoStack()
+        mw = MockMainWindow()
+
+        shapes = []
+        for i in range(3):
+            shape = create_test_shape(f'shape{i}')
+            mw.canvas.shapes.append(shape)
+            mw.add_label(shape)
+            cmd = CreateShapeCommand(mw, shape)
+            stack.push(cmd)
+            shapes.append(shape)
+
+        self.assertEqual(len(mw.canvas.shapes), 3)
+
+        # Undo all
+        stack.undo()
+        self.assertEqual(len(mw.canvas.shapes), 2)
+
+        stack.undo()
+        self.assertEqual(len(mw.canvas.shapes), 1)
+
+        stack.undo()
+        self.assertEqual(len(mw.canvas.shapes), 0)
+
+    def test_remove_callback(self):
+        """Test removing a callback."""
+        stack = UndoStack()
+        callback_count = [0]
+
+        def callback():
+            callback_count[0] += 1
+
+        stack.add_callback(callback)
+        stack.remove_callback(callback)
+
+        mw = MockMainWindow()
+        shape = create_test_shape()
+        mw.canvas.shapes.append(shape)
+        mw.add_label(shape)
+        cmd = CreateShapeCommand(mw, shape)
+        stack.push(cmd)
+
+        # Callback should not have been called
+        self.assertEqual(callback_count[0], 0)
+
+
+class TestMoveShapeCommandEdgeCases(unittest.TestCase):
+    """Edge case tests for MoveShapeCommand."""
+
+    def test_move_zero_offset(self):
+        """Test move with zero offset."""
+        mw = MockMainWindow()
+        shape = create_test_shape()
+        old_points = [QPointF(p.x(), p.y()) for p in shape.points]
+        new_points = old_points.copy()  # Same positions
+
+        cmd = MoveShapeCommand(mw, shape, old_points, new_points)
+        cmd.execute()
+
+        # Points should remain unchanged
+        for i, p in enumerate(shape.points):
+            self.assertEqual(p.x(), old_points[i].x())
+            self.assertEqual(p.y(), old_points[i].y())
+
+    def test_move_negative_offset(self):
+        """Test move with negative offset."""
+        mw = MockMainWindow()
+        shape = create_test_shape()
+        old_points = [QPointF(p.x(), p.y()) for p in shape.points]
+        new_points = [QPointF(p.x() - 25, p.y() - 25) for p in shape.points]
+
+        cmd = MoveShapeCommand(mw, shape, old_points, new_points)
+        cmd.execute()
+
+        for i, p in enumerate(shape.points):
+            self.assertEqual(p.x(), old_points[i].x() - 25)
+            self.assertEqual(p.y(), old_points[i].y() - 25)
+
+
+class TestEditLabelCommandEdgeCases(unittest.TestCase):
+    """Edge case tests for EditLabelCommand."""
+
+    def test_edit_label_empty_string(self):
+        """Test editing label to empty string."""
+        mw = MockMainWindow()
+        shape = create_test_shape('original')
+
+        cmd = EditLabelCommand(mw, shape, 'original', '')
+        cmd.execute()
+
+        self.assertEqual(shape.label, '')
+
+    def test_edit_label_unicode(self):
+        """Test editing label with unicode characters."""
+        mw = MockMainWindow()
+        shape = create_test_shape('original')
+
+        cmd = EditLabelCommand(mw, shape, 'original', '猫')
+        cmd.execute()
+
+        self.assertEqual(shape.label, '猫')
+
+    def test_edit_label_same_value(self):
+        """Test editing label to same value."""
+        mw = MockMainWindow()
+        shape = create_test_shape('same')
+
+        cmd = EditLabelCommand(mw, shape, 'same', 'same')
+        cmd.execute()
+
+        self.assertEqual(shape.label, 'same')
+
+
 if __name__ == '__main__':
     unittest.main()

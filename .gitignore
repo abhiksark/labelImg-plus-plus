@@ -15,7 +15,8 @@ cscope*
 .vscode
 *.pkl
 Pipfile
-*.xml
+tests/tests.json
+tests/test.xml
 
 # MacOS System-Generated
 .DS_Store

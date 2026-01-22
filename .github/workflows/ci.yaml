@@ -35,8 +35,10 @@ jobs:
           pip install pyqt5 lxml pytest
 
       - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
-          python -m pytest tests/ -v || true
+          python -m pytest tests/ -v
 
   publish:
     needs: test
