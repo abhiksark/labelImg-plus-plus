@@ -1,10 +1,9 @@
-.. image:: resources/logo/labelimg_logo.png
-     :alt: labelImg++ Logo
-     :width: 200
-     :align: center
+.. raw:: html
 
-labelImg++
-==========
+   <p align="center">
+     <img src="resources/logo/labelimg_logo.png" alt="labelImg++ Logo" width="120">
+     <h1>labelImg++</h1>
+   </p>
 
 .. image:: https://img.shields.io/pypi/v/labelImgPlusPlus.svg
         :target: https://pypi.org/project/labelImgPlusPlus/
