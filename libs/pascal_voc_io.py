@@ -134,8 +134,12 @@ class PascalVocReader:
         self.verified = False
         try:
             self.parse_xml()
-        except:
-            pass
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Annotation file not found: {file_path}")
+        except ET.ParseError as e:
+            raise ValueError(f"Invalid XML in annotation file: {file_path}\nError: {e}")
+        except Exception as e:
+            raise ValueError(f"Error parsing annotation file: {file_path}\nError: {e}")
 
     def get_shapes(self):
         return self.shapes

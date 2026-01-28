@@ -33,8 +33,13 @@ class Settings(object):
                 with open(self.path, 'rb') as f:
                     self.data = pickle.load(f)
                     return True
-        except:
-            print('Loading setting failed')
+        except (pickle.UnpicklingError, EOFError, AttributeError) as e:
+            print(f'Settings file corrupted, using defaults: {e}')
+            self.data = {}
+        except IOError as e:
+            print(f'Could not read settings file: {e}')
+        except Exception as e:
+            print(f'Unexpected error loading settings: {e}')
         return False
 
     def reset(self):

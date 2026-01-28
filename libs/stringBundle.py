@@ -37,8 +37,8 @@ class StringBundle:
             try:
                 locale_str = locale.getdefaultlocale()[0] if locale.getdefaultlocale() and len(
                     locale.getdefaultlocale()) > 0 else os.getenv('LANG')
-            except:
-                print('Invalid locale')
+            except (ValueError, TypeError, AttributeError):
+                print('Invalid locale, using English')
                 locale_str = 'en'
 
         return StringBundle(cls.__create_key, locale_str)

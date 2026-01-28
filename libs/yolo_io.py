@@ -47,34 +47,25 @@ class YOLOWriter:
         return class_index, x_center, y_center, w, h
 
     def save(self, class_list=[], target_file=None):
-
-        out_file = None  # Update yolo .txt
-        out_class_file = None   # Update class list .txt
-
         if target_file is None:
-            out_file = open(
-            self.filename + TXT_EXT, 'w', encoding=ENCODE_METHOD)
-            classes_file = os.path.join(os.path.dirname(os.path.abspath(self.filename)), "classes.txt")
-            out_class_file = open(classes_file, 'w')
-
+            out_path = self.filename + TXT_EXT
         else:
-            out_file = codecs.open(target_file, 'w', encoding=ENCODE_METHOD)
-            classes_file = os.path.join(os.path.dirname(os.path.abspath(target_file)), "classes.txt")
-            out_class_file = open(classes_file, 'w')
+            out_path = target_file
 
+        classes_file_path = os.path.join(
+            os.path.dirname(os.path.abspath(out_path)), "classes.txt"
+        )
 
-        for box in self.box_list:
-            class_index, x_center, y_center, w, h = self.bnd_box_to_yolo_line(box, class_list)
-            # print (classIndex, x_center, y_center, w, h)
-            out_file.write("%d %.6f %.6f %.6f %.6f\n" % (class_index, x_center, y_center, w, h))
+        # Write annotation file
+        with open(out_path, 'w', encoding=ENCODE_METHOD) as out_file:
+            for box in self.box_list:
+                class_index, x_center, y_center, w, h = self.bnd_box_to_yolo_line(box, class_list)
+                out_file.write("%d %.6f %.6f %.6f %.6f\n" % (class_index, x_center, y_center, w, h))
 
-        # print (classList)
-        # print (out_class_file)
-        for c in class_list:
-            out_class_file.write(c+'\n')
-
-        out_class_file.close()
-        out_file.close()
+        # Write classes file
+        with open(classes_file_path, 'w', encoding=ENCODE_METHOD) as out_class_file:
+            for c in class_list:
+                out_class_file.write(c + '\n')
 
 
 
@@ -94,8 +85,18 @@ class YoloReader:
 
         # print (file_path, self.class_list_path)
 
-        classes_file = open(self.class_list_path, 'r')
-        self.classes = classes_file.read().strip('\n').split('\n')
+        # Load classes with proper error handling
+        self.classes = []
+        try:
+            with open(self.class_list_path, 'r') as classes_file:
+                self.classes = classes_file.read().strip('\n').split('\n')
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"classes.txt not found at: {self.class_list_path}\n"
+                "YOLO format requires a classes.txt file in the same directory as annotations."
+            )
+        except IOError as e:
+            raise IOError(f"Error reading classes.txt: {e}")
 
         # print (self.classes)
 
@@ -105,10 +106,7 @@ class YoloReader:
         self.img_size = img_size
 
         self.verified = False
-        # try:
         self.parse_yolo_format()
-        # except:
-        #     pass
 
     def get_shapes(self):
         return self.shapes
@@ -134,10 +132,27 @@ class YoloReader:
         return label, x_min, y_min, x_max, y_max
 
     def parse_yolo_format(self):
-        bnd_box_file = open(self.file_path, 'r')
-        for bndBox in bnd_box_file:
-            class_index, x_center, y_center, w, h = bndBox.strip().split(' ')
-            label, x_min, y_min, x_max, y_max = self.yolo_line_to_shape(class_index, x_center, y_center, w, h)
+        with open(self.file_path, 'r') as bnd_box_file:
+            for line_num, bndBox in enumerate(bnd_box_file, 1):
+                line = bndBox.strip()
+                if not line:
+                    continue
+                parts = line.split(' ')
+                if len(parts) != 5:
+                    raise ValueError(
+                        f"Invalid YOLO format at line {line_num}: expected 5 values, got {len(parts)}"
+                    )
+                class_index, x_center, y_center, w, h = parts
 
-            # Caveat: difficult flag is discarded when saved as yolo format.
-            self.add_shape(label, x_min, y_min, x_max, y_max, False)
+                # Validate class index
+                idx = int(class_index)
+                if idx < 0 or idx >= len(self.classes):
+                    raise IndexError(
+                        f"Class index {idx} at line {line_num} is out of range. "
+                        f"classes.txt has {len(self.classes)} classes (0-{len(self.classes)-1})."
+                    )
+
+                label, x_min, y_min, x_max, y_max = self.yolo_line_to_shape(class_index, x_center, y_center, w, h)
+
+                # Caveat: difficult flag is discarded when saved as yolo format.
+                self.add_shape(label, x_min, y_min, x_max, y_max, False)
