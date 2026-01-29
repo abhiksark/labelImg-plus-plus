@@ -370,6 +370,7 @@ class GalleryWidget(QWidget):
             for label, size in self.size_presets.items():
                 btn = QPushButton(label)
                 btn.setFixedSize(32, 26)
+                btn.setAutoFillBackground(True)  # Required for stylesheet bg
                 btn.clicked.connect(lambda checked, s=size: self._set_preset_size(s))
                 slider_layout.addWidget(btn)
                 self._preset_buttons.append(btn)
