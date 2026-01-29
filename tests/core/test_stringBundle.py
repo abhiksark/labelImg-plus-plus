@@ -3,8 +3,11 @@ import os
 import sys
 import unittest
 
-import resources
-from stringBundle import StringBundle
+dir_name = os.path.abspath(os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(dir_name, '..', '..'))
+
+from libs import resources
+from libs.utils.stringBundle import StringBundle
 
 
 class TestStringBundle(unittest.TestCase):

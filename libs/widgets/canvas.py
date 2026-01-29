@@ -7,8 +7,8 @@ except ImportError:
     from PyQt4.QtGui import *
     from PyQt4.QtCore import *
 
-from libs.shape import Shape
-from libs.utils import distance
+from libs.core.shape import Shape
+from libs.utils.utils import distance
 
 CURSOR_DEFAULT = Qt.ArrowCursor
 CURSOR_POINT = Qt.PointingHandCursor

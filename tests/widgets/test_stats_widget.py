@@ -12,7 +12,7 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
 from PyQt5.QtWidgets import QApplication
-from libs.statsWidget import StatsWidget
+from libs.widgets.statsWidget import StatsWidget
 
 
 class TestStatsWidgetInit(unittest.TestCase):

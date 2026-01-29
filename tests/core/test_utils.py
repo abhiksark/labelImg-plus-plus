@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 from PyQt5.QtWidgets import QApplication, QMenu, QToolBar, QWidget
 from PyQt5.QtCore import QPointF
 
-from libs.utils import (
+from libs.utils.utils import (
     Struct, new_action, new_icon, add_actions, format_shortcut,
     generate_color_by_text, natural_sort, distance, trimmed
 )

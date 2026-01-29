@@ -12,14 +12,14 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QPointF
 
-from libs.commands import (
+from libs.core.commands import (
     UndoStack,
     CreateShapeCommand,
     DeleteShapeCommand,
     MoveShapeCommand,
     EditLabelCommand,
 )
-from libs.shape import Shape
+from libs.core.shape import Shape
 
 
 # Create a QApplication instance for tests

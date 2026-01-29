@@ -15,8 +15,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QApplication, QWidget, QDialogButtonBox
 
-from libs.colorDialog import ColorDialog
-from libs.labelDialog import LabelDialog
+from libs.widgets.colorDialog import ColorDialog
+from libs.widgets.labelDialog import LabelDialog
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)

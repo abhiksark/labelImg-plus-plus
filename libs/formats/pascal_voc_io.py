@@ -5,8 +5,8 @@ from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement
 from lxml import etree
 import codecs
-from libs.constants import DEFAULT_ENCODING
-from libs.ustr import ustr
+from libs.utils.constants import DEFAULT_ENCODING
+from libs.utils.ustr import ustr
 
 
 XML_EXT = '.xml'

@@ -10,7 +10,7 @@ libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from libs.labelFile import LabelFile, LabelFileFormat
+from libs.formats.labelFile import LabelFile, LabelFileFormat
 
 
 class TestConvertPointsToBndBox(unittest.TestCase):

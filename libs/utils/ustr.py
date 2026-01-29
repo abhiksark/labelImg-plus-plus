@@ -1,5 +1,5 @@
 import sys
-from libs.constants import DEFAULT_ENCODING
+from libs.utils.constants import DEFAULT_ENCODING
 
 def ustr(x):
     """py2/py3 unicode helper"""

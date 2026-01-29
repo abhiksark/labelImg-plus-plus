@@ -10,7 +10,7 @@ libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from libs.galleryWidget import (
+from libs.widgets.galleryWidget import (
     find_annotation_file,
     parse_yolo_annotations,
     parse_voc_annotations,

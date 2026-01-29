@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from collections import OrderedDict
-from libs.galleryWidget import ThumbnailCache
+from libs.widgets.galleryWidget import ThumbnailCache
 
 
 class TestPathToIndexDict(unittest.TestCase):

@@ -9,8 +9,8 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 
-from libs.pascal_voc_io import PascalVocWriter, PascalVocReader
-from libs.create_ml_io import CreateMLWriter, CreateMLReader
+from libs.formats.pascal_voc_io import PascalVocWriter, PascalVocReader
+from libs.formats.create_ml_io import CreateMLWriter, CreateMLReader
 
 
 class TestPascalVocIO(unittest.TestCase):

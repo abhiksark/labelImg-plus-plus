@@ -15,8 +15,8 @@ from PyQt5.QtCore import QPointF, QPoint, Qt
 from PyQt5.QtGui import QPixmap, QColor
 from PyQt5.QtWidgets import QApplication
 
-from libs.canvas import Canvas
-from libs.shape import Shape
+from libs.widgets.canvas import Canvas
+from libs.core.shape import Shape
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)

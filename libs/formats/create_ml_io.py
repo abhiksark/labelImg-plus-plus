@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from libs.constants import DEFAULT_ENCODING
+from libs.utils.constants import DEFAULT_ENCODING
 import os
 
 JSON_EXT = '.json'

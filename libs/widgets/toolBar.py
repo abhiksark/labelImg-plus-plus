@@ -127,7 +127,7 @@ class ToolBar(QToolBar):
 
     def add_expand_button(self):
         """Add expand/collapse toggle button at the bottom of toolbar."""
-        from libs.utils import new_icon
+        from libs.utils.utils import new_icon
 
         # Add spacer to push button to bottom
         spacer = QWidget()
@@ -161,7 +161,7 @@ class ToolBar(QToolBar):
 
     def toggle_expanded(self):
         """Toggle between expanded and collapsed state."""
-        from libs.utils import new_icon
+        from libs.utils.utils import new_icon
 
         self._expanded = not self._expanded
 
