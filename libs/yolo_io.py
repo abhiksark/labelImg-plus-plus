@@ -83,8 +83,6 @@ class YoloReader:
         else:
             self.class_list_path = class_list_path
 
-        # print (file_path, self.class_list_path)
-
         # Load classes with proper error handling
         self.classes = []
         try:
@@ -97,8 +95,6 @@ class YoloReader:
             )
         except IOError as e:
             raise IOError(f"Error reading classes.txt: {e}")
-
-        # print (self.classes)
 
         img_size = [image.height(), image.width(),
                     1 if image.isGrayscale() else 3]

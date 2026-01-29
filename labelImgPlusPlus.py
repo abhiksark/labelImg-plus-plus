@@ -2419,22 +2419,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.status("Auto-saved to %s" % os.path.basename(save_path))
 
 
-def inverted(color):
-    return QColor(*[255 - v for v in color.getRgb()])
-
-
-def read(filename, default=None):
-    try:
-        reader = QImageReader(filename)
-        reader.setAutoTransform(True)
-        image = reader.read()
-        if image.isNull():
-            return default
-        return image
-    except (IOError, OSError):
-        return default
-
-
 def get_main_app(argv=None):
     """
     Standard boilerplate Qt application code.

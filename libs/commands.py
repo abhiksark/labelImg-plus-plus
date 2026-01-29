@@ -5,7 +5,6 @@ This module provides undoable command classes for annotation actions.
 """
 
 from abc import ABC, abstractmethod
-from copy import deepcopy
 
 try:
     from PyQt5.QtCore import QPointF

@@ -30,9 +30,6 @@ class PascalVocWriter:
         rough_string = ElementTree.tostring(elem, 'utf8')
         root = etree.fromstring(rough_string)
         return etree.tostring(root, pretty_print=True, encoding=ENCODE_METHOD).replace("  ".encode(), "\t".encode())
-        # minidom does not support UTF-8
-        # reparsed = minidom.parseString(rough_string)
-        # return reparsed.toprettyxml(indent="\t", encoding=ENCODE_METHOD)
 
     def gen_xml(self):
         """
