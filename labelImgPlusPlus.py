@@ -612,7 +612,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.line_color = None
         self.fill_color = None
         self.zoom_level = 100
-        self.fit_window = False
         # Add Chris
         self.difficult = False
 
