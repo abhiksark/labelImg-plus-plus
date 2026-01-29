@@ -250,11 +250,27 @@ class MainWindow(QMainWindow, WindowMixin):
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.stats_dock)
-        self.file_dock.setFeatures(QDockWidget.DockWidgetFloatable)
-        self.stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable)
 
+        # Configure dock features - all docks are movable for resizing
+        # DockWidgetMovable enables drag-to-rearrange and proper splitter resizing
+        dock_features_all = (QDockWidget.DockWidgetMovable |
+                             QDockWidget.DockWidgetFloatable |
+                             QDockWidget.DockWidgetClosable)
+        self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.stats_dock.setFeatures(dock_features_all)
+
+        # Set minimum sizes for better resize UX
+        self.dock.setMinimumHeight(100)
+        self.file_dock.setMinimumHeight(100)
+        self.stats_dock.setMinimumHeight(80)
+        self.dock.setMinimumWidth(200)
+        self.file_dock.setMinimumWidth(200)
+        self.stats_dock.setMinimumWidth(200)
+
+        # Features toggled by advanced mode (closable/floatable for labels dock)
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
-        self.dock.setFeatures(self.dock.features() ^ self.dock_features)
+        # In beginner mode, labels dock is movable only (not closable/floatable)
+        self.dock.setFeatures(QDockWidget.DockWidgetMovable)
 
         # Actions
         action = partial(new_action, self)
