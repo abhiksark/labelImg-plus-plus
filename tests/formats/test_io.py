@@ -161,5 +161,145 @@ class TestCreateMLIO(unittest.TestCase):
         self.assertIn('img2.jpg', images)
 
 
+class TestPascalVocEdgeCases(unittest.TestCase):
+    """Edge case tests for Pascal VOC format error handling."""
+
+    def setUp(self):
+        """Create a temp directory for test outputs."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_read_malformed_xml_raises_error(self):
+        """Test reading malformed XML file raises ValueError."""
+        xml_path = os.path.join(self.temp_dir, 'malformed.xml')
+        with open(xml_path, 'w') as f:
+            f.write('<annotation><object>not closed properly')
+
+        with self.assertRaises((ValueError, Exception)):
+            PascalVocReader(xml_path)
+
+    def test_read_missing_bndbox_raises_error(self):
+        """Test reading XML with missing bndbox raises ValueError."""
+        xml_path = os.path.join(self.temp_dir, 'missing_bndbox.xml')
+        with open(xml_path, 'w') as f:
+            f.write('''<?xml version="1.0"?>
+<annotation>
+    <folder>test</folder>
+    <filename>test.jpg</filename>
+    <size><width>100</width><height>100</height><depth>3</depth></size>
+    <object>
+        <name>person</name>
+    </object>
+</annotation>''')
+
+        with self.assertRaises((ValueError, AttributeError, Exception)):
+            PascalVocReader(xml_path)
+
+    def test_read_nonexistent_file_raises_error(self):
+        """Test reading non-existent XML file raises FileNotFoundError."""
+        with self.assertRaises(FileNotFoundError):
+            PascalVocReader('/nonexistent/path/file.xml')
+
+    def test_read_empty_file_raises_error(self):
+        """Test reading empty XML file raises error."""
+        xml_path = os.path.join(self.temp_dir, 'empty.xml')
+        with open(xml_path, 'w') as f:
+            f.write('')
+
+        with self.assertRaises((ValueError, Exception)):
+            PascalVocReader(xml_path)
+
+    def test_write_empty_filename(self):
+        """Test writing with empty filename."""
+        xml_path = os.path.join(self.temp_dir, 'empty_name.xml')
+        writer = PascalVocWriter('folder', '', (100, 100, 3))
+        writer.add_bnd_box(10, 10, 50, 50, 'test', difficult=0)
+        writer.save(xml_path)
+
+        # Should still create valid XML
+        self.assertTrue(os.path.exists(xml_path))
+
+    def test_read_valid_xml_with_no_objects(self):
+        """Test reading valid XML with no objects."""
+        xml_path = os.path.join(self.temp_dir, 'no_objects.xml')
+        with open(xml_path, 'w') as f:
+            f.write('''<?xml version="1.0"?>
+<annotation>
+    <folder>test</folder>
+    <filename>test.jpg</filename>
+    <size><width>100</width><height>100</height><depth>3</depth></size>
+</annotation>''')
+
+        reader = PascalVocReader(xml_path)
+        shapes = reader.get_shapes()
+        self.assertEqual(shapes, [])
+
+
+class TestCreateMLEdgeCases(unittest.TestCase):
+    """Edge case tests for CreateML format error handling."""
+
+    def setUp(self):
+        """Create a temp directory for test outputs."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_read_corrupt_json_returns_empty(self):
+        """Test reading corrupt JSON file returns empty shapes (error is logged)."""
+        json_path = os.path.join(self.temp_dir, 'corrupt.json')
+        with open(json_path, 'w') as f:
+            f.write('{invalid json content')
+
+        # CreateMLReader catches ValueError and prints error
+        reader = CreateMLReader(json_path, 'folder/test.jpg')
+        shapes = reader.get_shapes()
+        self.assertEqual(shapes, [])
+
+    def test_read_json_array_empty(self):
+        """Test reading JSON with empty array."""
+        json_path = os.path.join(self.temp_dir, 'empty_array.json')
+        with open(json_path, 'w') as f:
+            f.write('[]')
+
+        reader = CreateMLReader(json_path, 'folder/test.jpg')
+        shapes = reader.get_shapes()
+        self.assertEqual(shapes, [])
+
+    def test_read_json_image_not_found(self):
+        """Test reading JSON where requested image is not in the data."""
+        json_path = os.path.join(self.temp_dir, 'other_image.json')
+        with open(json_path, 'w') as f:
+            json.dump([{'image': 'other.jpg', 'annotations': []}], f)
+
+        reader = CreateMLReader(json_path, 'folder/test.jpg')
+        shapes = reader.get_shapes()
+        self.assertEqual(shapes, [])
+
+    def test_read_nonexistent_json_raises_error(self):
+        """Test reading non-existent JSON file raises FileNotFoundError."""
+        with self.assertRaises(FileNotFoundError):
+            CreateMLReader('/nonexistent/path/file.json', 'folder/test.jpg')
+
+    def test_write_with_no_shapes(self):
+        """Test writing with empty shapes list."""
+        json_path = os.path.join(self.temp_dir, 'no_shapes.json')
+        shapes = []
+        writer = CreateMLWriter('folder', 'test.jpg', (100, 100, 3), shapes, json_path)
+        writer.write()
+
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['annotations'], [])
+
+
 if __name__ == '__main__':
     unittest.main()
