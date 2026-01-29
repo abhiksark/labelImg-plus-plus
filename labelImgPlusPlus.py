@@ -49,6 +49,7 @@ from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
 from libs.galleryWidget import GalleryWidget, AnnotationStatus
+from libs.statsWidget import StatsWidget
 from libs.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
 
 __appname__ = 'labelImg'
@@ -209,6 +210,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_dock.setObjectName(get_str('files'))
         self.file_dock.setWidget(file_list_container)
 
+        # Statistics widget (Issue #19)
+        self.stats_widget = StatsWidget()
+        self.stats_widget.refresh_btn.clicked.connect(self._refresh_all_statistics)
+        self.stats_dock = QDockWidget(get_str('statistics'), self)
+        self.stats_dock.setObjectName('statistics')
+        self.stats_dock.setWidget(self.stats_widget)
+
         self.zoom_widget = ZoomWidget()
         self.light_widget = LightWidget(get_str('lightWidgetTitle'))
         self.color_dialog = ColorDialog(parent=self)
@@ -240,7 +248,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setCentralWidget(scroll)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.stats_dock)
         self.file_dock.setFeatures(QDockWidget.DockWidgetFloatable)
+        self.stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable)
 
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
@@ -424,6 +434,11 @@ class MainWindow(QMainWindow, WindowMixin):
         labels.setText(get_str('showHide'))
         labels.setShortcut('Ctrl+Shift+L')
 
+        # Statistics panel toggle (Issue #19)
+        stats_toggle = self.stats_dock.toggleViewAction()
+        stats_toggle.setText(get_str('statistics'))
+        stats_toggle.setShortcut('Ctrl+Shift+T')
+
         # Label list context menu.
         label_menu = QMenu()
         add_actions(label_menu, (edit, delete))
@@ -559,7 +574,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_save_enabled,
             self.single_class_mode,
             self.display_label_option,
-            labels, advanced_mode, gallery_mode, None,
+            labels, stats_toggle, advanced_mode, gallery_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
@@ -1532,6 +1547,7 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 self.actions.editMode.setEnabled(True)
             self.set_dirty()
+            self._update_current_image_stats()
 
             if text not in self.label_hist:
                 self.label_hist.append(text)
@@ -1740,6 +1756,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.label_list.item(self.label_list.count() - 1).setSelected(True)
 
             self.canvas.setFocus(True)
+            self._update_current_image_stats()
             return True
         return False
 
@@ -2002,6 +2019,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Update image count in status bar
         self.update_image_count()
+
+        # Refresh statistics (Issue #19)
+        self._refresh_all_statistics()
+
         self.open_next_image()
 
     def verify_image(self, _value=False):
@@ -2215,6 +2236,7 @@ class MainWindow(QMainWindow, WindowMixin):
         cmd.execute()
         self.undo_stack.push(cmd)
         self.set_dirty()
+        self._update_current_image_stats()
 
         if self.no_shapes():
             for action in self.actions.onShapesPresent:
@@ -2417,6 +2439,85 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status("Auto-saving...")
             if self._save_file(save_path):
                 self.status("Auto-saved to %s" % os.path.basename(save_path))
+
+    # Statistics methods (Issue #19)
+    def _refresh_all_statistics(self):
+        """Refresh all statistics in the stats widget."""
+        if not hasattr(self, 'stats_widget'):
+            return
+
+        # Dataset stats
+        total = len(self.m_img_list)
+        annotated = 0
+        verified = 0
+        label_counts = {}
+
+        for img_path in self.m_img_list:
+            status = self._get_annotation_status(img_path)
+            if status != AnnotationStatus.NO_LABELS:
+                annotated += 1
+            if status == AnnotationStatus.VERIFIED:
+                verified += 1
+
+            # Count labels from annotation files
+            labels = self._get_labels_for_image(img_path)
+            for label in labels:
+                label_counts[label] = label_counts.get(label, 0) + 1
+
+        self.stats_widget.update_dataset_stats(total, annotated, verified)
+        self.stats_widget.update_label_distribution(label_counts)
+        self._update_current_image_stats()
+
+    def _update_current_image_stats(self):
+        """Update statistics for the current image."""
+        if not hasattr(self, 'stats_widget'):
+            return
+
+        annotations_count = len(self.canvas.shapes)
+        labels = [shape.label for shape in self.canvas.shapes]
+        self.stats_widget.update_current_image_stats(annotations_count, labels)
+
+    def _get_labels_for_image(self, img_path):
+        """Get list of labels for an image from its annotation file."""
+        labels = []
+        base_path = os.path.splitext(img_path)[0]
+
+        # Try XML (PASCAL VOC)
+        xml_path = base_path + XML_EXT
+        if os.path.exists(xml_path):
+            try:
+                reader = PascalVocReader(xml_path)
+                shapes = reader.get_shapes()
+                labels = [shape[0] for shape in shapes]
+            except Exception:
+                pass
+            return labels
+
+        # Try TXT (YOLO) - needs classes.txt
+        txt_path = base_path + TXT_EXT
+        if os.path.exists(txt_path):
+            try:
+                from PyQt5.QtGui import QImage
+                img = QImage(img_path)
+                if not img.isNull():
+                    reader = YoloReader(txt_path, img)
+                    shapes = reader.get_shapes()
+                    labels = [shape[0] for shape in shapes]
+            except Exception:
+                pass
+            return labels
+
+        # Try JSON (CreateML)
+        json_path = base_path + JSON_EXT
+        if os.path.exists(json_path):
+            try:
+                reader = CreateMLReader(json_path)
+                shapes = reader.get_shapes()
+                labels = [shape[0] for shape in shapes]
+            except Exception:
+                pass
+
+        return labels
 
 
 def get_main_app(argv=None):
