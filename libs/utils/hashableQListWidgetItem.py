@@ -2,9 +2,7 @@
 # -*- coding: utf-8 -*-
 import sys
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtWidgets import QListWidgetItem
 except ImportError:
     # needed for py3+qt4
     # Ref:
@@ -13,8 +11,7 @@ except ImportError:
     if sys.version_info.major >= 3:
         import sip
         sip.setapi('QVariant', 2)
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import QListWidgetItem
 
 # PyQt5: TypeError: unhashable type: 'QListWidgetItem'
 

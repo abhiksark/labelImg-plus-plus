@@ -1,11 +1,15 @@
+# libs/widgets/canvas.py
+"""Canvas widget for drawing and editing bounding box annotations."""
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtGui import QColor, QPixmap, QPainter, QCursor, QBrush
+    from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint
+    from PyQt5.QtWidgets import QWidget, QMenu, QApplication
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import (
+        QColor, QPixmap, QPainter, QCursor, QBrush, QWidget, QMenu, QApplication
+    )
+    from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint
 
 from libs.core.shape import Shape
 from libs.utils.utils import distance
@@ -687,15 +691,11 @@ class Canvas(QWidget):
         points = [p1 + p2 for p1, p2 in zip(self.selected_shape.points, [step] * 4)]
         return True in map(self.out_of_pixmap, points)
 
-    def set_last_label(self, text, line_color=None, fill_color=None):
+    def set_last_label(self, text, line_color=None):
         assert text
         self.shapes[-1].label = text
         if line_color:
             self.shapes[-1].line_color = line_color
-
-        if fill_color:
-            self.shapes[-1].fill_color = fill_color
-
         return self.shapes[-1]
 
     def undo_last_line(self):

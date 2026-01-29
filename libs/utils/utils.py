@@ -5,14 +5,20 @@ import re
 import sys
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtGui import QIcon, QColor
+    from PyQt5.QtCore import QRegExp
+    from PyQt5.QtWidgets import QPushButton, QAction, QMenu, QWidget
     QT5 = True
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import QIcon, QColor, QPushButton, QAction, QMenu, QWidget, QRegExpValidator
+    from PyQt4.QtCore import QRegExp
     QT5 = False
+
+# QRegExpValidator location differs between Qt versions
+if QT5:
+    from PyQt5.QtGui import QRegExpValidator
+else:
+    pass  # Already imported above for PyQt4
 
 
 def new_icon(icon):

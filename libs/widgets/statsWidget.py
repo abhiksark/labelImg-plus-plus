@@ -2,12 +2,19 @@
 """Statistics widget for displaying annotation statistics."""
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import (
+        QWidget, QVBoxLayout, QGroupBox, QLabel, QProgressBar,
+        QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+        QPushButton, QStyle
+    )
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import (
+        QWidget, QVBoxLayout, QGroupBox, QLabel, QProgressBar,
+        QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+        QPushButton, QStyle
+    )
+    from PyQt4.QtCore import Qt
 
 
 class StatsWidget(QWidget):

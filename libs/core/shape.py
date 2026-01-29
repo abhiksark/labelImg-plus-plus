@@ -3,11 +3,11 @@
 
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
+    from PyQt5.QtGui import QColor, QPen, QPainterPath, QFont, QFontMetrics
+    from PyQt5.QtCore import Qt
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import QColor, QPen, QPainterPath, QFont, QFontMetrics
+    from PyQt4.QtCore import Qt
 
 from libs.utils import distance
 import sys

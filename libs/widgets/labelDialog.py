@@ -2,12 +2,18 @@
 """Label dialog with search/filter capability for selecting annotation labels."""
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtGui import QCursor
+    from PyQt5.QtCore import Qt, QStringListModel, QPoint
+    from PyQt5.QtWidgets import (
+        QDialog, QLineEdit, QCompleter, QDialogButtonBox, QVBoxLayout,
+        QHBoxLayout, QLabel, QListWidget
+    )
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import (
+        QCursor, QDialog, QLineEdit, QCompleter, QDialogButtonBox,
+        QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QStringListModel
+    )
+    from PyQt4.QtCore import Qt, QPoint
 
 from libs.utils.utils import new_icon, label_validator, trimmed
 

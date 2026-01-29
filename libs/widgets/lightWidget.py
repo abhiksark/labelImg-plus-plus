@@ -1,10 +1,10 @@
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtGui import QColor, QFontMetrics
+    from PyQt5.QtCore import Qt, QSize
+    from PyQt5.QtWidgets import QSpinBox, QAbstractSpinBox
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import QColor, QFontMetrics, QSpinBox, QAbstractSpinBox
+    from PyQt4.QtCore import Qt, QSize
 
 
 class LightWidget(QSpinBox):

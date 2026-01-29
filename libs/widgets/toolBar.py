@@ -1,13 +1,18 @@
-# libs/toolBar.py
+# libs/widgets/toolBar.py
 """Custom toolbar and button classes for labelImg++."""
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtCore import Qt, pyqtSignal, QSize
+    from PyQt5.QtWidgets import (
+        QToolBar, QToolButton, QWidgetAction, QWidget,
+        QMenu, QSizePolicy, QApplication
+    )
 except ImportError:
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import (
+        QToolBar, QToolButton, QWidgetAction, QWidget,
+        QMenu, QSizePolicy, QApplication
+    )
+    from PyQt4.QtCore import Qt, pyqtSignal, QSize
 
 
 # Base icon size for toolbar buttons (Feather icons are 24x24)
