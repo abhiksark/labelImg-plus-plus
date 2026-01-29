@@ -815,7 +815,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.full_gallery.set_image_list(self.m_img_list)
                 self.full_gallery.image_selected.connect(self.gallery_image_selected)
                 self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
-                self._refresh_full_gallery_statuses()
+                # Defer status refresh to allow gallery to display first
+                QTimer.singleShot(0, self._refresh_full_gallery_statuses)
 
                 # Select current image in full gallery
                 if self.file_path:
@@ -847,12 +848,43 @@ class MainWindow(QMainWindow, WindowMixin):
         self.gallery_image_activated(image_path)
 
     def _refresh_full_gallery_statuses(self):
-        """Update statuses for full-screen gallery."""
-        if hasattr(self, 'full_gallery') and self.full_gallery:
-            statuses = {}
-            for img_path in self.m_img_list:
-                statuses[img_path] = self._get_annotation_status(img_path)
-            self.full_gallery.update_all_statuses(statuses)
+        """Update statuses for full-screen gallery with batch processing."""
+        if not (hasattr(self, 'full_gallery') and self.full_gallery):
+            return
+
+        # Use cached statuses for instant update, collect uncached for batch processing
+        cached_statuses = {}
+        uncached = []
+        for img_path in self.m_img_list:
+            if img_path in self._annotation_status_cache:
+                cached_statuses[img_path] = self._annotation_status_cache[img_path]
+            else:
+                uncached.append(img_path)
+
+        # Apply cached statuses immediately
+        if cached_statuses:
+            self.full_gallery.update_all_statuses(cached_statuses)
+
+        # Process uncached images in batches to keep UI responsive
+        if uncached:
+            self._process_full_gallery_status_batch(uncached, 0)
+
+    def _process_full_gallery_status_batch(self, images, start_idx, batch_size=50):
+        """Process status updates in batches to avoid UI freeze."""
+        if not (hasattr(self, 'full_gallery') and self.full_gallery):
+            return  # Gallery was closed
+
+        statuses = {}
+        end_idx = min(start_idx + batch_size, len(images))
+        for img_path in images[start_idx:end_idx]:
+            statuses[img_path] = self._get_annotation_status(img_path)
+
+        self.full_gallery.update_all_statuses(statuses)
+
+        # Schedule next batch if more images remain
+        if end_idx < len(images):
+            QTimer.singleShot(0, lambda: self._process_full_gallery_status_batch(
+                images, end_idx, batch_size))
 
     def populate_mode_actions(self):
         if self.beginner():

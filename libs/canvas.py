@@ -216,9 +216,11 @@ class Canvas(QWidget):
         # Update shape/vertex fill and tooltip value accordingly.
         self.setToolTip("Image")
         priority_list = self.shapes + ([self.selected_shape] if self.selected_shape else [])
-        for shape in reversed([s for s in priority_list if self.isVisible(s)]):
-            # Look for a nearby vertex to highlight. If that fails,
-            # check if we happen to be inside a shape.
+        visible_shapes = [s for s in priority_list if self.isVisible(s)]
+
+        # First pass: check for nearby vertices (these take priority)
+        vertex_found = False
+        for shape in reversed(visible_shapes):
             index = shape.nearest_vertex(pos, self.epsilon)
             if index is not None:
                 if self.selected_vertex():
@@ -229,8 +231,18 @@ class Canvas(QWidget):
                 self.setToolTip("Click & drag to move point")
                 self.setStatusTip(self.toolTip())
                 self.update()
+                vertex_found = True
                 break
-            elif shape.contains_point(pos):
+
+        if not vertex_found:
+            # Second pass: find smallest shape containing point (for nested box support)
+            candidates = [s for s in visible_shapes if s.contains_point(pos)]
+            if candidates:
+                def shape_area(s):
+                    rect = s.bounding_rect()
+                    return rect.width() * rect.height()
+                shape = min(candidates, key=shape_area)
+
                 if self.selected_vertex():
                     self.h_shape.highlight_clear()
                 self.h_vertex, self.h_shape = None, shape
@@ -247,13 +259,12 @@ class Canvas(QWidget):
                 current_height = abs(point1.y() - point3.y())
                 self.parent().window().label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
-                break
-        else:  # Nothing found, clear highlights, reset state.
-            if self.h_shape:
-                self.h_shape.highlight_clear()
-                self.update()
-            self.h_vertex, self.h_shape = None, None
-            self.override_cursor(CURSOR_DEFAULT)
+            else:  # Nothing found, clear highlights, reset state.
+                if self.h_shape:
+                    self.h_shape.highlight_clear()
+                    self.update()
+                self.h_vertex, self.h_shape = None, None
+                self.override_cursor(CURSOR_DEFAULT)
 
     def mousePressEvent(self, ev):
         pos = self.transform_pos(ev.pos())
@@ -361,18 +372,29 @@ class Canvas(QWidget):
         self.update()
 
     def select_shape_point(self, point):
-        """Select the first shape created which contains this point."""
+        """Select the smallest shape which contains this point."""
         self.de_select_shape()
         if self.selected_vertex():  # A vertex is marked for selection.
             index, shape = self.h_vertex, self.h_shape
             shape.highlight_vertex(index, shape.MOVE_VERTEX)
             self.select_shape(shape)
             return self.h_vertex
-        for shape in reversed(self.shapes):
+
+        # Find all shapes containing the point
+        candidates = []
+        for shape in self.shapes:
             if self.isVisible(shape) and shape.contains_point(point):
-                self.select_shape(shape)
-                self.calculate_offsets(shape, point)
-                return self.selected_shape
+                candidates.append(shape)
+
+        if candidates:
+            # Select the smallest shape (by bounding rect area) for nested box support
+            def shape_area(s):
+                rect = s.bounding_rect()
+                return rect.width() * rect.height()
+            smallest = min(candidates, key=shape_area)
+            self.select_shape(smallest)
+            self.calculate_offsets(smallest, point)
+            return self.selected_shape
         return None
 
     def calculate_offsets(self, shape, point):

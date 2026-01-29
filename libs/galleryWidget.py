@@ -5,7 +5,7 @@ try:
     from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush, QPolygonF
     from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer, QPointF
     from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-                                  QListView, QSlider, QLabel)
+                                  QListView, QSlider, QLabel, QPushButton, QFrame)
 except ImportError:
     from PyQt4.QtGui import (QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush,
                               QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
@@ -244,6 +244,9 @@ class ThumbnailLoaderWorker(QRunnable):
         painter = QPainter(image)
         painter.setRenderHint(QPainter.Antialiasing)
 
+        # Corner marker length (proportional to image size)
+        corner_len = max(4, min(img_w, img_h) // 8)
+
         for label, bbox in annotations:
             x_center, y_center, w, h = bbox
 
@@ -259,8 +262,27 @@ class ThumbnailLoaderWorker(QRunnable):
             pen.setWidth(2)
             painter.setPen(pen)
 
-            # Draw rectangle
-            painter.drawRect(x1, y1, x2 - x1, y2 - y1)
+            # Draw corner markers instead of full rectangle (less cluttered)
+            box_w = x2 - x1
+            box_h = y2 - y1
+            c = min(corner_len, box_w // 3, box_h // 3)  # Adjust corner size for small boxes
+
+            if c >= 2:
+                # Top-left corner
+                painter.drawLine(x1, y1, x1 + c, y1)
+                painter.drawLine(x1, y1, x1, y1 + c)
+                # Top-right corner
+                painter.drawLine(x2, y1, x2 - c, y1)
+                painter.drawLine(x2, y1, x2, y1 + c)
+                # Bottom-left corner
+                painter.drawLine(x1, y2, x1 + c, y2)
+                painter.drawLine(x1, y2, x1, y2 - c)
+                # Bottom-right corner
+                painter.drawLine(x2, y2, x2 - c, y2)
+                painter.drawLine(x2, y2, x2, y2 - c)
+            else:
+                # Box too small, draw simple rectangle
+                painter.drawRect(x1, y1, box_w, box_h)
 
         painter.end()
         return image
@@ -322,26 +344,85 @@ class GalleryWidget(QWidget):
 
         # Add size slider if enabled
         if self._show_size_slider:
-            slider_layout = QHBoxLayout()
-            slider_layout.setContentsMargins(10, 5, 10, 5)
+            # Container frame for better visual grouping
+            slider_frame = QFrame()
+            slider_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #f5f5f5;
+                    border-bottom: 1px solid #ddd;
+                }
+            """)
+            slider_layout = QHBoxLayout(slider_frame)
+            slider_layout.setContentsMargins(10, 8, 10, 8)
+            slider_layout.setSpacing(8)
 
-            self.size_label = QLabel("Size:")
-            slider_layout.addWidget(self.size_label)
+            # Preset size buttons
+            self.size_presets = {
+                'S': 60,
+                'M': 100,
+                'L': 150,
+                'XL': 220
+            }
+            for label, size in self.size_presets.items():
+                btn = QPushButton(label)
+                btn.setFixedSize(32, 26)
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #fff;
+                        border: 1px solid #ccc;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: #e8e8e8;
+                        border-color: #999;
+                    }
+                    QPushButton:pressed {
+                        background-color: #ddd;
+                    }
+                """)
+                btn.clicked.connect(lambda checked, s=size: self._set_preset_size(s))
+                slider_layout.addWidget(btn)
 
+            slider_layout.addSpacing(10)
+
+            # Size slider
             self.size_slider = QSlider(Qt.Horizontal)
             self.size_slider.setMinimum(self.MIN_ICON_SIZE)
             self.size_slider.setMaximum(self.MAX_ICON_SIZE)
             self.size_slider.setValue(self._icon_size)
-            self.size_slider.setTickPosition(QSlider.TicksBelow)
-            self.size_slider.setTickInterval(20)
+            self.size_slider.setStyleSheet("""
+                QSlider::groove:horizontal {
+                    height: 6px;
+                    background: #ddd;
+                    border-radius: 3px;
+                }
+                QSlider::handle:horizontal {
+                    background: #4285f4;
+                    width: 16px;
+                    height: 16px;
+                    margin: -5px 0;
+                    border-radius: 8px;
+                }
+                QSlider::handle:horizontal:hover {
+                    background: #3367d6;
+                }
+                QSlider::sub-page:horizontal {
+                    background: #4285f4;
+                    border-radius: 3px;
+                }
+            """)
             self.size_slider.valueChanged.connect(self._on_size_changed)
-            slider_layout.addWidget(self.size_slider)
+            slider_layout.addWidget(self.size_slider, 1)
 
+            # Size value display
             self.size_value_label = QLabel(f"{self._icon_size}px")
-            self.size_value_label.setMinimumWidth(45)
+            self.size_value_label.setMinimumWidth(50)
+            self.size_value_label.setStyleSheet("font-weight: bold; color: #333;")
             slider_layout.addWidget(self.size_value_label)
 
-            layout.addLayout(slider_layout)
+            layout.addWidget(slider_frame)
 
         layout.addWidget(self.list_widget)
 
@@ -361,6 +442,13 @@ class GalleryWidget(QWidget):
         self.thumbnail_cache.clear()
         self._loading_paths.clear()
         self._reload_all_thumbnails()
+
+    def _set_preset_size(self, size):
+        """Set thumbnail size from preset button."""
+        if hasattr(self, 'size_slider'):
+            self.size_slider.setValue(size)
+        else:
+            self._on_size_changed(size)
 
     def _reload_all_thumbnails(self):
         """Reload all thumbnails at current size."""
