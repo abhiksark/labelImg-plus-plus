@@ -23,7 +23,7 @@ labelImg++
 
 **labelImg++** is a powerful graphical image annotation tool for creating bounding box labels, designed for machine learning and computer vision projects. Forked from the original LabelImg with significant enhancements.
 
-    **Note:** Current version is ``2.0.0b`` (beta). Version ``2.0.0`` will be the first stable release.
+    **Version 2.0.0** - First stable release! Install with ``pip install labelImgPlusPlus``
 
 .. image:: resources/demo/labelimg_screenshot.png
      :alt: labelImg++ Screenshot
@@ -51,8 +51,9 @@ New in labelImg++ v2.0
     Visual thumbnail gallery showing all images with bounding box overlays directly on thumbnails.
 
     - Colored borders indicate status: Gray (no labels), Blue (has labels), Green (verified)
-    - Bounding boxes visible on thumbnails for quick review
-    - Adjustable thumbnail size (40px - 300px)
+    - Bounding boxes visible on thumbnails with corner markers (less clutter for nested boxes)
+    - Quick size presets (S/M/L/XL) plus slider for fine control
+    - Smart selection: click on nested boxes selects the inner box
     - Press **Ctrl+G** to toggle gallery mode
 
 **Modern UI with Feather Icons**
@@ -224,8 +225,8 @@ Or use **Menu > File > Reset All**
 Roadmap
 -------
 
-**v2.0.0b (Beta)** - *Current*
-    Bug fixes and stability improvements
+**v2.0.0 (Stable)** - *Current*
+    First stable release with bug fixes and UX improvements
 
     - Silent error handling fixed
     - YOLO format crash on missing classes.txt fixed
@@ -234,6 +235,10 @@ Roadmap
     - Auto-save menu items clarified
     - Gallery status color legend added
     - Progress indicator for large directories
+    - Gallery size presets (S/M/L/XL buttons)
+    - Corner markers on thumbnails for cleaner nested box display
+    - Improved nested bounding box selection (smallest box selected)
+    - Gallery freeze fix for large directories
 
 **v2.1.0** - *Planned*
     - Annotation review workflow
