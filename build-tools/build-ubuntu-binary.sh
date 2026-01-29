@@ -1,7 +1,7 @@
 #!/bin/bash
 ### Ubuntu use pyinstaller
-THIS_SCRIPT_PATH=`readlink -f $0`
-THIS_SCRIPT_DIR=`dirname ${THIS_SCRIPT_PATH}`
+THIS_SCRIPT_PATH=$(readlink -f "$0")
+THIS_SCRIPT_DIR=$(dirname "${THIS_SCRIPT_PATH}")
 cd ${THIS_SCRIPT_DIR}
 
 rm -rf build
