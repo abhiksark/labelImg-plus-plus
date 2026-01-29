@@ -19,6 +19,9 @@ labelImg++
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
         :target: https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE
 
+.. image:: https://sonarcloud.io/api/project_badges/measure?project=abhiksark_labelImg-plus-plus&metric=alert_status
+        :target: https://sonarcloud.io/dashboard?id=abhiksark_labelImg-plus-plus
+
 ----
 
 **labelImg++** is a powerful graphical image annotation tool for creating bounding box labels, designed for machine learning and computer vision projects. Forked from the original LabelImg with significant enhancements.
