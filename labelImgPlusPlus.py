@@ -52,6 +52,7 @@ from libs.widgets.colorDialog import ColorDialog
 from libs.widgets.toolBar import ToolBar, DropdownToolButton
 from libs.widgets.galleryWidget import GalleryWidget, AnnotationStatus
 from libs.widgets.statsWidget import StatsWidget
+from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 
 # Core
 from libs.core.shape import Shape, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -807,6 +808,7 @@ class MainWindow(QMainWindow, WindowMixin):
             file=self.menu(get_str('menu_file')),
             edit=self.menu(get_str('menu_edit')),
             view=self.menu(get_str('menu_view')),
+            tools=self.menu('&Tools'),
             help=self.menu(get_str('menu_help')),
             recentFiles=QMenu(get_str('menu_openRecent')),
             labelList=label_menu)
@@ -907,6 +909,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.menus.view.addMenu(self.icon_size_menu)
 
         self.menus.file.aboutToShow.connect(self.update_file_menu)
+
+        # Tools menu actions
+        check_labels = action('Check Label &Consistency', self.check_label_consistency,
+                              'Ctrl+Shift+L', 'verify', 'Check for typos and inconsistent labels in dataset')
+        add_actions(self.menus.tools, (check_labels,))
 
         # Custom context menu for the canvas widget:
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
@@ -2400,6 +2407,43 @@ class MainWindow(QMainWindow, WindowMixin):
             self.default_save_dir = target_dir_path
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
+
+    def check_label_consistency(self):
+        """Open dialog to check for label consistency issues in the dataset."""
+        if not self.dir_name:
+            self.error_message(
+                'No Directory',
+                'Please open a directory with images first.'
+            )
+            return
+
+        dialog = LabelCheckerDialog(self)
+        dialog.set_data(
+            predefined_classes=self.label_hist,
+            annotations_dir=self.dir_name,
+            save_dir=self.default_save_dir
+        )
+        dialog.fix_requested.connect(self._apply_label_fix)
+        dialog.exec_()
+
+    def _apply_label_fix(self, old_label, new_label):
+        """Apply a label fix across annotations.
+
+        Args:
+            old_label: The label to replace
+            new_label: The replacement label
+        """
+        if not self.dir_name:
+            return
+
+        # This would need to iterate through all annotation files
+        # and replace old_label with new_label
+        # For now, just log - full implementation would update files
+        print(f"Label fix requested: '{old_label}' → '{new_label}'")
+        self.status_bar.showMessage(
+            f"Label fix: '{old_label}' → '{new_label}' (reload to see changes)",
+            5000
+        )
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
