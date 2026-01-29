@@ -10,9 +10,17 @@ import webbrowser as wb
 from functools import partial
 
 try:
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtWidgets import *
+    from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
+    from PyQt5.QtCore import (
+        Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
+        QVariant, QObject, QRunnable, QThreadPool, pyqtSignal
+    )
+    from PyQt5.QtWidgets import (
+        QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
+        QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+        QMainWindow, QMenu, QMessageBox, QProgressDialog, QScrollArea,
+        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    )
 except ImportError:
     # needed for py3+qt4
     # Ref:
@@ -21,38 +29,65 @@ except ImportError:
     if sys.version_info.major >= 3:
         import sip
         sip.setapi('QVariant', 2)
-    from PyQt4.QtGui import *
-    from PyQt4.QtCore import *
+    from PyQt4.QtGui import (
+        QColor, QCursor, QImage, QImageReader, QPixmap,
+        QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
+        QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+        QMainWindow, QMenu, QMessageBox, QProgressDialog, QScrollArea,
+        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    )
+    from PyQt4.QtCore import (
+        Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
+        QVariant, QObject, QRunnable, QThreadPool, pyqtSignal
+    )
 
-from libs.combobox import ComboBox
-from libs.default_label_combobox import DefaultLabelComboBox
+# Widgets
+from libs.widgets.combobox import ComboBox
+from libs.widgets.default_label_combobox import DefaultLabelComboBox
+from libs.widgets.canvas import Canvas
+from libs.widgets.zoomWidget import ZoomWidget
+from libs.widgets.lightWidget import LightWidget
+from libs.widgets.labelDialog import LabelDialog
+from libs.widgets.colorDialog import ColorDialog
+from libs.widgets.toolBar import ToolBar, DropdownToolButton
+from libs.widgets.galleryWidget import GalleryWidget, AnnotationStatus
+from libs.widgets.statsWidget import StatsWidget
+
+# Core
+from libs.core.shape import Shape, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
+from libs.core.settings import Settings
+from libs.core.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
+
+# Formats
+from libs.formats.labelFile import LabelFile, LabelFileError, LabelFileFormat
+from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
+from libs.formats.yolo_io import YoloReader, TXT_EXT
+from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
+
+# Utils
+from libs.utils.constants import (
+    SETTING_ADVANCE_MODE, SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
+    SETTING_AUTO_SAVE_INTERVAL, SETTING_DRAW_SQUARE, SETTING_FILENAME,
+    SETTING_FILL_COLOR, SETTING_GALLERY_MODE, SETTING_ICON_SIZE,
+    SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR, SETTING_LINE_COLOR,
+    SETTING_PAINT_LABEL, SETTING_RECENT_FILES, SETTING_SAVE_DIR,
+    SETTING_SINGLE_CLASS, SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE,
+    SETTING_WIN_SIZE, SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO,
+    FORMAT_CREATEML
+)
+from libs.utils.utils import (
+    new_icon, new_action, add_actions, format_shortcut, Struct,
+    generate_color_by_text, have_qstring, natural_sort
+)
+from libs.utils.stringBundle import StringBundle
+from libs.utils.styles import TOOLBAR_STYLE, get_combined_style
+from libs.utils.ustr import ustr
+from libs.utils.hashableQListWidgetItem import HashableQListWidgetItem
+
+# Resources
 from libs.resources import *
-from libs.constants import *
-from libs.utils import *
-from libs.settings import Settings
-from libs.shape import Shape, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
-from libs.stringBundle import StringBundle
-from libs.canvas import Canvas
-from libs.zoomWidget import ZoomWidget
-from libs.lightWidget import LightWidget
-from libs.labelDialog import LabelDialog
-from libs.colorDialog import ColorDialog
-from libs.labelFile import LabelFile, LabelFileError, LabelFileFormat
-from libs.toolBar import ToolBar, DropdownToolButton
-from libs.styles import TOOLBAR_STYLE, get_combined_style
-from libs.pascal_voc_io import PascalVocReader
-from libs.pascal_voc_io import XML_EXT
-from libs.yolo_io import YoloReader
-from libs.yolo_io import TXT_EXT
-from libs.create_ml_io import CreateMLReader
-from libs.create_ml_io import JSON_EXT
-from libs.ustr import ustr
-from libs.hashableQListWidgetItem import HashableQListWidgetItem
-from libs.galleryWidget import GalleryWidget, AnnotationStatus
-from libs.statsWidget import StatsWidget
-from libs.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
 
-__appname__ = 'labelImg'
+__appname__ = 'labelImgPlusPlus'
 
 
 class WindowMixin(object):
@@ -72,6 +107,286 @@ class WindowMixin(object):
             add_actions(toolbar, actions)
         self.addToolBar(Qt.LeftToolBarArea, toolbar)
         return toolbar
+
+
+class StatisticsWorkerSignals(QObject):
+    """Thread-safe signals for statistics worker."""
+    progress = pyqtSignal(int, int, int, dict)  # total, annotated, verified, label_counts
+    finished = pyqtSignal()
+    error = pyqtSignal(str)  # Error reporting
+
+
+class StatisticsWorker(QRunnable):
+    """Thread-safe worker for background statistics computation."""
+
+    def __init__(self, image_list, save_dir=None):
+        super().__init__()
+        self.setAutoDelete(True)  # Explicit cleanup by Qt
+
+        # Copy all data to avoid shared state issues
+        self.image_list = list(image_list)
+        self.save_dir = save_dir  # Snapshot of value
+
+        self.signals = StatisticsWorkerSignals()
+        self._cancel_event = __import__('threading').Event()  # Thread-safe cancellation
+
+    def cancel(self):
+        """Thread-safe cancellation."""
+        self._cancel_event.set()
+
+    def is_cancelled(self):
+        """Check cancellation state."""
+        return self._cancel_event.is_set()
+
+    def run(self):
+        """Compute statistics with proper error handling."""
+        error_occurred = False
+        try:
+            total = len(self.image_list)
+            annotated = 0
+            verified = 0
+            label_counts = {}
+
+            for i, img_path in enumerate(self.image_list):
+                if self.is_cancelled():
+                    return  # Clean exit on cancel
+
+                try:
+                    # Use stateless computation (no cache access)
+                    status = self._compute_status(img_path)
+                    if status != AnnotationStatus.NO_LABELS:
+                        annotated += 1
+                    if status == AnnotationStatus.VERIFIED:
+                        verified += 1
+
+                    labels = self._compute_labels(img_path)
+                    for label in labels:
+                        label_counts[label] = label_counts.get(label, 0) + 1
+                except Exception:
+                    # Log but continue processing other images
+                    pass
+
+                # Emit progress every 50 images
+                if (i + 1) % 50 == 0 or i == total - 1:
+                    self.signals.progress.emit(total, annotated, verified, label_counts.copy())
+
+        except Exception as e:
+            error_occurred = True
+            self.signals.error.emit(str(e))
+        finally:
+            if not error_occurred and not self.is_cancelled():
+                self.signals.finished.emit()
+
+    def _compute_status(self, image_path):
+        """Thread-safe annotation status check (no shared state)."""
+        basename = os.path.splitext(os.path.basename(image_path))[0]
+        ann_dir = self.save_dir if self.save_dir else os.path.dirname(image_path)
+
+        xml_path = os.path.join(ann_dir, basename + XML_EXT)
+        txt_path = os.path.join(ann_dir, basename + TXT_EXT)
+
+        # Check labels/ sibling folder (standard YOLO structure)
+        if not os.path.isfile(txt_path):
+            img_dir = os.path.dirname(image_path)
+            parent_dir = os.path.dirname(img_dir)
+            labels_dir = os.path.join(parent_dir, 'labels')
+            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
+            if os.path.isfile(alt_txt_path):
+                txt_path = alt_txt_path
+
+        json_path = os.path.join(ann_dir, 'annotations.json')
+
+        has_labels = False
+        verified = False
+
+        if os.path.isfile(xml_path):
+            has_labels = True
+            try:
+                reader = PascalVocReader(xml_path)
+                verified = reader.verified
+            except Exception:
+                pass
+        elif os.path.isfile(txt_path):
+            has_labels = os.path.getsize(txt_path) > 0
+        elif os.path.isfile(json_path):
+            try:
+                import json
+                with open(json_path, 'r') as f:
+                    data = json.load(f)
+                    for item in data:
+                        if item.get('image') == os.path.basename(image_path):
+                            has_labels = len(item.get('annotations', [])) > 0
+                            verified = item.get('verified', False)
+                            break
+            except Exception:
+                pass
+
+        if verified:
+            return AnnotationStatus.VERIFIED
+        elif has_labels:
+            return AnnotationStatus.HAS_LABELS
+        return AnnotationStatus.NO_LABELS
+
+    def _compute_labels(self, img_path):
+        """Thread-safe label extraction (no shared state)."""
+        labels = []
+        base_path = os.path.splitext(img_path)[0]
+        basename = os.path.basename(base_path)
+        ann_dir = self.save_dir if self.save_dir else os.path.dirname(img_path)
+
+        xml_path = os.path.join(ann_dir, basename + XML_EXT)
+        if os.path.exists(xml_path):
+            try:
+                reader = PascalVocReader(xml_path)
+                shapes = reader.get_shapes()
+                labels = [shape[0] for shape in shapes]
+            except Exception:
+                pass
+            return labels
+
+        txt_path = base_path + TXT_EXT
+        if not os.path.exists(txt_path):
+            img_dir = os.path.dirname(img_path)
+            parent_dir = os.path.dirname(img_dir)
+            labels_dir = os.path.join(parent_dir, 'labels')
+            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
+            if os.path.exists(alt_txt_path):
+                txt_path = alt_txt_path
+
+        if os.path.exists(txt_path):
+            try:
+                txt_dir = os.path.dirname(txt_path)
+                classes_path = os.path.join(txt_dir, 'classes.txt')
+                if not os.path.exists(classes_path):
+                    parent_dir = os.path.dirname(txt_dir)
+                    classes_path = os.path.join(parent_dir, 'classes.txt')
+                if os.path.exists(classes_path):
+                    from libs.formats.yolo_io import YoloReader
+
+                    class MockImage:
+                        def __init__(self, w, h):
+                            self._width, self._height = w, h
+                        def width(self):
+                            return self._width
+                        def height(self):
+                            return self._height
+
+                    img_reader = QImageReader(img_path)
+                    size = img_reader.size()
+                    if size.isValid():
+                        mock_img = MockImage(size.width(), size.height())
+                        reader = YoloReader(txt_path, mock_img, classes_path)
+                        shapes = reader.get_shapes()
+                        labels = [shape[0] for shape in shapes]
+            except Exception:
+                pass
+
+        return labels
+
+
+class StatusRefreshWorkerSignals(QObject):
+    """Signals for status refresh worker."""
+    batch_ready = pyqtSignal(dict)  # {path: AnnotationStatus} batch
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+
+class StatusRefreshWorker(QRunnable):
+    """Async worker for computing annotation statuses in background."""
+
+    def __init__(self, image_list, save_dir=None, batch_size=100):
+        super().__init__()
+        self.setAutoDelete(True)
+        self.image_list = list(image_list)
+        self.save_dir = save_dir
+        self.batch_size = batch_size
+        self.signals = StatusRefreshWorkerSignals()
+        self._cancel_event = __import__('threading').Event()
+
+    def cancel(self):
+        """Thread-safe cancellation."""
+        self._cancel_event.set()
+
+    def is_cancelled(self):
+        """Check cancellation state."""
+        return self._cancel_event.is_set()
+
+    def run(self):
+        """Compute statuses with proper error handling."""
+        error_occurred = False
+        try:
+            batch = {}
+            for img_path in self.image_list:
+                if self.is_cancelled():
+                    return
+
+                status = self._compute_status(img_path)
+                batch[img_path] = status
+
+                if len(batch) >= self.batch_size:
+                    self.signals.batch_ready.emit(batch.copy())
+                    batch.clear()
+
+            # Emit remaining batch
+            if batch and not self.is_cancelled():
+                self.signals.batch_ready.emit(batch)
+
+        except Exception as e:
+            error_occurred = True
+            self.signals.error.emit(str(e))
+        finally:
+            if not error_occurred and not self.is_cancelled():
+                self.signals.finished.emit()
+
+    def _compute_status(self, image_path):
+        """Thread-safe annotation status check (no shared state)."""
+        basename = os.path.splitext(os.path.basename(image_path))[0]
+        ann_dir = self.save_dir if self.save_dir else os.path.dirname(image_path)
+
+        xml_path = os.path.join(ann_dir, basename + XML_EXT)
+        txt_path = os.path.join(ann_dir, basename + TXT_EXT)
+
+        # Check labels/ sibling folder (standard YOLO structure)
+        if not os.path.isfile(txt_path):
+            img_dir = os.path.dirname(image_path)
+            parent_dir = os.path.dirname(img_dir)
+            labels_dir = os.path.join(parent_dir, 'labels')
+            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
+            if os.path.isfile(alt_txt_path):
+                txt_path = alt_txt_path
+
+        json_path = os.path.join(ann_dir, 'annotations.json')
+
+        has_labels = False
+        verified = False
+
+        if os.path.isfile(xml_path):
+            has_labels = True
+            try:
+                reader = PascalVocReader(xml_path)
+                verified = reader.verified
+            except Exception:
+                pass
+        elif os.path.isfile(txt_path):
+            has_labels = os.path.getsize(txt_path) > 0
+        elif os.path.isfile(json_path):
+            try:
+                import json
+                with open(json_path, 'r') as f:
+                    data = json.load(f)
+                    for item in data:
+                        if item.get('image') == os.path.basename(image_path):
+                            has_labels = len(item.get('annotations', [])) > 0
+                            verified = item.get('verified', False)
+                            break
+            except Exception:
+                pass
+
+        if verified:
+            return AnnotationStatus.VERIFIED
+        elif has_labels:
+            return AnnotationStatus.HAS_LABELS
+        return AnnotationStatus.NO_LABELS
 
 
 class MainWindow(QMainWindow, WindowMixin):
@@ -121,6 +436,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._beginner = True
         self.gallery_mode_enabled = False
         self._gallery_batch_id = 0  # For cancelling pending batch processing
+        self._status_worker_gen = 0  # Generation counter for status worker
+        self._stats_worker_gen = 0  # Generation counter for stats worker
+        self._dock_status_worker_gen = 0  # Generation counter for dock status worker
         self._normal_central_widget = None
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
@@ -193,7 +511,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Gallery widget (new thumbnail view)
         self.gallery_widget = GalleryWidget()
-        self.gallery_widget.image_selected.connect(self.gallery_image_selected)
+        self.gallery_widget.image_selected.connect(
+            lambda path: self.gallery_image_selected(path, source='dock'))
         self.gallery_widget.image_activated.connect(self.gallery_image_activated)
 
         # Tab widget to hold both views
@@ -211,12 +530,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_dock.setObjectName(get_str('files'))
         self.file_dock.setWidget(file_list_container)
 
-        # Statistics widget (Issue #19)
-        self.stats_widget = StatsWidget()
-        self.stats_widget.refresh_btn.clicked.connect(self._refresh_all_statistics)
-        self.stats_dock = QDockWidget(get_str('statistics'), self)
-        self.stats_dock.setObjectName('statistics')
-        self.stats_dock.setWidget(self.stats_widget)
+        # Statistics widget moved to gallery mode (Issue #19)
 
         self.zoom_widget = ZoomWidget()
         self.light_widget = LightWidget(get_str('lightWidgetTitle'))
@@ -249,7 +563,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setCentralWidget(scroll)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.stats_dock)
 
         # Configure dock features - all docks are movable for resizing
         # DockWidgetMovable enables drag-to-rearrange and proper splitter resizing
@@ -257,15 +570,12 @@ class MainWindow(QMainWindow, WindowMixin):
                              QDockWidget.DockWidgetFloatable |
                              QDockWidget.DockWidgetClosable)
         self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        self.stats_dock.setFeatures(dock_features_all)
 
         # Set minimum sizes for better resize UX
         self.dock.setMinimumHeight(100)
         self.file_dock.setMinimumHeight(100)
-        self.stats_dock.setMinimumHeight(80)
         self.dock.setMinimumWidth(200)
         self.file_dock.setMinimumWidth(200)
-        self.stats_dock.setMinimumWidth(200)
 
         # Features toggled by advanced mode (closable/floatable for labels dock)
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
@@ -451,10 +761,7 @@ class MainWindow(QMainWindow, WindowMixin):
         labels.setText(get_str('showHide'))
         labels.setShortcut('Ctrl+Shift+L')
 
-        # Statistics panel toggle (Issue #19)
-        stats_toggle = self.stats_dock.toggleViewAction()
-        stats_toggle.setText(get_str('statistics'))
-        stats_toggle.setShortcut('Ctrl+Shift+T')
+        # Statistics panel moved to gallery mode (Issue #19)
 
         # Label list context menu.
         label_menu = QMenu()
@@ -591,7 +898,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_save_enabled,
             self.single_class_mode,
             self.display_label_option,
-            labels, stats_toggle, advanced_mode, gallery_mode, None,
+            labels, advanced_mode, gallery_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
@@ -817,62 +1124,71 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_gallery_mode(self, value=True):
         """Toggle between normal view and full-screen gallery mode."""
-        # Guard against rapid toggling
         if hasattr(self, '_toggling_gallery') and self._toggling_gallery:
             return
         self._toggling_gallery = True
-        # Cancel any pending batch processing from previous gallery sessions
         self._gallery_batch_id += 1
         try:
             self.gallery_mode_enabled = value
+            self._cleanup_existing_gallery()
 
             if value:
-                # Cleanup any existing gallery first
-                if hasattr(self, 'full_gallery') and self.full_gallery:
-                    try:
-                        self.full_gallery.image_selected.disconnect()
-                        self.full_gallery.image_activated.disconnect()
-                    except TypeError:
-                        pass  # Already disconnected
-                    self.full_gallery = None
-                if hasattr(self, 'gallery_window') and self.gallery_window:
-                    self.gallery_window.close()
-                    self.gallery_window = None
-
-                # Create full-screen gallery as a regular window (not dialog)
-                self.gallery_window = QMainWindow(self)
-                self.gallery_window.setWindowTitle("Gallery Mode - Double-click to select, Press Escape or close to exit")
-
-                self.full_gallery = GalleryWidget(show_size_slider=True)
-                self.full_gallery.set_save_dir(self.default_save_dir)
-                self.full_gallery.set_image_list(self.m_img_list)
-                self.full_gallery.image_selected.connect(self.gallery_image_selected)
-                self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
-                # Defer status refresh to allow gallery to display first
+                self._create_gallery_window()
                 QTimer.singleShot(0, self._refresh_full_gallery_statuses)
-
-                # Select current image in full gallery
+                QTimer.singleShot(100, self._refresh_all_statistics)
                 if self.file_path:
                     self.full_gallery.select_image(self.file_path)
-
-                self.gallery_window.setCentralWidget(self.full_gallery)
-
-                # Show maximized
                 self.gallery_window.showMaximized()
-            else:
-                # Close gallery window
-                if hasattr(self, 'full_gallery') and self.full_gallery:
-                    try:
-                        self.full_gallery.image_selected.disconnect()
-                        self.full_gallery.image_activated.disconnect()
-                    except TypeError:
-                        pass
-                    self.full_gallery = None
-                if hasattr(self, 'gallery_window') and self.gallery_window:
-                    self.gallery_window.close()
-                    self.gallery_window = None
         finally:
             self._toggling_gallery = False
+
+    def _cleanup_existing_gallery(self):
+        """Clean up any existing gallery resources."""
+        # Cancel any running workers with proper cleanup
+        self._cleanup_stats_worker()
+        self._cleanup_status_worker()
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            try:
+                self.full_gallery.image_selected.disconnect()
+                self.full_gallery.image_activated.disconnect()
+            except TypeError:
+                pass
+            self.full_gallery = None
+        if hasattr(self, 'gallery_stats') and self.gallery_stats:
+            self.gallery_stats = None
+        if hasattr(self, 'gallery_window') and self.gallery_window:
+            self.gallery_window.close()
+            self.gallery_window = None
+
+    def _create_gallery_window(self):
+        """Create and configure the gallery window with widgets."""
+        self.gallery_window = QMainWindow(self)
+        self.gallery_window.setWindowTitle(
+            "Gallery Mode - Double-click to select, Press Escape or close to exit"
+        )
+
+        central_widget = QWidget()
+        layout = QHBoxLayout(central_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Gallery widget (main area)
+        self.full_gallery = GalleryWidget(show_size_slider=True)
+        self.full_gallery.set_save_dir(self.default_save_dir)
+        self.full_gallery.set_image_list(self.m_img_list)
+        self.full_gallery.image_selected.connect(
+            lambda path: self.gallery_image_selected(path, source='full'))
+        self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
+        layout.addWidget(self.full_gallery, stretch=4)
+
+        # Stats panel (side)
+        self.gallery_stats = StatsWidget()
+        self.gallery_stats.refresh_btn.clicked.connect(self._refresh_all_statistics)
+        self.gallery_stats.setMaximumWidth(300)
+        self.gallery_stats.setMinimumWidth(250)
+        layout.addWidget(self.gallery_stats, stretch=1)
+
+        self.gallery_window.setCentralWidget(central_widget)
 
     def _exit_gallery_and_load(self, image_path):
         """Exit gallery mode and load the selected image."""
@@ -881,46 +1197,71 @@ class MainWindow(QMainWindow, WindowMixin):
         self.gallery_image_activated(image_path)
 
     def _refresh_full_gallery_statuses(self):
-        """Update statuses for full-screen gallery with batch processing."""
+        """Update statuses for full-screen gallery using async worker."""
         if not (hasattr(self, 'full_gallery') and self.full_gallery):
             return
 
-        # Use cached statuses for instant update, collect uncached for batch processing
-        cached_statuses = {}
-        uncached = []
-        for img_path in self.m_img_list:
-            if img_path in self._annotation_status_cache:
-                cached_statuses[img_path] = self._annotation_status_cache[img_path]
-            else:
-                uncached.append(img_path)
-
-        # Apply cached statuses immediately
+        # Apply cached statuses immediately for instant feedback
+        cached_statuses = {p: self._annotation_status_cache[p]
+                          for p in self.m_img_list if p in self._annotation_status_cache}
         if cached_statuses:
             self.full_gallery.update_all_statuses(cached_statuses)
 
-        # Process uncached images in batches to keep UI responsive
-        if uncached:
-            self._process_full_gallery_status_batch(uncached, 0, 50, self._gallery_batch_id)
-
-    def _process_full_gallery_status_batch(self, images, start_idx, batch_size=50, batch_id=None):
-        """Process status updates in batches to avoid UI freeze."""
-        # Cancel if batch_id doesn't match current (gallery was toggled)
-        if batch_id != self._gallery_batch_id:
+        # Get uncached images for async processing
+        uncached = [p for p in self.m_img_list if p not in self._annotation_status_cache]
+        if not uncached:
             return
+
+        # Cancel existing worker and start new async worker with new generation
+        self._cleanup_status_worker()
+        self._status_worker_gen += 1
+        gen = self._status_worker_gen
+        self._status_worker = StatusRefreshWorker(uncached, self.default_save_dir)
+        self._status_worker.signals.batch_ready.connect(
+            lambda s, g=gen: self._on_status_batch_ready(s, g))
+        self._status_worker.signals.finished.connect(
+            lambda g=gen: self._on_status_refresh_finished(g))
+        self._status_worker.signals.error.connect(
+            lambda e, g=gen: self._on_status_refresh_error(e, g))
+        QThreadPool.globalInstance().start(self._status_worker)
+
+    def _cleanup_status_worker(self):
+        """Properly cleanup status worker and disconnect signals."""
+        if hasattr(self, '_status_worker') and self._status_worker:
+            self._status_worker.cancel()
+            try:
+                self._status_worker.signals.batch_ready.disconnect()
+                self._status_worker.signals.finished.disconnect()
+                self._status_worker.signals.error.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._status_worker = None
+
+    def _on_status_batch_ready(self, statuses, gen):
+        """Handle status batch from async worker."""
+        # Ignore stale signals from old workers
+        if gen != self._status_worker_gen:
+            return
+        # Early exit if gallery was closed
         if not (hasattr(self, 'full_gallery') and self.full_gallery):
-            return  # Gallery was closed
-
-        statuses = {}
-        end_idx = min(start_idx + batch_size, len(images))
-        for img_path in images[start_idx:end_idx]:
-            statuses[img_path] = self._get_annotation_status(img_path)
-
+            return
+        # Update cache with computed statuses
+        self._annotation_status_cache.update(statuses)
+        # Update gallery UI
         self.full_gallery.update_all_statuses(statuses)
 
-        # Schedule next batch if more images remain
-        if end_idx < len(images):
-            QTimer.singleShot(0, lambda: self._process_full_gallery_status_batch(
-                images, end_idx, batch_size, batch_id))
+    def _on_status_refresh_finished(self, gen):
+        """Handle status refresh completion."""
+        if gen != self._status_worker_gen:
+            return
+        self._status_worker = None
+
+    def _on_status_refresh_error(self, error_msg, gen):
+        """Handle status worker errors."""
+        if gen != self._status_worker_gen:
+            return
+        print(f"Status refresh worker error: {error_msg}")
+        self._status_worker = None
 
     def populate_mode_actions(self):
         if self.beginner():
@@ -1164,26 +1505,32 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.cur_img_idx = self._path_to_idx[item_path]
                 self.gallery_widget.select_image(item_path)
 
-    def gallery_image_selected(self, image_path):
-        """Handle single click on gallery thumbnail - sync all views."""
+    def gallery_image_selected(self, image_path, source=None):
+        """Handle single click on gallery thumbnail - sync all views.
+
+        Args:
+            image_path: Path to the selected image
+            source: 'dock' or 'full' to indicate which gallery triggered selection
+        """
         # Prevent recursive calls
         if hasattr(self, '_selecting_gallery') and self._selecting_gallery:
             return
         self._selecting_gallery = True
         try:
             if image_path in self._path_to_idx:
-                self.cur_img_idx = self._path_to_idx[image_path]
-                # Sync list selection - block signals to prevent triggering file_item_clicked
+                idx = self._path_to_idx[image_path]
+                self.cur_img_idx = idx
+                # Sync list selection using O(1) index lookup instead of O(n) loop
                 self.file_list_widget.blockSignals(True)
-                for i in range(self.file_list_widget.count()):
-                    item = self.file_list_widget.item(i)
-                    if ustr(item.text()) == image_path:
+                if idx < self.file_list_widget.count():
+                    item = self.file_list_widget.item(idx)
+                    if item:
                         self.file_list_widget.setCurrentItem(item)
-                        break
                 self.file_list_widget.blockSignals(False)
-                # Sync all gallery selections
-                self.gallery_widget.select_image(image_path)
-                if hasattr(self, 'full_gallery') and self.full_gallery:
+                # Sync gallery selections - skip the source gallery to avoid redundant updates
+                if source != 'dock':
+                    self.gallery_widget.select_image(image_path)
+                if source != 'full' and hasattr(self, 'full_gallery') and self.full_gallery:
                     self.full_gallery.select_image(image_path)
         finally:
             self._selecting_gallery = False
@@ -1216,6 +1563,14 @@ class MainWindow(QMainWindow, WindowMixin):
         # Check for annotation files
         xml_path = os.path.join(ann_dir, basename + XML_EXT)
         txt_path = os.path.join(ann_dir, basename + TXT_EXT)
+        # Also check labels/ sibling folder (standard YOLO structure)
+        if not os.path.isfile(txt_path):
+            img_dir = os.path.dirname(image_path)
+            parent_dir = os.path.dirname(img_dir)
+            labels_dir = os.path.join(parent_dir, 'labels')
+            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
+            if os.path.isfile(alt_txt_path):
+                txt_path = alt_txt_path
         json_path = os.path.join(ann_dir, 'annotations.json')
 
         has_labels = False
@@ -1265,11 +1620,68 @@ class MainWindow(QMainWindow, WindowMixin):
             self._annotation_status_cache.clear()
 
     def _refresh_gallery_statuses(self):
-        """Update all gallery thumbnail statuses."""
-        statuses = {}
-        for img_path in self.m_img_list:
-            statuses[img_path] = self._get_annotation_status(img_path)
+        """Update all gallery thumbnail statuses using async worker."""
+        if not hasattr(self, 'gallery_widget') or not self.gallery_widget:
+            return
+
+        # Apply cached statuses immediately
+        cached = {p: self._annotation_status_cache[p]
+                  for p in self.m_img_list if p in self._annotation_status_cache}
+        if cached:
+            self.gallery_widget.update_all_statuses(cached)
+
+        # Get uncached images for async processing
+        uncached = [p for p in self.m_img_list if p not in self._annotation_status_cache]
+        if not uncached:
+            return
+
+        # Cancel existing worker and start new async worker with new generation
+        self._cleanup_dock_status_worker()
+        self._dock_status_worker_gen += 1
+        gen = self._dock_status_worker_gen
+        self._dock_status_worker = StatusRefreshWorker(uncached, self.default_save_dir)
+        self._dock_status_worker.signals.batch_ready.connect(
+            lambda s, g=gen: self._on_dock_status_batch_ready(s, g))
+        self._dock_status_worker.signals.finished.connect(
+            lambda g=gen: self._on_dock_status_finished(g))
+        self._dock_status_worker.signals.error.connect(
+            lambda e, g=gen: self._on_dock_status_error(e, g))
+        QThreadPool.globalInstance().start(self._dock_status_worker)
+
+    def _cleanup_dock_status_worker(self):
+        """Cleanup dock gallery status worker."""
+        if hasattr(self, '_dock_status_worker') and self._dock_status_worker:
+            self._dock_status_worker.cancel()
+            try:
+                self._dock_status_worker.signals.batch_ready.disconnect()
+                self._dock_status_worker.signals.finished.disconnect()
+                self._dock_status_worker.signals.error.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._dock_status_worker = None
+
+    def _on_dock_status_batch_ready(self, statuses, gen):
+        """Handle status batch for dock gallery."""
+        # Ignore stale signals from old workers
+        if gen != self._dock_status_worker_gen:
+            return
+        if not hasattr(self, 'gallery_widget') or not self.gallery_widget:
+            return
+        self._annotation_status_cache.update(statuses)
         self.gallery_widget.update_all_statuses(statuses)
+
+    def _on_dock_status_finished(self, gen):
+        """Handle dock status refresh completion."""
+        if gen != self._dock_status_worker_gen:
+            return
+        self._dock_status_worker = None
+
+    def _on_dock_status_error(self, error_msg, gen):
+        """Handle dock status worker errors."""
+        if gen != self._dock_status_worker_gen:
+            return
+        print(f"Dock status worker error: {error_msg}")
+        self._dock_status_worker = None
 
     def _update_current_image_gallery_status(self):
         """Update gallery status for current image after save/verify."""
@@ -1507,13 +1919,20 @@ class MainWindow(QMainWindow, WindowMixin):
         self.default_label=self.label_hist[index]
 
     def label_selection_changed(self):
-        item = self.current_item()
-        if item and self.canvas.editing():
-            self._no_selection_slot = True
-            self.canvas.select_shape(self.items_to_shapes[item])
-            shape = self.items_to_shapes[item]
-            # Add Chris
-            self.diffc_button.setChecked(shape.difficult)
+        # Guard against re-entrant calls from multiple signals (itemActivated + itemSelectionChanged)
+        if hasattr(self, '_updating_label_selection') and self._updating_label_selection:
+            return
+        self._updating_label_selection = True
+        try:
+            item = self.current_item()
+            if item and self.canvas.editing():
+                self._no_selection_slot = True
+                self.canvas.select_shape(self.items_to_shapes[item])
+                shape = self.items_to_shapes[item]
+                # Add Chris
+                self.diffc_button.setChecked(shape.difficult)
+        finally:
+            self._updating_label_selection = False
 
     def label_item_changed(self, item):
         shape = self.items_to_shapes[item]
@@ -1556,7 +1975,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if text is not None:
             self.prev_label_text = text
             generate_color = generate_color_by_text(text)
-            shape = self.canvas.set_last_label(text, generate_color, generate_color)
+            shape = self.canvas.set_last_label(text, generate_color)
             self.add_label(shape)
 
             # Push command for undo support (shape already created, so just push)
@@ -2356,25 +2775,29 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_YOLO)
         # Use original image size for YOLO coordinate conversion (Issue #31)
         # YOLO stores normalized coords, so we need original dimensions
-        if hasattr(self, '_original_image_size') and self._original_image_size is not None:
-            # Create a mock image object with original dimensions
-            class MockImage:
-                def __init__(self, size, grayscale=False):
-                    self._size = size
-                    self._grayscale = grayscale
-                def width(self):
-                    return self._size.width()
-                def height(self):
-                    return self._size.height()
-                def isGrayscale(self):
-                    return self._grayscale
-            mock_img = MockImage(self._original_image_size, self.image.isGrayscale())
-            t_yolo_parse_reader = YoloReader(txt_path, mock_img)
-        else:
-            t_yolo_parse_reader = YoloReader(txt_path, self.image)
-        shapes = t_yolo_parse_reader.get_shapes()
-        self.load_labels(shapes)
-        self.canvas.verified = t_yolo_parse_reader.verified
+        try:
+            if hasattr(self, '_original_image_size') and self._original_image_size is not None:
+                # Create a mock image object with original dimensions
+                class MockImage:
+                    def __init__(self, size, grayscale=False):
+                        self._size = size
+                        self._grayscale = grayscale
+                    def width(self):
+                        return self._size.width()
+                    def height(self):
+                        return self._size.height()
+                    def isGrayscale(self):
+                        return self._grayscale
+                mock_img = MockImage(self._original_image_size, self.image.isGrayscale())
+                t_yolo_parse_reader = YoloReader(txt_path, mock_img)
+            else:
+                t_yolo_parse_reader = YoloReader(txt_path, self.image)
+            shapes = t_yolo_parse_reader.get_shapes()
+            self.load_labels(shapes)
+            self.canvas.verified = t_yolo_parse_reader.verified
+        except Exception as e:
+            self.error_message('Annotation Error',
+                f'Error loading YOLO annotations for {os.path.basename(txt_path)}: {e}')
 
     def load_create_ml_json_by_filename(self, json_path, file_path):
         if self.file_path is None:
@@ -2466,42 +2889,74 @@ class MainWindow(QMainWindow, WindowMixin):
             self._save_file(save_path)
             self.status("Auto-saved to %s" % os.path.basename(save_path))
 
-    # Statistics methods (Issue #19)
+    # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):
-        """Refresh all statistics in the stats widget."""
-        if not hasattr(self, 'stats_widget'):
+        """Start async refresh of all statistics in the gallery stats widget."""
+        if not hasattr(self, 'gallery_stats') or not self.gallery_stats:
             return
 
-        # Dataset stats
-        total = len(self.m_img_list)
-        annotated = 0
-        verified = 0
-        label_counts = {}
+        # Cancel and cleanup existing worker
+        self._cleanup_stats_worker()
+        self._stats_worker_gen += 1
+        gen = self._stats_worker_gen
 
-        for img_path in self.m_img_list:
-            status = self._get_annotation_status(img_path)
-            if status != AnnotationStatus.NO_LABELS:
-                annotated += 1
-            if status == AnnotationStatus.VERIFIED:
-                verified += 1
+        # Create worker with snapshot of current state (thread-safe)
+        self._stats_worker = StatisticsWorker(
+            self.m_img_list,
+            self.default_save_dir  # Pass snapshot, not reference
+        )
+        self._stats_worker.signals.progress.connect(
+            lambda t, a, v, l, g=gen: self._on_stats_progress(t, a, v, l, g))
+        self._stats_worker.signals.finished.connect(
+            lambda g=gen: self._on_stats_finished(g))
+        self._stats_worker.signals.error.connect(
+            lambda e, g=gen: self._on_stats_error(e, g))
 
-            # Count labels from annotation files
-            labels = self._get_labels_for_image(img_path)
-            for label in labels:
-                label_counts[label] = label_counts.get(label, 0) + 1
+        QThreadPool.globalInstance().start(self._stats_worker)
 
-        self.stats_widget.update_dataset_stats(total, annotated, verified)
-        self.stats_widget.update_label_distribution(label_counts)
+    def _cleanup_stats_worker(self):
+        """Properly cleanup worker and disconnect signals."""
+        if hasattr(self, '_stats_worker') and self._stats_worker:
+            self._stats_worker.cancel()
+            try:
+                self._stats_worker.signals.progress.disconnect()
+                self._stats_worker.signals.finished.disconnect()
+                self._stats_worker.signals.error.disconnect()
+            except (TypeError, RuntimeError):
+                pass  # Already disconnected
+            self._stats_worker = None
+
+    def _on_stats_progress(self, total, annotated, verified, label_counts, gen):
+        """Handle statistics progress update from worker."""
+        # Ignore stale signals from old workers
+        if gen != self._stats_worker_gen:
+            return
+        if hasattr(self, 'gallery_stats') and self.gallery_stats:
+            self.gallery_stats.update_dataset_stats(total, annotated, verified)
+            self.gallery_stats.update_label_distribution(label_counts)
+
+    def _on_stats_finished(self, gen):
+        """Handle statistics computation finished."""
+        if gen != self._stats_worker_gen:
+            return
         self._update_current_image_stats()
+        self._stats_worker = None
+
+    def _on_stats_error(self, error_msg, gen):
+        """Handle worker errors gracefully."""
+        if gen != self._stats_worker_gen:
+            return
+        print(f"Statistics worker error: {error_msg}")
+        self._stats_worker = None
 
     def _update_current_image_stats(self):
         """Update statistics for the current image."""
-        if not hasattr(self, 'stats_widget'):
+        if not hasattr(self, 'gallery_stats') or not self.gallery_stats:
             return
 
         annotations_count = len(self.canvas.shapes)
         labels = [shape.label for shape in self.canvas.shapes]
-        self.stats_widget.update_current_image_stats(annotations_count, labels)
+        self.gallery_stats.update_current_image_stats(annotations_count, labels)
 
     def _get_labels_for_image(self, img_path):
         """Get list of labels for an image from its annotation file."""
@@ -2521,12 +2976,45 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Try TXT (YOLO) - needs classes.txt
         txt_path = base_path + TXT_EXT
+        if not os.path.exists(txt_path):
+            # Check for labels/ sibling folder (standard YOLO structure)
+            img_dir = os.path.dirname(img_path)
+            parent_dir = os.path.dirname(img_dir)
+            labels_dir = os.path.join(parent_dir, 'labels')
+            txt_filename = os.path.basename(base_path) + TXT_EXT
+            alt_txt_path = os.path.join(labels_dir, txt_filename)
+            if os.path.exists(alt_txt_path):
+                txt_path = alt_txt_path
+
         if os.path.exists(txt_path):
             try:
-                from PyQt5.QtGui import QImage
-                img = QImage(img_path)
-                if not img.isNull():
-                    reader = YoloReader(txt_path, img)
+                # Find classes.txt - check same dir, then parent dirs
+                txt_dir = os.path.dirname(txt_path)
+                classes_path = os.path.join(txt_dir, 'classes.txt')
+                if not os.path.exists(classes_path):
+                    # Check parent directory (standard YOLO structure)
+                    parent_dir = os.path.dirname(txt_dir)
+                    classes_path = os.path.join(parent_dir, 'classes.txt')
+                if not os.path.exists(classes_path):
+                    return labels  # Can't read without classes.txt
+
+                # Use QImageReader to get dimensions without loading full image
+                img_reader = QImageReader(img_path)
+                size = img_reader.size()
+                if size.isValid():
+                    # Create minimal mock image with just dimensions for YoloReader
+                    class MockImage:
+                        def __init__(self, w, h):
+                            self._w, self._h = w, h
+                        def width(self):
+                            return self._w
+                        def height(self):
+                            return self._h
+                        def isGrayscale(self):
+                            return False
+
+                    mock_img = MockImage(size.width(), size.height())
+                    reader = YoloReader(txt_path, mock_img, classes_path)
                     shapes = reader.get_shapes()
                     labels = [shape[0] for shape in shapes]
             except Exception:
