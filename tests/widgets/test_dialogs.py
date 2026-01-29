@@ -8,8 +8,8 @@ if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 dir_name = os.path.abspath(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(dir_name, '..'))
-sys.path.insert(0, os.path.join(dir_name, '..', 'libs'))
+sys.path.insert(0, os.path.join(dir_name, '..', '..'))
+sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor

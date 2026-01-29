@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 dir_name = os.path.abspath(os.path.dirname(__file__))
-libs_path = os.path.join(dir_name, '..', 'libs')
+libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 from settings import Settings
 

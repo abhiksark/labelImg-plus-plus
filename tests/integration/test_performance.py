@@ -7,8 +7,8 @@ import shutil
 import unittest
 
 dir_name = os.path.abspath(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(dir_name, '..'))
-sys.path.insert(0, os.path.join(dir_name, '..', 'libs'))
+sys.path.insert(0, os.path.join(dir_name, '..', '..'))
+sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from collections import OrderedDict
 from libs.galleryWidget import ThumbnailCache
