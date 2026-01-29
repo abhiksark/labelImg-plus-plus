@@ -2,7 +2,7 @@
 
 MainWindow is the central controller that orchestrates all UI interactions, state management, and file operations.
 
-**File:** `labelImg.py` (lines 73-1722)
+**File:** `labelImgPlusPlus.py` (lines 73-1722)
 
 ## Overview
 

@@ -8,7 +8,7 @@ Adding a new format requires modifications to:
 
 1. Create `libs/new_format_io.py` - Reader/Writer classes
 2. Update `libs/labelFile.py` - Format enum and dispatch
-3. Update `labelImg.py` - Format toggle UI
+3. Update `labelImgPlusPlus.py` - Format toggle UI
 
 ```
 +----------------------------------------------------------+
@@ -37,7 +37,7 @@ Adding a new format requires modifications to:
 |                         v                               |
 |  Step 3: UI Integration                                 |
 |  +--------------------------------------------------+   |
-|  |  labelImg.py                                      |   |
+|  |  labelImgPlusPlus.py                                      |   |
 |  |  - Add format icon                                |   |
 |  |  - Update change_format()                         |   |
 |  |  - Update load_labels()                           |   |
@@ -332,7 +332,7 @@ pyrcc5 -o libs/resources.py resources.qrc
 
 ### Update Format Toggle
 
-Edit `labelImg.py`:
+Edit `labelImgPlusPlus.py`:
 
 ```python
 # In get_format_meta() function
@@ -509,7 +509,7 @@ def test_round_trip():
 
 ### Integration Test
 
-1. Run labelImg++: `python labelImg.py`
+1. Run labelImg++: `python labelImgPlusPlus.py`
 2. Open a test image
 3. Draw bounding boxes with labels
 4. Toggle to your format (Ctrl+Y repeatedly)
@@ -524,8 +524,8 @@ def test_round_trip():
 - [ ] Added dispatch case in `save_label_file()`
 - [ ] Created format icon in `resources/icons/`
 - [ ] Updated `resources.qrc` and rebuilt resources
-- [ ] Updated `get_format_meta()` in labelImg.py
-- [ ] Updated `change_format()` cycle in labelImg.py
+- [ ] Updated `get_format_meta()` in labelImgPlusPlus.py
+- [ ] Updated `change_format()` cycle in labelImgPlusPlus.py
 - [ ] Added format detection in load logic
 - [ ] Tested write and read round-trip
 - [ ] Tested with actual training framework

@@ -16,7 +16,7 @@ Overview of extension points in labelImg++ for developers who want to customize 
 |         |                        |                       |
 |         v                        v                       |
 |  +--------------+         +--------------+               |
-|  | *_io.py      |         | labelImg.py  |               |
+|  | *_io.py      |         | labelImgPlusPlus.py  |               |
 |  | LabelFile    |         | new_action() |               |
 |  +--------------+         +--------------+               |
 |                                                          |
@@ -38,8 +38,8 @@ Overview of extension points in labelImg++ for developers who want to customize 
 
 | Extension Type | Files to Modify | Guide |
 |----------------|-----------------|-------|
-| New annotation format | `libs/*_io.py`, `libs/labelFile.py`, `labelImg.py` | [Adding Formats](adding-formats.md) |
-| New action/feature | `labelImg.py`, `resources/strings/` | [Adding Features](adding-features.md) |
+| New annotation format | `libs/*_io.py`, `libs/labelFile.py`, `labelImgPlusPlus.py` | [Adding Formats](adding-formats.md) |
+| New action/feature | `labelImgPlusPlus.py`, `resources/strings/` | [Adding Features](adding-features.md) |
 | New language | `resources/strings/strings-XX.properties` | [i18n Guide](i18n-guide.md) |
 | Custom shape types | `libs/shape.py`, `libs/canvas.py` | See below |
 
@@ -115,12 +115,12 @@ class LabelFile:
 1. Create `libs/new_format_io.py` with Writer/Reader classes
 2. Add enum value in `libs/labelFile.py`
 3. Add dispatch cases in save/load methods
-4. Add format toggle in `labelImg.py`
+4. Add format toggle in `labelImgPlusPlus.py`
 
 ## Component Dependencies
 
 ```
-                    labelImg.py (MainWindow)
+                    labelImgPlusPlus.py (MainWindow)
                            |
           +----------------+----------------+
           |                |                |
@@ -133,7 +133,7 @@ class LabelFile:
 
 ### Dependency Rules
 
-1. **libs/** modules should not import `labelImg.py`
+1. **libs/** modules should not import `labelImgPlusPlus.py`
 2. **canvas.py** owns shapes but doesn't know about file formats
 3. **labelFile.py** orchestrates formats but doesn't know about UI
 4. **Format I/O** classes are standalone with no Qt dependencies
@@ -143,7 +143,7 @@ class LabelFile:
 ### Adding a Toolbar Button
 
 ```python
-# In MainWindow.__init__ (labelImg.py)
+# In MainWindow.__init__ (labelImgPlusPlus.py)
 
 # 1. Create action
 my_action = action(
@@ -167,7 +167,7 @@ def my_handler(self):
 ### Adding a Menu Item
 
 ```python
-# In MainWindow.__init__ (labelImg.py)
+# In MainWindow.__init__ (labelImgPlusPlus.py)
 
 # 1. Create action (same as toolbar)
 my_menu_item = action('Menu Item', self.menu_handler, 'Ctrl+Shift+M')
@@ -188,10 +188,10 @@ add_actions(self.menus.edit, (my_menu_item, None, ...))  # None = separator
 # 1. Add constant (libs/constants.py)
 SETTING_MY_OPTION = 'myOption'
 
-# 2. Read in __init__ (labelImg.py)
+# 2. Read in __init__ (labelImgPlusPlus.py)
 self.my_option = settings.get(SETTING_MY_OPTION, False)
 
-# 3. Save in closeEvent (labelImg.py)
+# 3. Save in closeEvent (labelImgPlusPlus.py)
 settings[SETTING_MY_OPTION] = self.my_option
 
 # 4. Create toggle action if needed
@@ -208,7 +208,7 @@ my_option_action.setChecked(self.my_option)
 ### Manual Testing Workflow
 
 1. Make code changes
-2. Run: `python labelImg.py`
+2. Run: `python labelImgPlusPlus.py`
 3. Test with sample images
 4. Verify annotation save/load
 

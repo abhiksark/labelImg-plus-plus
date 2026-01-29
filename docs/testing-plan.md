@@ -77,5 +77,5 @@
 ## Tooling Recommendations
 
 - Standardize on `pytest` (it can run existing `unittest` tests)
-- Add coverage reporting (`pytest-cov`) and start tracking module coverage for `libs/` and `labelImg.py`
+- Add coverage reporting (`pytest-cov`) and start tracking module coverage for `libs/` and `labelImgPlusPlus.py`
 - Introduce a small number of higher-level integration tests, but keep most tests at the unit level for speed and determinism

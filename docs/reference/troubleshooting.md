@@ -261,7 +261,7 @@ labelImg++ doesn't convert existing files automatically.
 For detailed troubleshooting, add logging:
 
 ```python
-# Add to labelImg.py after imports
+# Add to labelImgPlusPlus.py after imports
 import logging
 logging.basicConfig(level=logging.DEBUG)
 ```

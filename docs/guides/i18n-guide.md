@@ -137,7 +137,7 @@ pyrcc5 -o libs/resources.py resources.qrc
 ```bash
 # Set locale and run
 export LANG=fr_FR.UTF-8
-python labelImg.py
+python labelImgPlusPlus.py
 ```
 
 ## StringBundle Implementation
@@ -218,7 +218,7 @@ def __create_lookup_fallback_list(self, locale_str):
 
 ## Using Strings in Code
 
-### In labelImg.py
+### In labelImgPlusPlus.py
 
 ```python
 # Get the string helper function
@@ -316,7 +316,7 @@ myNewFeatureDetail=新機能の説明
 
 ```bash
 make qt5py3
-python labelImg.py
+python labelImgPlusPlus.py
 ```
 
 ## Testing Translations
@@ -326,7 +326,7 @@ python labelImg.py
 ```bash
 # Linux/Mac
 export LANG=zh_CN.UTF-8
-python labelImg.py
+python labelImgPlusPlus.py
 
 # Or programmatically override
 python -c "

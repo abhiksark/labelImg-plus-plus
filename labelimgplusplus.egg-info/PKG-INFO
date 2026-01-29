@@ -1,3 +1,40 @@
+Metadata-Version: 2.1
+Name: labelimgplusplus
+Version: 2.0.0a1
+Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
+Author-email: Abhik Sarkar <abhiksark@gmail.com>
+License: Copyright (c) <2015-Present> Tzutalin
+        
+        Copyright (C) 2013  MIT, Computer Science and Artificial Intelligence Laboratory. Bryan Russell, Antonio Torralba, William T. Freeman
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/abhiksark/labelImg-plus-plus
+Project-URL: Repository, https://github.com/abhiksark/labelImg-plus-plus
+Keywords: labelImg,labelImgPlusPlus,annotation,deeplearning,image-annotation,bounding-box,gallery
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: Natural Language :: English
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Scientific/Engineering :: Image Recognition
+Requires-Python: >=3.6
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+Requires-Dist: pyqt5
+Requires-Dist: lxml
+
 ============
 labelImg++
 ============
@@ -19,14 +56,11 @@ labelImg++
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
         :target: https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE
 
-.. image:: https://sonarcloud.io/api/project_badges/measure?project=abhiksark_labelImg-plus-plus&metric=alert_status
-        :target: https://sonarcloud.io/dashboard?id=abhiksark_labelImg-plus-plus
-
 ----
 
 **labelImg++** is a powerful graphical image annotation tool for creating bounding box labels, designed for machine learning and computer vision projects. Forked from the original LabelImg with significant enhancements.
 
-    **Version 2.0.0** - First stable release! Install with ``pip install labelImgPlusPlus``
+    **Note:** Current version is ``2.0.0a`` (alpha). Version ``2.0.0`` will be the first stable release.
 
 .. image:: resources/demo/labelimg_screenshot.png
      :alt: labelImg++ Screenshot
@@ -44,8 +78,8 @@ Core Annotation Features
 - **Predefined class labels** with customizable list
 - **Verification system** to mark completed annotations
 
-New in labelImg++ v2.0
-~~~~~~~~~~~~~~~~~~~~~~
+New in labelImg++ v2.0.0a
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Undo/Redo Support**
     Full undo/redo for all annotation actions. Press **Ctrl+Z** to undo and **Ctrl+Y** to redo. Never lose your work again!
@@ -54,9 +88,8 @@ New in labelImg++ v2.0
     Visual thumbnail gallery showing all images with bounding box overlays directly on thumbnails.
 
     - Colored borders indicate status: Gray (no labels), Blue (has labels), Green (verified)
-    - Bounding boxes visible on thumbnails with corner markers (less clutter for nested boxes)
-    - Quick size presets (S/M/L/XL) plus slider for fine control
-    - Smart selection: click on nested boxes selects the inner box
+    - Bounding boxes visible on thumbnails for quick review
+    - Adjustable thumbnail size (40px - 300px)
     - Press **Ctrl+G** to toggle gallery mode
 
 **Modern UI with Feather Icons**
@@ -101,7 +134,7 @@ Build from Source
     sudo apt-get install pyqt5-dev-tools
     pip3 install -r requirements/requirements-linux-python3.txt
     make qt5py3
-    python3 labelImgPlusPlus.py
+    python3 labelImg.py
 
 **macOS:**
 
@@ -109,7 +142,7 @@ Build from Source
 
     pip3 install pyqt5 lxml
     make qt5py3
-    python3 labelImgPlusPlus.py
+    python3 labelImg.py
 
 **Windows:**
 
@@ -117,7 +150,7 @@ Build from Source
 
     pip install pyqt5 lxml
     pyrcc5 -o libs/resources.py resources.qrc
-    python labelImgPlusPlus.py
+    python labelImg.py
 
 Quick Start
 -----------
@@ -224,46 +257,6 @@ If you encounter issues, reset the settings:
     rm ~/.labelImgSettings.pkl
 
 Or use **Menu > File > Reset All**
-
-Roadmap
--------
-
-**v2.0.0 (Stable)** - *Current*
-    First stable release with bug fixes and UX improvements
-
-    - Silent error handling fixed
-    - YOLO format crash on missing classes.txt fixed
-    - Format change warning dialog added
-    - Save location visibility in title bar
-    - Auto-save menu items clarified
-    - Gallery status color legend added
-    - Progress indicator for large directories
-    - Gallery size presets (S/M/L/XL buttons)
-    - Corner markers on thumbnails for cleaner nested box display
-    - Improved nested bounding box selection (smallest box selected)
-    - Gallery freeze fix for large directories
-
-**v2.1.0** - *Planned*
-    - Annotation review workflow
-    - Dataset splitting tool (train/val/test)
-    - Label consistency checker
-    - Annotation statistics dashboard
-    - Improved label dialog with search/filter
-    - Keyboard shortcuts customization
-
-**v2.2.0** - *Future*
-    - Dark mode theme
-    - Polygon annotation support
-    - Recent files menu
-    - Snap to grid / alignment guides
-
-**v3.0.0** - *Vision*
-    - Plugin architecture
-    - COCO format support
-    - Ultralytics/YOLOv8 direct export
-    - FiftyOne dataset integration
-
-See the `GitHub Issues <https://github.com/abhiksark/labelImg-plus-plus/issues>`_ for detailed feature tracking.
 
 Contributing
 ------------

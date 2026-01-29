@@ -16,7 +16,7 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..'))
 
-from labelImg import get_main_app
+from labelImgPlusPlus import get_main_app
 
 
 class TestMainWindowSmoke(unittest.TestCase):

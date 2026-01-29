@@ -70,12 +70,12 @@ class Settings(object):
 ### Window State
 
 ```python
-# Saved on close (labelImg.py:1255-1257)
+# Saved on close (labelImgPlusPlus.py:1255-1257)
 settings[SETTING_WIN_SIZE] = self.size()
 settings[SETTING_WIN_POSE] = self.pos()
 settings[SETTING_WIN_STATE] = self.saveState()
 
-# Restored on start (labelImg.py:485-503)
+# Restored on start (labelImgPlusPlus.py:485-503)
 size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
 position = settings.get(SETTING_WIN_POSE, QPoint(0, 0))
 self.resize(size)

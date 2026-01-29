@@ -1,0 +1,2 @@
+[console_scripts]
+labelImgPlusPlus = labelImg:main

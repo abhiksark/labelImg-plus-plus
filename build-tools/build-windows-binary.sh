@@ -14,7 +14,7 @@ pyinstaller --hidden-import=xml \
             --hidden-import=xml.etree.ElementTree \
             --hidden-import=lxml.etree \
             --hidden-import=pyqt5 \
-            -D -F -n labelImgPlusPlus -c "../labelImg.py" -p ../libs -p ../
+            -D -F -n labelImgPlusPlus -c "../labelImgPlusPlus.py" -p ../libs -p ../
 
 FOLDER=$(git describe --abbrev=0 --tags)
 FOLDER="windows_"$FOLDER

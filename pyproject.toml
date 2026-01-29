@@ -38,10 +38,10 @@ Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
 Repository = "https://github.com/abhiksark/labelImg-plus-plus"
 
 [project.scripts]
-labelImgPlusPlus = "labelImg:main"
+labelImgPlusPlus = "labelImgPlusPlus:main"
 
 [tool.setuptools]
-py-modules = ["labelImg"]
+py-modules = ["labelImgPlusPlus"]
 
 [tool.setuptools.packages.find]
 where = ["."]
