@@ -496,6 +496,29 @@ def get_label_dialog_style(theme: Theme) -> str:
     }
 
 
+def get_gallery_list_style(theme: Theme) -> str:
+    """Generate gallery list widget stylesheet."""
+    c = _get_colors(theme)
+    return f"""
+QListWidget {{
+    background: {c['background']};
+    border: none;
+    color: {c['text']};
+}}
+QListWidget::item {{
+    color: {c['text']};
+    padding: 4px;
+}}
+QListWidget::item:selected {{
+    background: {c['accent_light']};
+    color: {c['accent_text']};
+}}
+QListWidget::item:hover {{
+    background: {c['hover']};
+}}
+"""
+
+
 def get_theme_colors(theme: Theme) -> dict:
     """Get full color palette for the given theme."""
     return _get_colors(theme)

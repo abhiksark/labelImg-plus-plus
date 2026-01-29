@@ -21,7 +21,7 @@ try:
 except ImportError:
     ElementTree = None
 
-from libs.utils.styles import Theme, get_slider_style, get_gallery_controls_style
+from libs.utils.styles import Theme, get_slider_style, get_gallery_controls_style, get_gallery_list_style
 
 
 def generate_color_by_text(text):
@@ -420,7 +420,7 @@ class GalleryWidget(QWidget):
             self._on_size_changed(size)
 
     def apply_theme(self, theme):
-        """Apply theme to gallery slider controls."""
+        """Apply theme to gallery slider controls and list widget."""
         self._current_theme = theme
         if self._slider_frame:
             styles = get_gallery_controls_style(theme)
@@ -431,6 +431,9 @@ class GalleryWidget(QWidget):
                 self.size_value_label.setStyleSheet(styles['label'])
         if hasattr(self, 'size_slider'):
             self.size_slider.setStyleSheet(get_slider_style(theme))
+        # Style the list widget for proper text colors
+        if hasattr(self, 'list_widget'):
+            self.list_widget.setStyleSheet(get_gallery_list_style(theme))
 
     def _reload_all_thumbnails(self):
         """Reload all thumbnails at current size."""
