@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 2.0.0a1
+Version: 2.1.1
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -15,7 +15,7 @@ License: Copyright (c) <2015-Present> Tzutalin
         
 Project-URL: Homepage, https://github.com/abhiksark/labelImg-plus-plus
 Project-URL: Repository, https://github.com/abhiksark/labelImg-plus-plus
-Keywords: labelImg,labelImgPlusPlus,annotation,deeplearning,image-annotation,bounding-box,gallery
+Keywords: labelImg,labelimgpp,labelimgplusplus,annotation,deeplearning,image-annotation,bounding-box,gallery
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
 Classifier: Intended Audience :: Science/Research
@@ -56,11 +56,14 @@ labelImg++
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
         :target: https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE
 
+.. image:: https://sonarcloud.io/api/project_badges/measure?project=abhiksark_labelImg-plus-plus&metric=alert_status
+        :target: https://sonarcloud.io/dashboard?id=abhiksark_labelImg-plus-plus
+
 ----
 
 **labelImg++** is a powerful graphical image annotation tool for creating bounding box labels, designed for machine learning and computer vision projects. Forked from the original LabelImg with significant enhancements.
 
-    **Note:** Current version is ``2.0.0a`` (alpha). Version ``2.0.0`` will be the first stable release.
+    **Version 2.0.0** - First stable release! Install with ``pip install labelImgPlusPlus``
 
 .. image:: resources/demo/labelimg_screenshot.png
      :alt: labelImg++ Screenshot
@@ -78,8 +81,8 @@ Core Annotation Features
 - **Predefined class labels** with customizable list
 - **Verification system** to mark completed annotations
 
-New in labelImg++ v2.0.0a
-~~~~~~~~~~~~~~~~~~~~~~~~~
+New in labelImg++ v2.0
+~~~~~~~~~~~~~~~~~~~~~~
 
 **Undo/Redo Support**
     Full undo/redo for all annotation actions. Press **Ctrl+Z** to undo and **Ctrl+Y** to redo. Never lose your work again!
@@ -88,8 +91,9 @@ New in labelImg++ v2.0.0a
     Visual thumbnail gallery showing all images with bounding box overlays directly on thumbnails.
 
     - Colored borders indicate status: Gray (no labels), Blue (has labels), Green (verified)
-    - Bounding boxes visible on thumbnails for quick review
-    - Adjustable thumbnail size (40px - 300px)
+    - Bounding boxes visible on thumbnails with corner markers (less clutter for nested boxes)
+    - Quick size presets (S/M/L/XL) plus slider for fine control
+    - Smart selection: click on nested boxes selects the inner box
     - Press **Ctrl+G** to toggle gallery mode
 
 **Modern UI with Feather Icons**
@@ -107,22 +111,38 @@ New in labelImg++ v2.0.0a
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
 
+**Dark Mode Theme**
+    Choose between light and dark themes for comfortable annotation in any lighting condition.
+
+    - Press **Ctrl+Shift+T** to toggle between themes
+    - Theme preference automatically saved
+    - All UI components (canvas, gallery, dialogs) respect the active theme
+    - See `Dark Mode Documentation <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/dark-mode.md>`_ for detailed information
+
 Installation
 ------------
 
 From PyPI (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+**Note:** The command was renamed from ``labelImgPlusPlus`` to ``labelimgpp`` in v2.1.1. The old command still works but shows a deprecation warning.
+
 .. code:: shell
 
-    pip3 install labelImgPlusPlus
-    labelImgPlusPlus
+    pip3 install labelimgplusplus
+    labelimgpp
+
+Or use the full command name:
+
+.. code:: shell
+
+    labelimgplusplus
 
 With a specific image or directory:
 
 .. code:: shell
 
-    labelImgPlusPlus [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
+    labelimgpp [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
 
 Build from Source
 ~~~~~~~~~~~~~~~~~
@@ -134,7 +154,7 @@ Build from Source
     sudo apt-get install pyqt5-dev-tools
     pip3 install -r requirements/requirements-linux-python3.txt
     make qt5py3
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 **macOS:**
 
@@ -142,7 +162,7 @@ Build from Source
 
     pip3 install pyqt5 lxml
     make qt5py3
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 **Windows:**
 
@@ -150,7 +170,7 @@ Build from Source
 
     pip install pyqt5 lxml
     pyrcc5 -o libs/resources.py resources.qrc
-    python labelImg.py
+    python labelImgPlusPlus.py
 
 Quick Start
 -----------
@@ -232,6 +252,8 @@ Keyboard Shortcuts
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + F   | Fit width                                  |
 +--------------------+--------------------------------------------+
+| Ctrl + Shift + T   | Toggle dark mode theme                     |
++--------------------+--------------------------------------------+
 
 Configuration
 -------------
@@ -257,6 +279,47 @@ If you encounter issues, reset the settings:
     rm ~/.labelImgSettings.pkl
 
 Or use **Menu > File > Reset All**
+
+Roadmap
+-------
+
+**v2.0.0 (Stable)** - *Current*
+    First stable release with bug fixes and UX improvements
+
+    - Silent error handling fixed
+    - YOLO format crash on missing classes.txt fixed
+    - Format change warning dialog added
+    - Save location visibility in title bar
+    - Auto-save menu items clarified
+    - Gallery status color legend added
+    - Progress indicator for large directories
+    - Gallery size presets (S/M/L/XL buttons)
+    - Corner markers on thumbnails for cleaner nested box display
+    - Improved nested bounding box selection (smallest box selected)
+    - Gallery freeze fix for large directories
+
+**v2.1.0** - *Planned*
+    - Dark mode theme (Completed - use Ctrl+Shift+T to toggle)
+    - Annotation review workflow
+    - Dataset splitting tool (train/val/test)
+    - Label consistency checker
+    - Annotation statistics dashboard
+    - Improved label dialog with search/filter
+    - Keyboard shortcuts customization
+
+**v2.2.0** - *Future*
+    - Polygon annotation support
+    - Recent files menu
+    - Snap to grid / alignment guides
+    - Multiple image annotation (batch labeling)
+
+**v3.0.0** - *Vision*
+    - Plugin architecture
+    - COCO format support
+    - Ultralytics/YOLOv8 direct export
+    - FiftyOne dataset integration
+
+See the `GitHub Issues <https://github.com/abhiksark/labelImg-plus-plus/issues>`_ for detailed feature tracking.
 
 Contributing
 ------------

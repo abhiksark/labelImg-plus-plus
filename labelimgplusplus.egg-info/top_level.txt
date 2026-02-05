@@ -1,2 +1,2 @@
-labelImg
+labelImgPlusPlus
 libs
