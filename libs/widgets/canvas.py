@@ -90,13 +90,11 @@ class Canvas(QWidget):
 
     def set_theme(self, theme):
         """Set theme and update colors."""
-        from libs.utils.styles import get_theme_colors
+        from libs.utils.styles import get_theme_colors, hex_to_qcolor
         self._theme = theme
         colors = get_theme_colors(theme)
         # Parse hex to QColor with alpha
-        verified_hex = colors['verified_bg'].lstrip('#')
-        r, g, b = tuple(int(verified_hex[i:i+2], 16) for i in (0, 2, 4))
-        self._verified_bg_color = QColor(r, g, b, 128)  # Keep 50% alpha
+        self._verified_bg_color = hex_to_qcolor(colors['verified_bg'], alpha=128)
 
     def enterEvent(self, ev):
         self.override_cursor(self._cursor)

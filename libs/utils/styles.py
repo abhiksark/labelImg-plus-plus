@@ -72,6 +72,22 @@ DARK_COLORS = {
 }
 
 
+def hex_to_qcolor(hex_color, alpha=255):
+    """Convert hex color string to QColor.
+
+    Args:
+        hex_color: Hex color string (e.g., '#ff0000' or 'ff0000')
+        alpha: Alpha value 0-255 (default: 255 for opaque)
+
+    Returns:
+        QColor object
+    """
+    from PyQt5.QtGui import QColor
+    hex_clean = hex_color.lstrip('#')
+    r, g, b = tuple(int(hex_clean[i:i+2], 16) for i in (0, 2, 4))
+    return QColor(r, g, b, alpha)
+
+
 def _get_colors(theme: Theme) -> dict:
     """Get color palette for the given theme."""
     return DARK_COLORS if theme == Theme.DARK else LIGHT_COLORS

@@ -431,29 +431,16 @@ class GalleryWidget(QWidget):
         self._current_theme = theme
 
         # Cache theme colors for use in thumbnail loading
-        from libs.utils.styles import get_theme_colors
+        from libs.utils.styles import get_theme_colors, hex_to_qcolor
         colors = get_theme_colors(theme)
 
-        placeholder_hex = colors['placeholder'].lstrip('#')
-        r, g, b = tuple(int(placeholder_hex[i:i+2], 16) for i in (0, 2, 4))
-        self._placeholder_color = QColor(r, g, b)
-
-        item_bg_hex = colors['item_bg'].lstrip('#')
-        r, g, b = tuple(int(item_bg_hex[i:i+2], 16) for i in (0, 2, 4))
-        self._item_bg_color = QColor(r, g, b)
+        self._placeholder_color = hex_to_qcolor(colors['placeholder'])
+        self._item_bg_color = hex_to_qcolor(colors['item_bg'])
 
         # Update status border colors
-        status_no_labels_hex = colors['status_no_labels'].lstrip('#')
-        r, g, b = tuple(int(status_no_labels_hex[i:i+2], 16) for i in (0, 2, 4))
-        self._status_colors[AnnotationStatus.NO_LABELS] = QColor(r, g, b)
-
-        status_has_labels_hex = colors['status_has_labels'].lstrip('#')
-        r, g, b = tuple(int(status_has_labels_hex[i:i+2], 16) for i in (0, 2, 4))
-        self._status_colors[AnnotationStatus.HAS_LABELS] = QColor(r, g, b)
-
-        status_verified_hex = colors['status_verified'].lstrip('#')
-        r, g, b = tuple(int(status_verified_hex[i:i+2], 16) for i in (0, 2, 4))
-        self._status_colors[AnnotationStatus.VERIFIED] = QColor(r, g, b)
+        self._status_colors[AnnotationStatus.NO_LABELS] = hex_to_qcolor(colors['status_no_labels'])
+        self._status_colors[AnnotationStatus.HAS_LABELS] = hex_to_qcolor(colors['status_has_labels'])
+        self._status_colors[AnnotationStatus.VERIFIED] = hex_to_qcolor(colors['status_verified'])
 
         if self._slider_frame:
             styles = get_gallery_controls_style(theme)
