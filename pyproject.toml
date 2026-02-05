@@ -12,7 +12,7 @@ authors = [
     {name = "Abhik Sarkar", email = "abhiksark@gmail.com"}
 ]
 requires-python = ">=3.6"
-keywords = ["labelImg", "labelImgPlusPlus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
+keywords = ["labelImg", "labelimgpp", "labelimgplusplus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
