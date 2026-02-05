@@ -3015,6 +3015,11 @@ class MainWindow(QMainWindow, WindowMixin):
             if hasattr(self.full_gallery, 'apply_theme'):
                 self.full_gallery.apply_theme(theme)
 
+        # Apply theme to stats widget (in gallery mode)
+        if hasattr(self, 'gallery_stats') and self.gallery_stats:
+            if hasattr(self.gallery_stats, 'apply_theme'):
+                self.gallery_stats.apply_theme(theme)
+
         # Refresh save status indicator colors
         if hasattr(self, 'label_save_status'):
             # Preserve current saved state (check if green/saved or orange/unsaved)

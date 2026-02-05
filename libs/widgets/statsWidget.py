@@ -190,3 +190,14 @@ class StatsWidget(QWidget):
     def get_current_image_stats(self):
         """Return current image statistics."""
         return self._current_image_stats.copy()
+
+    def apply_theme(self, theme):
+        """Apply theme styling to the stats widget.
+
+        Args:
+            theme: Theme enum value (Theme.LIGHT or Theme.DARK)
+        """
+        from libs.utils.styles import get_main_window_style
+
+        # Apply main window style which includes QLabel, QGroupBox, QTableWidget, etc.
+        self.setStyleSheet(get_main_window_style(theme))
