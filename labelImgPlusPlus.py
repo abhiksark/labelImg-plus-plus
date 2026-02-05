@@ -2444,6 +2444,9 @@ class MainWindow(QMainWindow, WindowMixin):
             annotations_dir=self.dir_name,
             save_dir=self.default_save_dir
         )
+        # Apply current theme before showing
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
         dialog.fix_requested.connect(self._apply_label_fix)
         dialog.exec_()
 
