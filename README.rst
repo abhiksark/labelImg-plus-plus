@@ -88,6 +88,8 @@ Installation
 From PyPI (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+**Note:** The command was renamed from ``labelImgPlusPlus`` to ``labelimgpp`` in v2.1.1. The old command still works but shows a deprecation warning.
+
 .. code:: shell
 
     pip3 install labelimgplusplus
