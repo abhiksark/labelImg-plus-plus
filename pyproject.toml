@@ -38,7 +38,9 @@ Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
 Repository = "https://github.com/abhiksark/labelImg-plus-plus"
 
 [project.scripts]
-labelImgPlusPlus = "labelImgPlusPlus:main"
+labelimgpp = "labelImgPlusPlus:main"
+labelimgplusplus = "labelImgPlusPlus:main"
+labelImgPlusPlus = "labelImgPlusPlus:main_deprecated"
 
 [tool.setuptools]
 py-modules = ["labelImgPlusPlus"]
