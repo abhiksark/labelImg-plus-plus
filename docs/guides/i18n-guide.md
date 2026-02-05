@@ -137,7 +137,7 @@ pyrcc5 -o libs/resources.py resources.qrc
 ```bash
 # Set locale and run
 export LANG=fr_FR.UTF-8
-python labelImgPlusPlus.py
+labelimgpp  # or: python labelImgPlusPlus.py from source
 ```
 
 ## StringBundle Implementation
@@ -316,7 +316,7 @@ myNewFeatureDetail=新機能の説明
 
 ```bash
 make qt5py3
-python labelImgPlusPlus.py
+labelimgpp  # or: python labelImgPlusPlus.py from source
 ```
 
 ## Testing Translations

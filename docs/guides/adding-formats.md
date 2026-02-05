@@ -509,7 +509,7 @@ def test_round_trip():
 
 ### Integration Test
 
-1. Run labelImg++: `python labelImgPlusPlus.py`
+1. Run labelImg++: `labelimgpp` (or `python labelImgPlusPlus.py` from source)
 2. Open a test image
 3. Draw bounding boxes with labels
 4. Toggle to your format (Ctrl+Y repeatedly)

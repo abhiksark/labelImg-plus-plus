@@ -208,7 +208,7 @@ my_option_action.setChecked(self.my_option)
 ### Manual Testing Workflow
 
 1. Make code changes
-2. Run: `python labelImgPlusPlus.py`
+2. Run: `python labelImgPlusPlus.py` or `labelimgpp` if installed
 3. Test with sample images
 4. Verify annotation save/load
 
