@@ -17,6 +17,8 @@ The theme preference is automatically saved and will persist across application 
 
 ### Screenshots
 
+> **Note:** Screenshot images are pending. The following visual examples will be added soon.
+
 **Light Mode**
 ![Light Mode Interface](../screenshots/light-mode.png)
 *The classic light theme with high contrast and clear visibility*
@@ -274,14 +276,14 @@ Key areas to verify:
 
 #### Automated Testing
 
-Theme integration tests are located in `tests/test_theme_integration.py`:
+Theme integration tests are located in `tests/integration/test_theme_integration.py`:
 
 ```bash
 # Run all theme tests
-python3 -m pytest tests/ -k theme -v
+python3 -m unittest discover tests -k theme -v
 
-# Run specific test
-python3 -m pytest tests/test_theme_integration.py::TestThemeIntegration::test_theme_toggle -v
+# Run specific test file
+python3 -m unittest tests.integration.test_theme_integration
 ```
 
 Key tests:
@@ -341,13 +343,13 @@ parent.setStyleSheet(f"""
 Key files for theme implementation:
 
 ```
-libs/utils/styles.py              # Theme system and color palettes
-libs/utils/constants.py           # SETTING_DARK_MODE constant
-labelImgPlusPlus.py              # MainWindow._apply_theme() and toggle
-libs/widgets/galleryWidget.py    # Gallery theme integration
-libs/widgets/canvas.py           # Canvas theme integration
-tests/test_theme_integration.py  # Theme automated tests
-docs/testing/theme-testing.md    # Manual testing checklist
+libs/utils/styles.py                        # Theme system and color palettes
+libs/utils/constants.py                     # SETTING_DARK_MODE constant
+labelImgPlusPlus.py                        # MainWindow._apply_theme() and toggle
+libs/widgets/galleryWidget.py              # Gallery theme integration
+libs/widgets/canvas.py                     # Canvas theme integration
+tests/integration/test_theme_integration.py # Theme automated tests
+docs/testing/theme-testing.md              # Manual testing checklist
 ```
 
 ## Future Enhancements

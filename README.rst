@@ -80,7 +80,7 @@ New in labelImg++ v2.0
     - Press **Ctrl+Shift+T** to toggle between themes
     - Theme preference automatically saved
     - All UI components (canvas, gallery, dialogs) respect the active theme
-    - See `docs/features/dark-mode.md <docs/features/dark-mode.md>`_ for detailed documentation
+    - See `Dark Mode Documentation <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/dark-mode.md>`_ for detailed information
 
 Installation
 ------------
