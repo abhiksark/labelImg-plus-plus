@@ -326,6 +326,10 @@ class GalleryWidget(QWidget):
         self._loading_thumbnails = False  # Guard against re-entrant calls
         self._thumbnail_load_pending = False  # Debounce flag
 
+        # Theme colors cache for placeholders and item backgrounds
+        self._placeholder_color = QColor(220, 220, 220)  # Default light
+        self._item_bg_color = QColor(240, 240, 240)      # Default light
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -424,6 +428,19 @@ class GalleryWidget(QWidget):
     def apply_theme(self, theme):
         """Apply theme to gallery slider controls and list widget."""
         self._current_theme = theme
+
+        # Cache theme colors for use in thumbnail loading
+        from libs.utils.styles import get_theme_colors
+        colors = get_theme_colors(theme)
+
+        placeholder_hex = colors['placeholder'].lstrip('#')
+        r, g, b = tuple(int(placeholder_hex[i:i+2], 16) for i in (0, 2, 4))
+        self._placeholder_color = QColor(r, g, b)
+
+        item_bg_hex = colors['item_bg'].lstrip('#')
+        r, g, b = tuple(int(item_bg_hex[i:i+2], 16) for i in (0, 2, 4))
+        self._item_bg_color = QColor(r, g, b)
+
         if self._slider_frame:
             styles = get_gallery_controls_style(theme)
             self._slider_frame.setStyleSheet(styles['frame'])
@@ -442,7 +459,7 @@ class GalleryWidget(QWidget):
         for path, item in self._path_to_item.items():
             # Set placeholder
             placeholder = QPixmap(self._icon_size, self._icon_size)
-            placeholder.fill(QColor(220, 220, 220))
+            placeholder.fill(self._placeholder_color)
             item.setIcon(QIcon(placeholder))
             item.setSizeHint(QSize(self._icon_size + 20, self._icon_size + 40))
         self._load_visible_thumbnails()
@@ -494,11 +511,11 @@ class GalleryWidget(QWidget):
 
         # Set placeholder icon
         placeholder = QPixmap(self._icon_size, self._icon_size)
-        placeholder.fill(QColor(220, 220, 220))
+        placeholder.fill(self._placeholder_color)
         item.setIcon(QIcon(placeholder))
 
         # Set initial status color (gray background)
-        item.setBackground(QBrush(QColor(240, 240, 240)))
+        item.setBackground(QBrush(self._item_bg_color))
 
         # Store path in item's data
         item.setData(Qt.UserRole, image_path)
