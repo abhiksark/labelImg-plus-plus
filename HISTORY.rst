@@ -1,6 +1,14 @@
 History
 =======
 
+2.1.1 (2026-02-05)
+------------------
+
+* Rename command from ``labelImgPlusPlus`` to ``labelimgpp`` and ``labelimgplusplus``
+* Add deprecation warning for old ``labelImgPlusPlus`` command (still works for backwards compatibility)
+* Update all documentation to reference new command names
+
+
 2.1.0b (2026-02-05)
 -------------------
 
