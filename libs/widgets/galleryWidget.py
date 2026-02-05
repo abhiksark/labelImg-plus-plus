@@ -300,12 +300,6 @@ class GalleryWidget(QWidget):
     MIN_ICON_SIZE = 40
     MAX_ICON_SIZE = 300
 
-    STATUS_COLORS = {
-        AnnotationStatus.NO_LABELS: QColor(150, 150, 150),     # Gray
-        AnnotationStatus.HAS_LABELS: QColor(66, 133, 244),     # Blue
-        AnnotationStatus.VERIFIED: QColor(52, 168, 83),        # Green
-    }
-
     def __init__(self, parent=None, show_size_slider=False):
         super().__init__(parent)
 
@@ -329,6 +323,13 @@ class GalleryWidget(QWidget):
         # Theme colors cache for placeholders and item backgrounds
         self._placeholder_color = QColor(220, 220, 220)  # Default light
         self._item_bg_color = QColor(240, 240, 240)      # Default light
+
+        # Status border colors (defaults, updated by theme)
+        self._status_colors = {
+            AnnotationStatus.NO_LABELS: QColor(150, 150, 150),
+            AnnotationStatus.HAS_LABELS: QColor(66, 133, 244),
+            AnnotationStatus.VERIFIED: QColor(52, 168, 83),
+        }
 
         self._setup_ui()
 
@@ -440,6 +441,19 @@ class GalleryWidget(QWidget):
         item_bg_hex = colors['item_bg'].lstrip('#')
         r, g, b = tuple(int(item_bg_hex[i:i+2], 16) for i in (0, 2, 4))
         self._item_bg_color = QColor(r, g, b)
+
+        # Update status border colors
+        status_no_labels_hex = colors['status_no_labels'].lstrip('#')
+        r, g, b = tuple(int(status_no_labels_hex[i:i+2], 16) for i in (0, 2, 4))
+        self._status_colors[AnnotationStatus.NO_LABELS] = QColor(r, g, b)
+
+        status_has_labels_hex = colors['status_has_labels'].lstrip('#')
+        r, g, b = tuple(int(status_has_labels_hex[i:i+2], 16) for i in (0, 2, 4))
+        self._status_colors[AnnotationStatus.HAS_LABELS] = QColor(r, g, b)
+
+        status_verified_hex = colors['status_verified'].lstrip('#')
+        r, g, b = tuple(int(status_verified_hex[i:i+2], 16) for i in (0, 2, 4))
+        self._status_colors[AnnotationStatus.VERIFIED] = QColor(r, g, b)
 
         if self._slider_frame:
             styles = get_gallery_controls_style(theme)
@@ -601,7 +615,7 @@ class GalleryWidget(QWidget):
         new_size = self._icon_size + border_width * 2
 
         bordered = QPixmap(new_size, new_size)
-        bordered.fill(self.STATUS_COLORS[status])
+        bordered.fill(self._status_colors[status])
 
         painter = QPainter(bordered)
         # Center the original pixmap

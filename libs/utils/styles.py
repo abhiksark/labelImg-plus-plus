@@ -36,6 +36,9 @@ LIGHT_COLORS = {
     'issue_whitespace': '#ffe6c8', # Light orange
     'issue_undefined': '#c8c8ff',  # Light blue
     'issue_duplicate': '#ffc8ff',  # Light purple
+    'status_no_labels': '#969696',   # Gray
+    'status_has_labels': '#4285f4',  # Blue
+    'status_verified': '#34a853',    # Green
 }
 
 DARK_COLORS = {
@@ -63,6 +66,9 @@ DARK_COLORS = {
     'issue_whitespace': '#8b6a3a', # Dark orange
     'issue_undefined': '#3a3a8b',  # Dark blue
     'issue_duplicate': '#8b3a8b',  # Dark purple
+    'status_no_labels': '#808080',   # Slightly lighter gray
+    'status_has_labels': '#4da6ff',  # Brighter blue
+    'status_verified': '#4caf50',    # Brighter green
 }
 
 
