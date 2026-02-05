@@ -77,7 +77,7 @@ New in labelImg++ v2.0
 **Dark Mode Theme**
     Choose between light and dark themes for comfortable annotation in any lighting condition.
 
-    - Press **Ctrl+D** to toggle between themes
+    - Press **Ctrl+Shift+T** to toggle between themes
     - Theme preference automatically saved
     - All UI components (canvas, gallery, dialogs) respect the active theme
     - See `docs/features/dark-mode.md <docs/features/dark-mode.md>`_ for detailed documentation
@@ -207,7 +207,7 @@ Keyboard Shortcuts
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + F   | Fit width                                  |
 +--------------------+--------------------------------------------+
-| Ctrl + D           | Toggle dark mode theme                     |
+| Ctrl + Shift + T   | Toggle dark mode theme                     |
 +--------------------+--------------------------------------------+
 
 Configuration
@@ -254,7 +254,7 @@ Roadmap
     - Gallery freeze fix for large directories
 
 **v2.1.0** - *Planned*
-    - Dark mode theme (Completed - use Ctrl+D to toggle)
+    - Dark mode theme (Completed - use Ctrl+Shift+T to toggle)
     - Annotation review workflow
     - Dataset splitting tool (train/val/test)
     - Label consistency checker

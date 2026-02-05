@@ -911,7 +911,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Dark mode toggle
         self.dark_mode_action = QAction('&Dark Mode', self)
         self.dark_mode_action.setCheckable(True)
-        self.dark_mode_action.setShortcut('Ctrl+D')
+        self.dark_mode_action.setShortcut('Ctrl+Shift+T')
         self.dark_mode_action.setToolTip('Toggle dark mode theme')
         self.dark_mode_action.setChecked(settings.get(SETTING_DARK_MODE, False))
         self.dark_mode_action.triggered.connect(self._toggle_dark_mode)

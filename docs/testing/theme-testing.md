@@ -10,7 +10,7 @@ python3 -m pytest tests/ -k theme -v
 ## Manual Testing Checklist
 
 ### Basic Theme Toggle
-- [ ] Ctrl+D toggles between light and dark
+- [ ] Ctrl+Shift+T toggles between light and dark
 - [ ] View → Dark Mode menu item works
 - [ ] Theme persists after restart
 

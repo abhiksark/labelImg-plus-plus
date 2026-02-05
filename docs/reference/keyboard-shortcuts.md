@@ -52,6 +52,7 @@ Complete reference of all keyboard shortcuts in labelImg++.
 | `Ctrl+=` | Original Size | Reset zoom to 100% |
 | `Ctrl+F` | Fit Window | Scale to fit window |
 | `Ctrl+Shift+F` | Fit Width | Scale to fit width |
+| `Ctrl+Shift+T` | Toggle Dark Mode | Switch between light and dark themes |
 
 ## Brightness Controls
 

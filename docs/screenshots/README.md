@@ -33,7 +33,7 @@ This directory contains screenshots demonstrating various features of labelImg++
 
 **How to capture:**
 1. With the same image and annotations as light-mode screenshot
-2. Press Ctrl+D or select View > Dark Mode to enable dark theme
+2. Press Ctrl+Shift+T or select View > Dark Mode to enable dark theme
 3. Take a full window screenshot
 4. Save as `dark-mode.png` (PNG format, recommended size: 1920x1080 or similar)
 

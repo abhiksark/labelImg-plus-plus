@@ -10,7 +10,7 @@ labelImg++ supports both light and dark themes, providing a comfortable annotati
 
 There are two ways to toggle dark mode:
 
-1. **Keyboard Shortcut:** Press `Ctrl+D` to instantly switch between light and dark themes
+1. **Keyboard Shortcut:** Press `Ctrl+Shift+T` to instantly switch between light and dark themes
 2. **Menu Option:** Navigate to `View > Dark Mode` and click to toggle
 
 The theme preference is automatically saved and will persist across application restarts.
