@@ -1,6 +1,19 @@
 History
 =======
 
+2.1.0b (2026-02-05)
+-------------------
+
+* Add Dark Mode theme support with Ctrl+Shift+T toggle (Beta Release)
+* Add 13 new theme-aware color keys to Settings
+* Fix hardcoded colors in canvas, gallery widget, and dialogs
+* Add hex_to_qcolor() utility function for color handling
+* Add comprehensive theme documentation (docs/features/dark-mode.md)
+* Add theme integration tests (tests/test_theme.py)
+* Fix keyboard shortcut conflicts
+* Improve gallery widget styling for both light and dark themes
+
+
 2.0.1 (2025-01-22)
 ------------------
 
