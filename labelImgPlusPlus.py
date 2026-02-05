@@ -1055,8 +1055,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Save status indicator
         self.label_save_status = QLabel('●')
-        self.label_save_status.setStyleSheet('color: green; font-size: 14px;')
-        self.label_save_status.setToolTip('Saved')
+        self._update_save_status_style(saved=True)  # Use helper method
         self.statusBar().addPermanentWidget(self.label_save_status)
 
         # Display cursor coordinates at the right of status bar
@@ -1377,14 +1376,23 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.zoom_widget:
             self.label_zoom.setText(f'Zoom: {self.zoom_widget.value()}%')
 
+    def _update_save_status_style(self, saved):
+        """Update save status indicator style based on theme."""
+        from libs.utils.styles import get_theme_colors
+        colors = get_theme_colors(self._current_theme)
+        if saved:
+            color = colors['status_saved']
+            tooltip = 'Saved'
+        else:
+            color = colors['status_unsaved']
+            tooltip = 'Unsaved changes'
+
+        self.label_save_status.setStyleSheet(f'color: {color}; font-size: 14px;')
+        self.label_save_status.setToolTip(tooltip)
+
     def update_save_status(self, saved=True):
         """Update save status indicator in status bar."""
-        if saved:
-            self.label_save_status.setStyleSheet('color: green; font-size: 14px;')
-            self.label_save_status.setToolTip('Saved')
-        else:
-            self.label_save_status.setStyleSheet('color: orange; font-size: 14px;')
-            self.label_save_status.setToolTip('Unsaved changes')
+        self._update_save_status_style(saved)
 
     def reset_state(self):
         self.items_to_shapes.clear()
@@ -3006,6 +3014,13 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'full_gallery') and self.full_gallery:
             if hasattr(self.full_gallery, 'apply_theme'):
                 self.full_gallery.apply_theme(theme)
+
+        # Refresh save status indicator colors
+        if hasattr(self, 'label_save_status'):
+            # Preserve current saved state (check if green/saved or orange/unsaved)
+            current_stylesheet = self.label_save_status.styleSheet()
+            is_saved = 'green' in current_stylesheet or colors['status_saved'] in current_stylesheet
+            self._update_save_status_style(saved=is_saved)
 
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):
