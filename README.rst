@@ -90,14 +90,20 @@ From PyPI (Recommended)
 
 .. code:: shell
 
-    pip3 install labelImgPlusPlus
-    labelImgPlusPlus
+    pip3 install labelimgplusplus
+    labelimgpp
+
+Or use the full command name:
+
+.. code:: shell
+
+    labelimgplusplus
 
 With a specific image or directory:
 
 .. code:: shell
 
-    labelImgPlusPlus [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
+    labelimgpp [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
 
 Build from Source
 ~~~~~~~~~~~~~~~~~
