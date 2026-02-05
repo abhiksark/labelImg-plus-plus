@@ -26,6 +26,16 @@ LIGHT_COLORS = {
     'success': '#34a853',
     'warning': '#fbbc04',
     'error': '#ea4335',
+    'verified_bg': '#b8ef26',  # Bright green overlay for verified images
+    'placeholder': '#dcdcdc',  # Light gray for placeholders
+    'item_bg': '#f0f0f0',      # Very light gray for item backgrounds
+    'status_saved': '#34a853',   # Green
+    'status_unsaved': '#ff9800', # Orange
+    'issue_typo': '#ffc8c8',      # Light red
+    'issue_case': '#ffffc8',      # Light yellow
+    'issue_whitespace': '#ffe6c8', # Light orange
+    'issue_undefined': '#c8c8ff',  # Light blue
+    'issue_duplicate': '#ffc8ff',  # Light purple
 }
 
 DARK_COLORS = {
@@ -43,6 +53,16 @@ DARK_COLORS = {
     'success': '#4caf50',
     'warning': '#ff9800',
     'error': '#f44336',
+    'verified_bg': '#4caf50',  # Slightly muted green for dark theme
+    'placeholder': '#3d3d3d',  # Dark gray for placeholders
+    'item_bg': '#2d2d2d',      # Darker gray for item backgrounds
+    'status_saved': '#4caf50',   # Slightly brighter green
+    'status_unsaved': '#ff9800', # Same orange (good contrast in dark)
+    'issue_typo': '#8b3a3a',      # Dark red
+    'issue_case': '#8b8b3a',      # Dark yellow
+    'issue_whitespace': '#8b6a3a', # Dark orange
+    'issue_undefined': '#3a3a8b',  # Dark blue
+    'issue_duplicate': '#8b3a8b',  # Dark purple
 }
 
 
@@ -444,8 +464,21 @@ def get_gallery_controls_style(theme: Theme) -> str:
     """Generate gallery slider frame and button styles."""
     c = _get_colors(theme)
     return {
-        'frame': f"background-color: {c['surface']}; border-bottom: 1px solid {c['border']};",
-        'button': f"background-color: {c['background']}; border: 1px solid {c['border']}; border-radius: 4px; font-weight: bold; font-size: 11px; color: {c['text']};",
+        'frame': f"QFrame {{ background-color: {c['surface']}; border-bottom: 1px solid {c['border']}; }}",
+        'button': f"""QPushButton {{
+            background-color: {c['background']};
+            border: 1px solid {c['border']};
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 11px;
+            color: {c['text']};
+        }}
+        QPushButton:hover {{
+            background-color: {c['hover']};
+        }}
+        QPushButton:pressed {{
+            background-color: {c['pressed']};
+        }}""",
         'label': f"font-weight: bold; color: {c['text']};",
     }
 
