@@ -1187,6 +1187,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.gallery_window.setWindowTitle(
             "Gallery Mode - Double-click to select, Press Escape or close to exit"
         )
+        # Apply theme stylesheet to gallery_window to isolate from parent cascade
+        if hasattr(self, '_current_theme'):
+            self.gallery_window.setStyleSheet(get_stylesheet(self._current_theme))
 
         central_widget = QWidget()
         layout = QHBoxLayout(central_widget)
@@ -1195,6 +1198,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Gallery widget (main area)
         self.full_gallery = GalleryWidget(show_size_slider=True)
+        # Apply current theme to full gallery
+        if hasattr(self, '_current_theme'):
+            self.full_gallery.apply_theme(self._current_theme)
         self.full_gallery.set_save_dir(self.default_save_dir)
         self.full_gallery.set_image_list(self.m_img_list)
         self.full_gallery.image_selected.connect(
@@ -2974,6 +2980,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'canvas') and self.canvas:
             bg_color = get_canvas_background(theme)
             self.canvas.set_background_color(bg_color)
+            if hasattr(self.canvas, 'set_theme'):
+                self.canvas.set_theme(theme)
 
         # Update scroll area viewport background
         if hasattr(self, 'scroll_area') and self.scroll_area:
@@ -2982,10 +2990,19 @@ class MainWindow(QMainWindow, WindowMixin):
                 f"background-color: {colors['background']};"
             )
 
-        # Update gallery widget
+        # Update gallery widget (dock)
         if hasattr(self, 'gallery_widget') and self.gallery_widget:
             if hasattr(self.gallery_widget, 'apply_theme'):
                 self.gallery_widget.apply_theme(theme)
+
+        # Update gallery window stylesheet to isolate from parent cascade
+        if hasattr(self, 'gallery_window') and self.gallery_window:
+            self.gallery_window.setStyleSheet(get_stylesheet(theme))
+
+        # Update full gallery (gallery mode window)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            if hasattr(self.full_gallery, 'apply_theme'):
+                self.full_gallery.apply_theme(theme)
 
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):

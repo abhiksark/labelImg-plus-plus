@@ -13,6 +13,7 @@ except ImportError:
 
 from libs.core.shape import Shape
 from libs.utils.utils import distance
+from libs.utils.styles import Theme
 
 CURSOR_DEFAULT = Qt.ArrowCursor
 CURSOR_POINT = Qt.PointingHandCursor
@@ -68,6 +69,8 @@ class Canvas(QWidget):
 
         # Theme background color for dark mode support
         self._theme_background = QColor(232, 232, 232, 255)  # Default light mode
+        self._theme = Theme.LIGHT  # Default theme
+        self._verified_bg_color = QColor(184, 239, 38, 128)  # Default
 
         # initialisation for panning
         self.pan_initial_pos = QPoint()
@@ -84,6 +87,16 @@ class Canvas(QWidget):
         self.setAutoFillBackground(True)
         self.setPalette(palette)
         self.update()
+
+    def set_theme(self, theme):
+        """Set theme and update colors."""
+        from libs.utils.styles import get_theme_colors
+        self._theme = theme
+        colors = get_theme_colors(theme)
+        # Parse hex to QColor with alpha
+        verified_hex = colors['verified_bg'].lstrip('#')
+        r, g, b = tuple(int(verified_hex[i:i+2], 16) for i in (0, 2, 4))
+        self._verified_bg_color = QColor(r, g, b, 128)  # Keep 50% alpha
 
     def enterEvent(self, ev):
         self.override_cursor(self._cursor)
@@ -579,7 +592,7 @@ class Canvas(QWidget):
         self.setAutoFillBackground(True)
         pal = self.palette()
         if self.verified:
-            pal.setColor(self.backgroundRole(), QColor(184, 239, 38, 128))
+            pal.setColor(self.backgroundRole(), self._verified_bg_color)
         else:
             pal.setColor(self.backgroundRole(), self._theme_background)
         self.setPalette(pal)
