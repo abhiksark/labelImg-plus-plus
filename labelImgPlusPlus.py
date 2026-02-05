@@ -3213,6 +3213,18 @@ def get_main_app(argv=None):
     return app, win
 
 
+def main_deprecated():
+    """Entry point for deprecated labelImgPlusPlus command."""
+    import warnings
+    warnings.warn(
+        "The 'labelImgPlusPlus' command is deprecated. "
+        "Please use 'labelimgpp' or 'labelimgplusplus' instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    return main()
+
+
 def main():
     """construct main app and run it"""
     app, _win = get_main_app(sys.argv)
