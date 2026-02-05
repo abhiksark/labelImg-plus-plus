@@ -81,7 +81,7 @@ from libs.utils.utils import (
     generate_color_by_text, have_qstring, natural_sort
 )
 from libs.utils.stringBundle import StringBundle
-from libs.utils.styles import TOOLBAR_STYLE, get_combined_style, Theme, get_stylesheet, get_canvas_background
+from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
 from libs.utils.hashableQListWidgetItem import HashableQListWidgetItem
 
@@ -936,7 +936,7 @@ class MainWindow(QMainWindow, WindowMixin):
             action('&Move here', self.move_shape)))
 
         self.tools = self.toolbar('Tools')
-        self.tools.setStyleSheet(TOOLBAR_STYLE)
+        # Toolbar style will be set by _apply_theme() below
 
         # Apply saved icon size setting
         saved_icon_size = settings.get(SETTING_ICON_SIZE, 0)
