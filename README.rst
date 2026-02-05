@@ -74,6 +74,14 @@ New in labelImg++ v2.0
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
 
+**Dark Mode Theme**
+    Choose between light and dark themes for comfortable annotation in any lighting condition.
+
+    - Press **Ctrl+D** to toggle between themes
+    - Theme preference automatically saved
+    - All UI components (canvas, gallery, dialogs) respect the active theme
+    - See `docs/features/dark-mode.md <docs/features/dark-mode.md>`_ for detailed documentation
+
 Installation
 ------------
 
@@ -199,6 +207,8 @@ Keyboard Shortcuts
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + F   | Fit width                                  |
 +--------------------+--------------------------------------------+
+| Ctrl + D           | Toggle dark mode theme                     |
++--------------------+--------------------------------------------+
 
 Configuration
 -------------
@@ -244,6 +254,7 @@ Roadmap
     - Gallery freeze fix for large directories
 
 **v2.1.0** - *Planned*
+    - Dark mode theme (Completed - use Ctrl+D to toggle)
     - Annotation review workflow
     - Dataset splitting tool (train/val/test)
     - Label consistency checker
@@ -252,10 +263,10 @@ Roadmap
     - Keyboard shortcuts customization
 
 **v2.2.0** - *Future*
-    - Dark mode theme
     - Polygon annotation support
     - Recent files menu
     - Snap to grid / alignment guides
+    - Multiple image annotation (batch labeling)
 
 **v3.0.0** - *Vision*
     - Plugin architecture
