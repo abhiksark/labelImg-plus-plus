@@ -23,14 +23,6 @@ ISSUE_TYPE_NAMES = {
     IssueType.DUPLICATE: "Duplicate",
 }
 
-ISSUE_TYPE_COLORS = {
-    IssueType.TYPO: QColor(255, 200, 200),         # Light red
-    IssueType.CASE_MISMATCH: QColor(255, 255, 200),  # Light yellow
-    IssueType.WHITESPACE: QColor(255, 230, 200),   # Light orange
-    IssueType.UNDEFINED: QColor(200, 200, 255),    # Light blue
-    IssueType.DUPLICATE: QColor(255, 200, 255),    # Light purple
-}
-
 
 class LabelCheckerDialog(QDialog):
     """Dialog for checking and fixing label consistency issues."""
@@ -50,6 +42,7 @@ class LabelCheckerDialog(QDialog):
         self.save_dir = save_dir
         self.issues: List[LabelIssue] = []
         self.checker: Optional[LabelConsistencyChecker] = None
+        self._issue_colors = self._get_light_issue_colors()
 
         self._setup_ui()
         self.setWindowTitle("Label Consistency Checker")
@@ -131,6 +124,50 @@ class LabelCheckerDialog(QDialog):
         button_layout.addWidget(self.close_btn)
 
         layout.addLayout(button_layout)
+
+    def _get_light_issue_colors(self):
+        """Get light theme issue colors."""
+        return {
+            IssueType.TYPO: QColor(255, 200, 200),
+            IssueType.CASE_MISMATCH: QColor(255, 255, 200),
+            IssueType.WHITESPACE: QColor(255, 230, 200),
+            IssueType.UNDEFINED: QColor(200, 200, 255),
+            IssueType.DUPLICATE: QColor(255, 200, 255),
+        }
+
+    def _get_dark_issue_colors(self):
+        """Get dark theme issue colors."""
+        return {
+            IssueType.TYPO: QColor(139, 58, 58),
+            IssueType.CASE_MISMATCH: QColor(139, 139, 58),
+            IssueType.WHITESPACE: QColor(139, 106, 58),
+            IssueType.UNDEFINED: QColor(58, 58, 139),
+            IssueType.DUPLICATE: QColor(139, 58, 139),
+        }
+
+    def apply_theme(self, theme):
+        """Apply theme to issue colors."""
+        from libs.utils.styles import Theme
+        if theme == Theme.DARK:
+            self._issue_colors = self._get_dark_issue_colors()
+        else:
+            self._issue_colors = self._get_light_issue_colors()
+        # Refresh table colors
+        if hasattr(self, 'table'):
+            self._refresh_table_colors()
+
+    def _refresh_table_colors(self):
+        """Refresh table row background colors after theme change."""
+        for row in range(self.table.rowCount()):
+            issue_type_text = self.table.item(row, 1).text()
+            # Map display name back to enum
+            issue_type = None
+            for it, name in ISSUE_TYPE_NAMES.items():
+                if name == issue_type_text:
+                    issue_type = it
+                    break
+            if issue_type:
+                self.table.item(row, 1).setBackground(self._issue_colors[issue_type])
 
     def set_data(
         self,
@@ -221,7 +258,7 @@ class LabelCheckerDialog(QDialog):
 
             # Issue type
             type_item = QTableWidgetItem(ISSUE_TYPE_NAMES[issue.issue_type])
-            type_item.setBackground(ISSUE_TYPE_COLORS[issue.issue_type])
+            type_item.setBackground(self._issue_colors[issue.issue_type])
             type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 1, type_item)
 
