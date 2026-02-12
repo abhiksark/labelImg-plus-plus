@@ -77,7 +77,7 @@ from libs.utils.constants import (
     FORMAT_YOLO, FORMAT_CREATEML
 )
 from libs.utils.utils import (
-    new_icon, new_action, add_actions, format_shortcut, Struct,
+    new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
     generate_color_by_text, have_qstring, natural_sort
 )
 from libs.utils.stringBundle import StringBundle
@@ -1081,21 +1081,22 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Support Functions #
     def set_format(self, save_format):
+        theme = getattr(self, '_current_theme', Theme.LIGHT)
         if save_format == FORMAT_PASCALVOC:
             self.actions.save_format.setText(FORMAT_PASCALVOC)
-            self.actions.save_format.setIcon(new_icon("format_voc"))
+            self.actions.save_format.setIcon(themed_icon("format_voc", theme))
             self.label_file_format = LabelFileFormat.PASCAL_VOC
             LabelFile.suffix = XML_EXT
 
         elif save_format == FORMAT_YOLO:
             self.actions.save_format.setText(FORMAT_YOLO)
-            self.actions.save_format.setIcon(new_icon("format_yolo"))
+            self.actions.save_format.setIcon(themed_icon("format_yolo", theme))
             self.label_file_format = LabelFileFormat.YOLO
             LabelFile.suffix = TXT_EXT
 
         elif save_format == FORMAT_CREATEML:
             self.actions.save_format.setText(FORMAT_CREATEML)
-            self.actions.save_format.setIcon(new_icon("format_createml"))
+            self.actions.save_format.setIcon(themed_icon("format_createml", theme))
             self.label_file_format = LabelFileFormat.CREATE_ML
             LabelFile.suffix = JSON_EXT
 
@@ -3028,6 +3029,17 @@ class MainWindow(QMainWindow, WindowMixin):
             current_stylesheet = self.label_save_status.styleSheet()
             is_saved = 'green' in current_stylesheet or colors['status_saved'] in current_stylesheet
             self._update_save_status_style(saved=is_saved)
+
+        # Refresh format button icon for current theme
+        if hasattr(self, 'label_file_format') and hasattr(self, 'actions'):
+            format_icon_map = {
+                LabelFileFormat.PASCAL_VOC: 'format_voc',
+                LabelFileFormat.YOLO: 'format_yolo',
+                LabelFileFormat.CREATE_ML: 'format_createml',
+            }
+            icon_name = format_icon_map.get(self.label_file_format)
+            if icon_name:
+                self.actions.save_format.setIcon(themed_icon(icon_name, theme))
 
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):

@@ -5,8 +5,8 @@ import re
 import sys
 
 try:
-    from PyQt5.QtGui import QIcon, QColor
-    from PyQt5.QtCore import QRegExp
+    from PyQt5.QtGui import QIcon, QColor, QPainter, QPixmap
+    from PyQt5.QtCore import QRegExp, QSize
     from PyQt5.QtWidgets import QPushButton, QAction, QMenu, QWidget
     QT5 = True
 except ImportError:
@@ -23,6 +23,43 @@ else:
 
 def new_icon(icon):
     return QIcon(':/' + icon)
+
+
+def themed_icon(icon_name, theme):
+    """Create a theme-aware icon, recoloring dark pixels for dark mode.
+
+    Uses QPainter CompositionMode_SourceIn to replace all opaque pixels
+    with the theme's text color while preserving alpha transparency.
+
+    Args:
+        icon_name: Icon resource name (e.g., 'format_yolo').
+        theme: Theme enum value from libs.utils.styles.
+
+    Returns:
+        QIcon recolored for the given theme.
+    """
+    from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
+
+    base_icon = QIcon(':/' + icon_name)
+    if theme == Theme.LIGHT:
+        return base_icon
+
+    text_color = hex_to_qcolor(get_theme_colors(theme)['text'])
+
+    # Resource-loaded icons often report empty availableSizes(),
+    # so request a reasonable default size to get the actual pixmap.
+    pixmap = base_icon.pixmap(QSize(128, 128))
+    if pixmap.isNull():
+        return base_icon
+
+    painter = QPainter(pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    painter.fillRect(pixmap.rect(), text_color)
+    painter.end()
+
+    recolored = QIcon()
+    recolored.addPixmap(pixmap)
+    return recolored
 
 
 def new_button(text, icon=None, slot=None):
