@@ -1995,6 +1995,8 @@ class MainWindow(QMainWindow, WindowMixin):
             if len(self.label_hist) > 0:
                 self.label_dialog = LabelDialog(
                     parent=self, list_item=self.label_hist)
+                if hasattr(self, '_current_theme'):
+                    self.label_dialog.apply_theme(self._current_theme)
 
             # Sync single class mode from PR#106
             if self.single_class_mode.isChecked() and self.lastLabel:

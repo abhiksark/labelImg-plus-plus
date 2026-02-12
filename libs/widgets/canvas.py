@@ -71,6 +71,7 @@ class Canvas(QWidget):
         self._theme_background = QColor(232, 232, 232, 255)  # Default light mode
         self._theme = Theme.LIGHT  # Default theme
         self._verified_bg_color = QColor(184, 239, 38, 128)  # Default
+        self._crosshair_color = QColor(0, 0, 0)  # Default light mode crosshair
 
         # initialisation for panning
         self.pan_initial_pos = QPoint()
@@ -95,6 +96,7 @@ class Canvas(QWidget):
         colors = get_theme_colors(theme)
         # Parse hex to QColor with alpha
         self._verified_bg_color = hex_to_qcolor(colors['verified_bg'], alpha=128)
+        self._crosshair_color = hex_to_qcolor(colors['text'])
 
     def enterEvent(self, ev):
         self.override_cursor(self._cursor)
@@ -583,7 +585,7 @@ class Canvas(QWidget):
             p.drawRect(int(left_top.x()), int(left_top.y()), int(rect_width), int(rect_height))
 
         if self.drawing() and not self.prev_point.isNull() and not self.out_of_pixmap(self.prev_point):
-            p.setPen(QColor(0, 0, 0))
+            p.setPen(self._crosshair_color)
             p.drawLine(int(self.prev_point.x()), 0, int(self.prev_point.x()), int(self.pixmap.height()))
             p.drawLine(0, int(self.prev_point.y()), int(self.pixmap.width()), int(self.prev_point.y()))
 

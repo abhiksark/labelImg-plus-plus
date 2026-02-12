@@ -42,7 +42,8 @@ class LabelCheckerDialog(QDialog):
         self.save_dir = save_dir
         self.issues: List[LabelIssue] = []
         self.checker: Optional[LabelConsistencyChecker] = None
-        self._issue_colors = self._get_light_issue_colors()
+        from libs.utils.styles import Theme
+        self._issue_colors = self._get_issue_colors(Theme.LIGHT)
 
         self._setup_ui()
         self.setWindowTitle("Label Consistency Checker")
@@ -125,33 +126,25 @@ class LabelCheckerDialog(QDialog):
 
         layout.addLayout(button_layout)
 
-    def _get_light_issue_colors(self):
-        """Get light theme issue colors."""
-        return {
-            IssueType.TYPO: QColor(255, 200, 200),
-            IssueType.CASE_MISMATCH: QColor(255, 255, 200),
-            IssueType.WHITESPACE: QColor(255, 230, 200),
-            IssueType.UNDEFINED: QColor(200, 200, 255),
-            IssueType.DUPLICATE: QColor(255, 200, 255),
-        }
+    def _get_issue_colors(self, theme):
+        """Get issue colors from centralized theme palette.
 
-    def _get_dark_issue_colors(self):
-        """Get dark theme issue colors."""
+        Args:
+            theme: Theme enum value (Theme.LIGHT or Theme.DARK)
+        """
+        from libs.utils.styles import get_theme_colors, hex_to_qcolor
+        colors = get_theme_colors(theme)
         return {
-            IssueType.TYPO: QColor(139, 58, 58),
-            IssueType.CASE_MISMATCH: QColor(139, 139, 58),
-            IssueType.WHITESPACE: QColor(139, 106, 58),
-            IssueType.UNDEFINED: QColor(58, 58, 139),
-            IssueType.DUPLICATE: QColor(139, 58, 139),
+            IssueType.TYPO: hex_to_qcolor(colors['issue_typo']),
+            IssueType.CASE_MISMATCH: hex_to_qcolor(colors['issue_case']),
+            IssueType.WHITESPACE: hex_to_qcolor(colors['issue_whitespace']),
+            IssueType.UNDEFINED: hex_to_qcolor(colors['issue_undefined']),
+            IssueType.DUPLICATE: hex_to_qcolor(colors['issue_duplicate']),
         }
 
     def apply_theme(self, theme):
         """Apply theme to issue colors."""
-        from libs.utils.styles import Theme
-        if theme == Theme.DARK:
-            self._issue_colors = self._get_dark_issue_colors()
-        else:
-            self._issue_colors = self._get_light_issue_colors()
+        self._issue_colors = self._get_issue_colors(theme)
         # Refresh table colors
         if hasattr(self, 'table'):
             self._refresh_table_colors()
