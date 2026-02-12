@@ -1,0 +1,1 @@
+[{"image": "test.512.512.bmp", "verified": true, "annotations": [{"label": "person", "coordinates": {"x": 242.5, "y": 278.5, "width": 355, "height": 467}}, {"label": "face", "coordinates": {"x": 297.5, "y": 307.5, "width": 105, "height": 115}}]}]

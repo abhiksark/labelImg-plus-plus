@@ -1,7 +1,7 @@
 #!/bin/sh
 
-THIS_SCRIPT_PATH=`readlink -f $0`
-THIS_SCRIPT_DIR=`dirname ${THIS_SCRIPT_PATH}`
+THIS_SCRIPT_PATH=$(readlink -f "$0")
+THIS_SCRIPT_DIR=$(dirname "${THIS_SCRIPT_PATH}")
 #OS Ubuntu 14.04
 ### Common packages for linux/windows
 if [ ! -e "pyinstaller" ]; then

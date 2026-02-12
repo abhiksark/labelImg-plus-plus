@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "labelimgplusplus"
-version = "2.0.0"
+version = "2.1.1"
 description = "labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images"
 readme = "README.rst"
 license = {file = "LICENSE"}
@@ -12,7 +12,7 @@ authors = [
     {name = "Abhik Sarkar", email = "abhiksark@gmail.com"}
 ]
 requires-python = ">=3.6"
-keywords = ["labelImg", "labelImgPlusPlus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
+keywords = ["labelImg", "labelimgpp", "labelimgplusplus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -38,10 +38,12 @@ Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
 Repository = "https://github.com/abhiksark/labelImg-plus-plus"
 
 [project.scripts]
-labelImgPlusPlus = "labelImg:main"
+labelimgpp = "labelImgPlusPlus:main"
+labelimgplusplus = "labelImgPlusPlus:main"
+labelImgPlusPlus = "labelImgPlusPlus:main_deprecated"
 
 [tool.setuptools]
-py-modules = ["labelImg"]
+py-modules = ["labelImgPlusPlus"]
 
 [tool.setuptools.packages.find]
 where = ["."]

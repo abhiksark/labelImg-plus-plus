@@ -7,7 +7,7 @@ This document describes the high-level architecture of labelImg++, including com
 ```
 +------------------------------------------------------------------+
 |                         MainWindow                                |
-|                      (labelImg.py:73)                             |
+|                      (labelImgPlusPlus.py:73)                             |
 |  +------------------+  +------------------+  +------------------+ |
 |  |    Menu Bar     |  |    Tool Bar      |  |   Status Bar     | |
 |  +------------------+  +------------------+  +------------------+ |
@@ -56,7 +56,7 @@ This document describes the high-level architecture of labelImg++, including com
 
 ## Component Responsibilities
 
-### MainWindow (`labelImg.py:73-1722`)
+### MainWindow (`labelImgPlusPlus.py:73-1722`)
 The central controller and UI orchestrator:
 - **UI Setup**: Creates menus, toolbars, dock widgets, canvas
 - **Action Handling**: Defines and connects all user actions
@@ -361,7 +361,7 @@ Any         Wheel           Zoom (Ctrl) or Scroll
 
 ```
 labelImg++/
-├── labelImg.py          # MainWindow, entry point (1722 lines)
+├── labelImgPlusPlus.py          # MainWindow, entry point (1722 lines)
 │
 ├── libs/
 │   ├── canvas.py        # Canvas widget (749 lines)
@@ -401,7 +401,7 @@ labelImg++ runs entirely on the main Qt event loop thread:
 | Extension | Location | Pattern |
 |-----------|----------|---------|
 | New format | `libs/` | Add Writer/Reader classes |
-| New action | `labelImg.py` | Define action, add to menu |
+| New action | `labelImgPlusPlus.py` | Define action, add to menu |
 | New widget | `libs/` | Create widget, add to MainWindow |
 | New language | `resources/strings/` | Add properties file |
 

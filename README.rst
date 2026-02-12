@@ -74,22 +74,38 @@ New in labelImg++ v2.0
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
 
+**Dark Mode Theme**
+    Choose between light and dark themes for comfortable annotation in any lighting condition.
+
+    - Press **Ctrl+Shift+T** to toggle between themes
+    - Theme preference automatically saved
+    - All UI components (canvas, gallery, dialogs) respect the active theme
+    - See `Dark Mode Documentation <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/dark-mode.md>`_ for detailed information
+
 Installation
 ------------
 
 From PyPI (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+**Note:** The command was renamed from ``labelImgPlusPlus`` to ``labelimgpp`` in v2.1.1. The old command still works but shows a deprecation warning.
+
 .. code:: shell
 
-    pip3 install labelImgPlusPlus
-    labelImgPlusPlus
+    pip3 install labelimgplusplus
+    labelimgpp
+
+Or use the full command name:
+
+.. code:: shell
+
+    labelimgplusplus
 
 With a specific image or directory:
 
 .. code:: shell
 
-    labelImgPlusPlus [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
+    labelimgpp [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
 
 Build from Source
 ~~~~~~~~~~~~~~~~~
@@ -101,7 +117,7 @@ Build from Source
     sudo apt-get install pyqt5-dev-tools
     pip3 install -r requirements/requirements-linux-python3.txt
     make qt5py3
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 **macOS:**
 
@@ -109,7 +125,7 @@ Build from Source
 
     pip3 install pyqt5 lxml
     make qt5py3
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 **Windows:**
 
@@ -117,7 +133,7 @@ Build from Source
 
     pip install pyqt5 lxml
     pyrcc5 -o libs/resources.py resources.qrc
-    python labelImg.py
+    python labelImgPlusPlus.py
 
 Quick Start
 -----------
@@ -199,6 +215,8 @@ Keyboard Shortcuts
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + F   | Fit width                                  |
 +--------------------+--------------------------------------------+
+| Ctrl + Shift + T   | Toggle dark mode theme                     |
++--------------------+--------------------------------------------+
 
 Configuration
 -------------
@@ -244,6 +262,7 @@ Roadmap
     - Gallery freeze fix for large directories
 
 **v2.1.0** - *Planned*
+    - Dark mode theme (Completed - use Ctrl+Shift+T to toggle)
     - Annotation review workflow
     - Dataset splitting tool (train/val/test)
     - Label consistency checker
@@ -252,10 +271,10 @@ Roadmap
     - Keyboard shortcuts customization
 
 **v2.2.0** - *Future*
-    - Dark mode theme
     - Polygon annotation support
     - Recent files menu
     - Snap to grid / alignment guides
+    - Multiple image annotation (batch labeling)
 
 **v3.0.0** - *Vision*
     - Plugin architecture

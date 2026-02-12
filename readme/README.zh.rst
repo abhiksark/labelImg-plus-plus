@@ -54,7 +54,7 @@ labelImg++ 新功能
     sudo apt-get install pyqt5-dev-tools
     sudo pip3 install -r requirements/requirements-linux-python3.txt
     make qt5py3
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 **macOS:**
 
@@ -62,7 +62,7 @@ labelImg++ 新功能
 
     pip3 install pyqt5 lxml
     make qt5py3
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 **Windows:**
 
@@ -70,7 +70,7 @@ labelImg++ 新功能
 
     pip install pyqt5 lxml
     pyrcc5 -o libs/resources.py resources.qrc
-    python labelImg.py
+    python labelImgPlusPlus.py
 
 快捷鍵
 ------

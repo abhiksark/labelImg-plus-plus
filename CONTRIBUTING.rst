@@ -19,7 +19,7 @@ Getting Started
 
 4. Run the application::
 
-    python3 labelImg.py
+    python3 labelImgPlusPlus.py
 
 Branching Workflow
 ------------------

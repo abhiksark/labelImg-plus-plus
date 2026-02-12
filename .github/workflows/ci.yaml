@@ -95,7 +95,7 @@ jobs:
       - name: Build Qt resources
         run: pyrcc5 -o libs/resources.py resources.qrc
       - name: Package
-        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImg.py -p ./libs -p ./
+        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
       - uses: actions/upload-artifact@v4
         with:
           name: macOS-artifact
@@ -118,7 +118,7 @@ jobs:
       - name: Build Qt resources
         run: pyrcc5 -o libs/resources.py resources.qrc
       - name: Package
-        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImg.py -p ./libs -p ./
+        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
       - uses: actions/upload-artifact@v4
         with:
           name: Windows-artifact
@@ -141,7 +141,7 @@ jobs:
       - name: Build Qt resources
         run: pyrcc5 -o libs/resources.py resources.qrc
       - name: Package
-        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImg.py -p ./libs -p ./
+        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
       - uses: actions/upload-artifact@v4
         with:
           name: Linux-artifact

@@ -87,7 +87,7 @@ myFeatureDetail=Description of my feature
 
 ### Step 2: Create the Action
 
-In `labelImg.py` within `MainWindow.__init__()`:
+In `labelImgPlusPlus.py` within `MainWindow.__init__()`:
 
 ```python
 # After line ~216 where other actions are defined
@@ -279,7 +279,7 @@ def mousePressEvent(self, ev):
 
 ### Step 4: Add Mode Toggle Action
 
-In `labelImg.py`:
+In `labelImgPlusPlus.py`:
 
 ```python
 my_mode = action(
@@ -361,7 +361,7 @@ def get_my_value(parent=None, initial=''):
 ### Step 2: Use Dialog in Handler
 
 ```python
-# In labelImg.py
+# In labelImgPlusPlus.py
 from libs.myDialog import get_my_value
 
 def my_feature_handler(self):
@@ -383,7 +383,7 @@ exportStats=Export Statistics
 exportStatsDetail=Export annotation statistics to CSV
 ```
 
-### labelImg.py additions
+### labelImgPlusPlus.py additions
 
 ```python
 # In __init__, after other action definitions

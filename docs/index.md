@@ -16,7 +16,7 @@ This documentation provides comprehensive guidance for developers working with t
 
 ```
 labelImg++/
-├── labelImg.py              # Entry point, MainWindow class
+├── labelImgPlusPlus.py              # Entry point, MainWindow class
 ├── libs/
 │   ├── canvas.py            # Drawing surface widget
 │   ├── shape.py             # Annotation shape representation
@@ -86,7 +86,7 @@ pip3 install -r requirements/requirements-linux-python3.txt
 make qt5py3
 
 # Run the application
-python3 labelImg.py
+python3 labelImgPlusPlus.py
 ```
 
 ### Running Tests

@@ -5,10 +5,10 @@ all: qt5 test
 test: testpy3
 
 testpy2:
-	python -m unittest discover tests
+	python -m unittest discover -s tests -t .
 
 testpy3:
-	python3 -m unittest discover tests
+	python3 -m unittest discover -s tests -t .
 
 qt4: qt4py2
 

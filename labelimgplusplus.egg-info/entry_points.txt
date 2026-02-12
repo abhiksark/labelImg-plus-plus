@@ -1,0 +1,4 @@
+[console_scripts]
+labelImgPlusPlus = labelImgPlusPlus:main_deprecated
+labelimgplusplus = labelImgPlusPlus:main
+labelimgpp = labelImgPlusPlus:main
