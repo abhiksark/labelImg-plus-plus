@@ -16,10 +16,11 @@ try:
         QVariant, QObject, QRunnable, QThreadPool, pyqtSignal
     )
     from PyQt5.QtWidgets import (
-        QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
-        QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-        QMainWindow, QMenu, QMessageBox, QProgressDialog, QScrollArea,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+        QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
+        QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
+        QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+        QProgressDialog, QScrollArea, QTabWidget, QToolButton,
+        QVBoxLayout, QWidget, QWidgetAction
     )
 except ImportError:
     # needed for py3+qt4
@@ -58,6 +59,7 @@ from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.core.shape import Shape, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
 from libs.core.settings import Settings
 from libs.core.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
+from libs.core.shortcut_config import ShortcutConfig
 
 # Formats
 from libs.formats.labelFile import LabelFile, LabelFileError, LabelFileFormat
@@ -69,12 +71,14 @@ from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
 from libs.utils.constants import (
     SETTING_ADVANCE_MODE, SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
     SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
-    SETTING_FILENAME, SETTING_FILL_COLOR, SETTING_GALLERY_MODE,
+    SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
+    SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
-    SETTING_LINE_COLOR, SETTING_PAINT_LABEL, SETTING_RECENT_FILES,
-    SETTING_SAVE_DIR, SETTING_SINGLE_CLASS, SETTING_TOOLBAR_EXPANDED,
-    SETTING_WIN_POSE, SETTING_WIN_SIZE, SETTING_WIN_STATE, FORMAT_PASCALVOC,
-    FORMAT_YOLO, FORMAT_CREATEML
+    SETTING_LINE_COLOR, SETTING_LOCK_ON_VERIFY, SETTING_PAINT_LABEL,
+    SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SHORTCUTS,
+    SETTING_SINGLE_CLASS,
+    SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE, SETTING_WIN_SIZE,
+    SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -402,6 +406,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings.load()
         settings = self.settings
 
+        self.shortcut_config = ShortcutConfig()
+        if settings.get(SETTING_SHORTCUTS):
+            self.shortcut_config.from_dict(settings.get(SETTING_SHORTCUTS))
+
         self.os_name = platform.system()
 
         # Load string bundle for i18n
@@ -522,8 +530,20 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_view_tabs.addTab(self.gallery_widget, get_str('galleryView'))
         self.file_view_tabs.currentChanged.connect(self.on_file_view_tab_changed)
 
+        # Status filter combo box
+        self.status_filter_combo = QComboBox()
+        self.status_filter_combo.addItems([
+            get_str('filterAll'),
+            get_str('filterAnnotated'),
+            get_str('filterVerified'),
+            get_str('filterUnannotated'),
+        ])
+        self.status_filter_combo.currentIndexChanged.connect(
+            self.apply_status_filter)
+
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
+        file_list_layout.addWidget(self.status_filter_combo)
         file_list_layout.addWidget(self.file_view_tabs)
         file_list_container = QWidget()
         file_list_container.setLayout(file_list_layout)
@@ -586,32 +606,32 @@ class MainWindow(QMainWindow, WindowMixin):
         # Actions
         action = partial(new_action, self)
         quit = action(get_str('quit'), self.close,
-                      'Ctrl+Q', 'quit', get_str('quitApp'))
+                      self.shortcut_config.get('quit'), 'quit', get_str('quitApp'))
 
         open = action(get_str('openFile'), self.open_file,
-                      'Ctrl+O', 'open', get_str('openFileDetail'))
+                      self.shortcut_config.get('open'), 'open', get_str('openFileDetail'))
 
         open_dir = action(get_str('openDir'), self.open_dir_dialog,
-                          'Ctrl+u', 'open', get_str('openDir'))
+                          self.shortcut_config.get('open_dir'), 'open', get_str('openDir'))
 
         change_save_dir = action(get_str('changeSaveDir'), self.change_save_dir_dialog,
-                                 'Ctrl+r', 'open', get_str('changeSavedAnnotationDir'))
+                                 self.shortcut_config.get('change_save_dir'), 'open', get_str('changeSavedAnnotationDir'))
 
         open_annotation = action(get_str('openAnnotation'), self.open_annotation_dialog,
-                                 'Ctrl+Shift+O', 'open', get_str('openAnnotationDetail'))
-        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+Shift+V', 'copy', get_str('copyPrevBounding'))
+                                 self.shortcut_config.get('open_annotation'), 'open', get_str('openAnnotationDetail'))
+        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, self.shortcut_config.get('copy_prev_bounding'), 'copy', get_str('copyPrevBounding'))
 
         open_next_image = action(get_str('nextImg'), self.open_next_image,
-                                 'd', 'next', get_str('nextImgDetail'))
+                                 self.shortcut_config.get('open_next_image'), 'next', get_str('nextImgDetail'))
 
         open_prev_image = action(get_str('prevImg'), self.open_prev_image,
-                                 'a', 'prev', get_str('prevImgDetail'))
+                                 self.shortcut_config.get('open_prev_image'), 'prev', get_str('prevImgDetail'))
 
         verify = action(get_str('verifyImg'), self.verify_image,
-                        'space', 'verify', get_str('verifyImgDetail'))
+                        self.shortcut_config.get('verify'), 'verify', get_str('verifyImgDetail'))
 
         save = action(get_str('save'), self.save_file,
-                      'Ctrl+S', 'save', get_str('saveDetail'), enabled=False)
+                      self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
 
         def get_format_meta(format):
             """
@@ -625,63 +645,63 @@ class MainWindow(QMainWindow, WindowMixin):
                 return '&CreateML', 'format_createml'
 
         save_format = action(get_format_meta(self.label_file_format)[0],
-                             self.change_format, 'Ctrl+Y',
+                             self.change_format, self.shortcut_config.get('save_format'),
                              get_format_meta(self.label_file_format)[1],
                              get_str('changeSaveFormat'), enabled=True)
 
         save_as = action(get_str('saveAs'), self.save_file_as,
-                         'Ctrl+Shift+S', 'save-as', get_str('saveAsDetail'), enabled=False)
+                         self.shortcut_config.get('save_as'), 'save-as', get_str('saveAsDetail'), enabled=False)
 
-        close = action(get_str('closeCur'), self.close_file, 'Ctrl+W', 'close', get_str('closeCurDetail'))
+        close = action(get_str('closeCur'), self.close_file, self.shortcut_config.get('close'), 'close', get_str('closeCurDetail'))
 
-        delete_image = action(get_str('deleteImg'), self.delete_image, 'Ctrl+Shift+D', 'close', get_str('deleteImgDetail'))
+        delete_image = action(get_str('deleteImg'), self.delete_image, self.shortcut_config.get('delete_image'), 'close', get_str('deleteImgDetail'))
 
         reset_all = action(get_str('resetAll'), self.reset_all, None, 'resetall', get_str('resetAllDetail'))
 
         color1 = action(get_str('boxLineColor'), self.choose_color1,
-                        'Ctrl+L', 'color_line', get_str('boxLineColorDetail'))
+                        self.shortcut_config.get('color1'), 'color_line', get_str('boxLineColorDetail'))
 
         create_mode = action(get_str('crtBox'), self.set_create_mode,
-                             'w', 'new', get_str('crtBoxDetail'), enabled=False)
+                             self.shortcut_config.get('create_mode'), 'new', get_str('crtBoxDetail'), enabled=False)
         edit_mode = action(get_str('editBox'), self.set_edit_mode,
-                           'Ctrl+J', 'edit', get_str('editBoxDetail'), enabled=False)
+                           self.shortcut_config.get('edit_mode'), 'edit', get_str('editBoxDetail'), enabled=False)
 
         create = action(get_str('crtBox'), self.create_shape,
-                        'w', 'new', get_str('crtBoxDetail'), enabled=False)
+                        self.shortcut_config.get('create'), 'new', get_str('crtBoxDetail'), enabled=False)
         delete = action(get_str('delBox'), self.delete_selected_shape,
-                        'Delete', 'delete', get_str('delBoxDetail'), enabled=False)
+                        self.shortcut_config.get('delete'), 'delete', get_str('delBoxDetail'), enabled=False)
         copy = action(get_str('dupBox'), self.copy_selected_shape,
-                      'Ctrl+D', 'copy', get_str('dupBoxDetail'),
+                      self.shortcut_config.get('copy'), 'copy', get_str('dupBoxDetail'),
                       enabled=False)
 
         copy_to_clipboard = action(get_str('copyBox'), self.copy_to_clipboard,
-                                   'Ctrl+C', 'copy', get_str('copyBoxDetail'),
+                                   self.shortcut_config.get('copy_to_clipboard'), 'copy', get_str('copyBoxDetail'),
                                    enabled=False)
         paste_from_clipboard = action(get_str('pasteBox'), self.paste_from_clipboard,
-                                      'Ctrl+V', 'paste', get_str('pasteBoxDetail'),
+                                      self.shortcut_config.get('paste_from_clipboard'), 'paste', get_str('pasteBoxDetail'),
                                       enabled=False)
         copy_all_to_clipboard = action(get_str('copyAllBoxes'), self.copy_all_to_clipboard,
-                                       'Ctrl+Shift+C', 'copy', get_str('copyAllBoxesDetail'),
+                                       self.shortcut_config.get('copy_all_to_clipboard'), 'copy', get_str('copyAllBoxesDetail'),
                                        enabled=False)
 
         undo = action(get_str('undo'), self.undo_action,
-                      'Ctrl+Z', 'undo', get_str('undoDetail'), enabled=False)
+                      self.shortcut_config.get('undo'), 'undo', get_str('undoDetail'), enabled=False)
         redo = action(get_str('redo'), self.redo_action,
-                      'Ctrl+Shift+Z', 'redo', get_str('redoDetail'), enabled=False)
+                      self.shortcut_config.get('redo'), 'redo', get_str('redoDetail'), enabled=False)
 
         advanced_mode = action(get_str('advancedMode'), self.toggle_advanced_mode,
-                               'Ctrl+Shift+A', 'expert', get_str('advancedModeDetail'),
+                               self.shortcut_config.get('advanced_mode'), 'expert', get_str('advancedModeDetail'),
                                checkable=True)
 
         gallery_mode = action(get_str('galleryMode'), self.toggle_gallery_mode,
-                              'Ctrl+G', 'labels', get_str('galleryModeDetail'),
+                              self.shortcut_config.get('gallery_mode'), 'labels', get_str('galleryModeDetail'),
                               checkable=True)
 
         hide_all = action(get_str('hideAllBox'), partial(self.toggle_polygons, False),
-                          'Ctrl+H', 'hide', get_str('hideAllBoxDetail'),
+                          self.shortcut_config.get('hide_all'), 'hide', get_str('hideAllBoxDetail'),
                           enabled=False)
         show_all = action(get_str('showAllBox'), partial(self.toggle_polygons, True),
-                          'Ctrl+A', 'hide', get_str('showAllBoxDetail'),
+                          self.shortcut_config.get('show_all'), 'hide', get_str('showAllBoxDetail'),
                           enabled=False)
 
         help_default = action(get_str('tutorialDefault'), self.show_default_tutorial_dialog, None, 'help', get_str('tutorialDetail'))
@@ -697,16 +717,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.zoom_widget.setEnabled(False)
 
         zoom_in = action(get_str('zoomin'), partial(self.add_zoom, 10),
-                         'Ctrl++', 'zoom-in', get_str('zoominDetail'), enabled=False)
+                         self.shortcut_config.get('zoom_in'), 'zoom-in', get_str('zoominDetail'), enabled=False)
         zoom_out = action(get_str('zoomout'), partial(self.add_zoom, -10),
-                          'Ctrl+-', 'zoom-out', get_str('zoomoutDetail'), enabled=False)
+                          self.shortcut_config.get('zoom_out'), 'zoom-out', get_str('zoomoutDetail'), enabled=False)
         zoom_org = action(get_str('originalsize'), partial(self.set_zoom, 100),
-                          'Ctrl+=', 'zoom', get_str('originalsizeDetail'), enabled=False)
+                          self.shortcut_config.get('zoom_org'), 'zoom', get_str('originalsizeDetail'), enabled=False)
         fit_window = action(get_str('fitWin'), self.set_fit_window,
-                            'Ctrl+F', 'fit-window', get_str('fitWinDetail'),
+                            self.shortcut_config.get('fit_window'), 'fit-window', get_str('fitWinDetail'),
                             checkable=True, enabled=False)
         fit_width = action(get_str('fitWidth'), self.set_fit_width,
-                           'Ctrl+Shift+F', 'fit-width', get_str('fitWidthDetail'),
+                           self.shortcut_config.get('fit_width'), 'fit-width', get_str('fitWidthDetail'),
                            checkable=True, enabled=False)
         # Group zoom controls into a list for easier toggling.
         zoom_actions = (self.zoom_widget, zoom_in, zoom_out,
@@ -728,11 +748,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.light_widget.setEnabled(False)
 
         light_brighten = action(get_str('lightbrighten'), partial(self.add_light, 10),
-                                'Ctrl+Shift++', 'light_lighten', get_str('lightbrightenDetail'), enabled=False)
+                                self.shortcut_config.get('light_brighten'), 'light_lighten', get_str('lightbrightenDetail'), enabled=False)
         light_darken = action(get_str('lightdarken'), partial(self.add_light, -10),
-                              'Ctrl+Shift+-', 'light_darken', get_str('lightdarkenDetail'), enabled=False)
+                              self.shortcut_config.get('light_darken'), 'light_darken', get_str('lightdarkenDetail'), enabled=False)
         light_org = action(get_str('lightreset'), partial(self.set_light, 50),
-                           'Ctrl+Shift+=', 'light_reset', get_str('lightresetDetail'), checkable=True, enabled=False)
+                           self.shortcut_config.get('light_org'), 'light_reset', get_str('lightresetDetail'), checkable=True, enabled=False)
         light_org.setChecked(True)
 
         # Create brightness dropdown button for toolbar
@@ -747,7 +767,7 @@ class MainWindow(QMainWindow, WindowMixin):
                          light_darken, light_org, brightness_dropdown)
 
         edit = action(get_str('editLabel'), self.edit_label,
-                      'Ctrl+E', 'edit', get_str('editLabelDetail'),
+                      self.shortcut_config.get('edit_label'), 'edit', get_str('editLabelDetail'),
                       enabled=False)
         self.edit_button.setDefaultAction(edit)
 
@@ -777,6 +797,82 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.setCheckable(True)
         self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
+
+        # Lock on verify: prevent editing when image is verified
+        self.lock_on_verify_option = QAction(get_str('lockOnVerify'), self)
+        self.lock_on_verify_option.setCheckable(True)
+        self.lock_on_verify_option.setChecked(settings.get(SETTING_LOCK_ON_VERIFY, False))
+        self.lock_on_verify_option.toggled.connect(self.toggle_lock_on_verify)
+
+        # Grid overlay toggle
+        self.show_grid_option = QAction(get_str('showGrid'), self)
+        self.show_grid_option.setShortcut('Ctrl+Shift+G')
+        self.show_grid_option.setCheckable(True)
+        self.show_grid_option.setChecked(settings.get(SETTING_GRID_ENABLED, False))
+        self.show_grid_option.toggled.connect(self.toggle_grid)
+
+        # Edge alignment toggle
+        self.edge_alignment_option = QAction(get_str('edgeAlignment'), self)
+        self.edge_alignment_option.setCheckable(True)
+        self.edge_alignment_option.setChecked(settings.get(SETTING_EDGE_ALIGNMENT, False))
+        self.edge_alignment_option.toggled.connect(self.toggle_edge_alignment)
+
+        # Grid size submenu
+        self.grid_size_menu = QMenu(get_str('gridSize'), self)
+        self.grid_size_group = QActionGroup(self)
+        self.grid_size_group.setExclusive(True)
+        saved_grid_size = settings.get(SETTING_GRID_SIZE, 32)
+        for size in [8, 16, 32, 64]:
+            size_action = QAction(f'{size}px', self)
+            size_action.setCheckable(True)
+            size_action.setData(size)
+            if size == saved_grid_size:
+                size_action.setChecked(True)
+            size_action.triggered.connect(self._set_grid_size)
+            self.grid_size_group.addAction(size_action)
+            self.grid_size_menu.addAction(size_action)
+
+        # Map action names to QAction objects for shortcut customization.
+        self._action_map = {
+            'quit': quit,
+            'open': open,
+            'open_dir': open_dir,
+            'change_save_dir': change_save_dir,
+            'open_annotation': open_annotation,
+            'copy_prev_bounding': copy_prev_bounding,
+            'open_next_image': open_next_image,
+            'open_prev_image': open_prev_image,
+            'verify': verify,
+            'save': save,
+            'save_format': save_format,
+            'save_as': save_as,
+            'close': close,
+            'delete_image': delete_image,
+            'color1': color1,
+            'create_mode': create_mode,
+            'edit_mode': edit_mode,
+            'create': create,
+            'delete': delete,
+            'copy': copy,
+            'copy_to_clipboard': copy_to_clipboard,
+            'paste_from_clipboard': paste_from_clipboard,
+            'copy_all_to_clipboard': copy_all_to_clipboard,
+            'undo': undo,
+            'redo': redo,
+            'advanced_mode': advanced_mode,
+            'gallery_mode': gallery_mode,
+            'hide_all': hide_all,
+            'show_all': show_all,
+            'zoom_in': zoom_in,
+            'zoom_out': zoom_out,
+            'zoom_org': zoom_org,
+            'fit_window': fit_window,
+            'fit_width': fit_width,
+            'light_brighten': light_brighten,
+            'light_darken': light_darken,
+            'light_org': light_org,
+            'edit_label': edit,
+        }
 
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
@@ -900,6 +996,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_save_enabled,
             self.single_class_mode,
             self.display_label_option,
+            self.lock_on_verify_option,
             labels, advanced_mode, gallery_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
@@ -907,6 +1004,10 @@ class MainWindow(QMainWindow, WindowMixin):
             light_brighten, light_darken, light_org, None))
         self.menus.view.addMenu(self.auto_save_interval_menu)
         self.menus.view.addMenu(self.icon_size_menu)
+        self.menus.view.addSeparator()
+        self.menus.view.addAction(self.show_grid_option)
+        self.menus.view.addMenu(self.grid_size_menu)
+        self.menus.view.addAction(self.edge_alignment_option)
 
         # Dark mode toggle
         self.dark_mode_action = QAction('&Dark Mode', self)
@@ -927,7 +1028,14 @@ class MainWindow(QMainWindow, WindowMixin):
         # Tools menu actions
         check_labels = action('Check Label &Consistency', self.check_label_consistency,
                               'Ctrl+Shift+L', 'verify', 'Check for typos and inconsistent labels in dataset')
-        add_actions(self.menus.tools, (check_labels,))
+        batch_verify_action = action(
+            get_str('batchVerify'), self.batch_verify,
+            None, 'verify', get_str('batchVerifyDetail'))
+        split_dataset_action = action(
+            get_str('splitDataset'), self.split_dataset,
+            None, 'file', get_str('splitDatasetDetail'))
+        add_actions(self.menus.tools, (
+            check_labels, batch_verify_action, split_dataset_action))
 
         # Custom context menu for the canvas widget:
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
@@ -1459,7 +1567,11 @@ class MainWindow(QMainWindow, WindowMixin):
         QMessageBox.information(self, u'Information', msg)
 
     def show_shortcuts_dialog(self):
-        self.show_tutorial_dialog(browser='default', link='https://github.com/tzutalin/labelImg#Hotkeys')
+        from libs.widgets.shortcutsDialog import ShortcutsDialog
+        dialog = ShortcutsDialog(self.shortcut_config, self._action_map, self)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+        dialog.exec_()
 
     def create_shape(self):
         assert self.beginner()
@@ -1505,6 +1617,17 @@ class MainWindow(QMainWindow, WindowMixin):
                 icon, '&%d %s' % (i + 1, QFileInfo(f).fileName()), self)
             action.triggered.connect(partial(self.load_recent, f))
             menu.addAction(action)
+
+        # Add clear option if there are recent files
+        if files:
+            menu.addSeparator()
+            clear_action = QAction(get_str('clearRecentFiles'), self)
+            clear_action.triggered.connect(self.clear_recent_files)
+            menu.addAction(clear_action)
+
+    def clear_recent_files(self):
+        self.recent_files.clear()
+        self.update_file_menu()
 
     def pop_label_list_menu(self, point):
         self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
@@ -2208,6 +2331,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 # Don't store full image data - saves memory
                 self.image_data = None
 
+            # Apply review lock based on verified state
+            if self.lock_on_verify_option.isChecked():
+                self.canvas.locked = self.canvas.verified
+            else:
+                self.canvas.locked = False
+
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
             self.file_path = unicode_file_path
@@ -2216,6 +2345,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.load_labels(self.label_file.shapes)
             self.set_clean()
             self.canvas.setEnabled(True)
+            if hasattr(self, 'show_grid_option'):
+                self.canvas._grid_enabled = self.show_grid_option.isChecked()
+                checked_action = self.grid_size_group.checkedAction()
+                self.canvas._grid_size = checked_action.data() if checked_action else 32
+                self.canvas._edge_alignment = self.edge_alignment_option.isChecked()
             self.adjust_scale(initial=True)
             self.paint_canvas()
             self.add_recent_file(self.file_path)
@@ -2344,9 +2478,14 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
+        settings[SETTING_LOCK_ON_VERIFY] = self.lock_on_verify_option.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
         settings[SETTING_TOOLBAR_EXPANDED] = self.tools.is_expanded()
         settings[SETTING_DARK_MODE] = self.dark_mode_action.isChecked()
+        settings[SETTING_GRID_ENABLED] = self.show_grid_option.isChecked()
+        settings[SETTING_GRID_SIZE] = self.canvas._grid_size if self.canvas else 32
+        settings[SETTING_EDGE_ALIGNMENT] = self.edge_alignment_option.isChecked()
+        settings[SETTING_SHORTCUTS] = self.shortcut_config.to_dict()
         settings.save()
 
     def load_recent(self, filename):
@@ -2480,6 +2619,164 @@ class MainWindow(QMainWindow, WindowMixin):
             5000
         )
 
+    def apply_status_filter(self, index):
+        """Filter file list by annotation status.
+
+        Args:
+            index: Filter combo box index. 0=All, 1=Annotated,
+                   2=Verified, 3=Unannotated.
+        """
+        for i in range(self.file_list_widget.count()):
+            item = self.file_list_widget.item(i)
+            img_path = item.text()
+            show = True
+            if index == 1:  # Annotated Only
+                show = self._has_annotation(img_path)
+            elif index == 2:  # Verified Only
+                show = self._is_verified(img_path)
+            elif index == 3:  # Unannotated Only
+                show = not self._has_annotation(img_path)
+            item.setHidden(not show)
+
+    def _has_annotation(self, img_path):
+        """Check if image has an annotation file.
+
+        Args:
+            img_path: Path to the image file.
+
+        Returns:
+            True if an annotation file exists for the image.
+        """
+        basename = os.path.splitext(os.path.basename(img_path))[0]
+        save_dir = self.default_save_dir or os.path.dirname(img_path)
+        for ext in [XML_EXT, TXT_EXT, JSON_EXT]:
+            if os.path.isfile(os.path.join(save_dir, basename + ext)):
+                return True
+            if os.path.isfile(os.path.splitext(img_path)[0] + ext):
+                return True
+        return False
+
+    def _is_verified(self, img_path):
+        """Check if image annotation is verified.
+
+        Args:
+            img_path: Path to the image file.
+
+        Returns:
+            True if the annotation is marked as verified.
+        """
+        basename = os.path.splitext(os.path.basename(img_path))[0]
+        save_dir = self.default_save_dir or os.path.dirname(img_path)
+        xml_path = os.path.join(save_dir, basename + XML_EXT)
+        if not os.path.isfile(xml_path):
+            xml_path = os.path.splitext(img_path)[0] + XML_EXT
+        if os.path.isfile(xml_path):
+            try:
+                reader = PascalVocReader(xml_path)
+                return reader.verified
+            except Exception:
+                pass
+        return False
+
+    def batch_verify(self):
+        """Open dialog to batch verify or unverify all annotated images."""
+        if not self.m_img_list:
+            return
+
+        annotated = sum(
+            1 for img in self.m_img_list if self._has_annotation(img))
+
+        from libs.widgets.batchVerifyDialog import BatchVerifyDialog
+        dialog = BatchVerifyDialog(
+            self, len(self.m_img_list), annotated)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        verify = dialog.verify_mode
+        count = 0
+        for img_path in self.m_img_list:
+            if not self._has_annotation(img_path):
+                continue
+            basename = os.path.splitext(os.path.basename(img_path))[0]
+            save_dir = self.default_save_dir or os.path.dirname(img_path)
+            xml_path = os.path.join(save_dir, basename + XML_EXT)
+            if not os.path.isfile(xml_path):
+                xml_path = os.path.splitext(img_path)[0] + XML_EXT
+            if os.path.isfile(xml_path):
+                try:
+                    import xml.etree.ElementTree as ET
+                    tree = ET.parse(xml_path)
+                    root = tree.getroot()
+                    if verify:
+                        root.set('verified', 'yes')
+                    else:
+                        if 'verified' in root.attrib:
+                            del root.attrib['verified']
+                    tree.write(xml_path)
+                    count += 1
+                except Exception:
+                    pass
+
+        action_label = 'Verified' if verify else 'Unverified'
+        self.statusBar().showMessage(
+            f'{action_label} {count} images', 3000)
+        if self.file_path:
+            self.load_file(self.file_path)
+
+    def split_dataset(self):
+        """Open dialog to split dataset into train/val/test sets."""
+        if not self.m_img_list:
+            QMessageBox.warning(
+                self, 'Split Dataset',
+                'No images loaded. Open a directory first.')
+            return
+
+        from libs.widgets.splitDialog import SplitDialog
+        default_dir = self.default_save_dir or (
+            os.path.dirname(self.m_img_list[0]) if self.m_img_list else '')
+        dialog = SplitDialog(self, len(self.m_img_list), default_dir)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        if not dialog.output_dir:
+            QMessageBox.warning(
+                self, 'Split Dataset',
+                'Please select an output directory.')
+            return
+
+        from libs.tools.dataset_splitter import split_dataset, execute_split
+
+        splits = split_dataset(
+            self.m_img_list,
+            dialog.ratios,
+            seed=dialog.seed,
+            stratified=dialog.stratified,
+            save_dir=self.default_save_dir,
+        )
+
+        manifest_path = execute_split(
+            splits,
+            dialog.output_dir,
+            save_dir=self.default_save_dir,
+            copy=dialog.copy_mode,
+        )
+
+        counts = {k: len(v) for k, v in splits.items()}
+        QMessageBox.information(
+            self, 'Split Complete',
+            f'Dataset split into:\n'
+            f'  Train: {counts["train"]} images\n'
+            f'  Val: {counts["val"]} images\n'
+            f'  Test: {counts["test"]} images\n\n'
+            f'Manifest: {manifest_path}'
+        )
+
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
             return
@@ -2560,6 +2857,8 @@ class MainWindow(QMainWindow, WindowMixin):
                     return
 
             self.canvas.verified = self.label_file.verified
+            if self.lock_on_verify_option.isChecked():
+                self.canvas.locked = self.canvas.verified
             self.paint_canvas()
             self.save_file()
             # Update gallery status after verify
@@ -2904,6 +3203,27 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_draw_square(self):
         self.canvas.set_drawing_shape_to_square(self.draw_squares_option.isChecked())
+
+    def toggle_lock_on_verify(self, checked):
+        if self.canvas and self.canvas.verified and checked:
+            self.canvas.locked = True
+        elif not checked:
+            self.canvas.locked = False
+
+    def toggle_grid(self, checked):
+        if self.canvas:
+            self.canvas._grid_enabled = checked
+            self.canvas.update()
+
+    def toggle_edge_alignment(self, checked):
+        if self.canvas:
+            self.canvas._edge_alignment = checked
+
+    def _set_grid_size(self):
+        action = self.grid_size_group.checkedAction()
+        if action and self.canvas:
+            self.canvas._grid_size = action.data()
+            self.canvas.update()
 
     def change_icon_size(self):
         """Change toolbar icon size based on user selection."""

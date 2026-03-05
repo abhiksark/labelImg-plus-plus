@@ -2,7 +2,7 @@
 """Canvas widget for drawing and editing bounding box annotations."""
 
 try:
-    from PyQt5.QtGui import QColor, QPixmap, QPainter, QCursor, QBrush
+    from PyQt5.QtGui import QColor, QPixmap, QPainter, QCursor, QBrush, QPen
     from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint
     from PyQt5.QtWidgets import QWidget, QMenu, QApplication
 except ImportError:
@@ -65,6 +65,7 @@ class Canvas(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
         self.verified = False
+        self._locked = False
         self.draw_square = False
 
         # Theme background color for dark mode support
@@ -72,6 +73,12 @@ class Canvas(QWidget):
         self._theme = Theme.LIGHT  # Default theme
         self._verified_bg_color = QColor(184, 239, 38, 128)  # Default
         self._crosshair_color = QColor(0, 0, 0)  # Default light mode crosshair
+
+        # Grid and edge alignment state
+        self._grid_enabled = False
+        self._grid_size = 32
+        self._edge_alignment = False
+        self._alignment_guides = []
 
         # initialisation for panning
         self.pan_initial_pos = QPoint()
@@ -124,6 +131,19 @@ class Canvas(QWidget):
         self.prev_point = QPointF()
         self.repaint()
 
+    @property
+    def locked(self):
+        return self._locked
+
+    @locked.setter
+    def locked(self, value):
+        self._locked = value
+        if value:
+            self.un_highlight()
+            self.de_select_shape()
+            self.override_cursor(CURSOR_DEFAULT)
+        self.update()
+
     def un_highlight(self, shape=None):
         if shape == None or shape == self.h_shape:
             if self.h_shape:
@@ -135,6 +155,8 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, ev):
         """Update line with last point and current coordinates."""
+        if self._locked:
+            return
         pos = self.transform_pos(ev.pos())
 
         # Update coordinates in status bar if image is opened
@@ -177,9 +199,10 @@ class Canvas(QWidget):
                     min_size = min(abs(pos.x() - min_x), abs(pos.y() - min_y))
                     direction_x = -1 if pos.x() - min_x < 0 else 1
                     direction_y = -1 if pos.y() - min_y < 0 else 1
-                    self.line[1] = QPointF(min_x + direction_x * min_size, min_y + direction_y * min_size)
+                    square_pos = QPointF(min_x + direction_x * min_size, min_y + direction_y * min_size)
+                    self.line[1] = self.apply_snapping(square_pos)
                 else:
-                    self.line[1] = pos
+                    self.line[1] = self.apply_snapping(pos)
 
                 self.line.line_color = color
                 self.prev_point = QPointF()
@@ -294,6 +317,9 @@ class Canvas(QWidget):
     def mousePressEvent(self, ev):
         pos = self.transform_pos(ev.pos())
 
+        if ev.button() == Qt.LeftButton and self._locked:
+            return
+
         if ev.button() == Qt.LeftButton:
             if self.drawing():
                 self.handle_drawing(pos)
@@ -368,9 +394,10 @@ class Canvas(QWidget):
             self.current.add_point(QPointF(min_x, max_y))
             self.finalise()
         elif not self.out_of_pixmap(pos):
+            snapped = self.apply_snapping(pos)
             self.current = Shape()
-            self.current.add_point(pos)
-            self.line.points = [pos, pos]
+            self.current.add_point(snapped)
+            self.line.points = [snapped, snapped]
             self.set_hiding()
             self.drawingPolygon.emit(True)
             self.update()
@@ -382,6 +409,8 @@ class Canvas(QWidget):
         return self.drawing() and self.current and len(self.current) > 2
 
     def mouseDoubleClickEvent(self, ev):
+        if self._locked:
+            return
         # We need at least 4 points here, since the mousePress handler
         # adds an extra one before this handler is called.
         if self.can_close_shape() and len(self.current) > 3:
@@ -444,6 +473,42 @@ class Canvas(QWidget):
 
         return x, y, False
 
+    def snap_to_grid(self, pos):
+        """Snap a point to the nearest grid intersection."""
+        if not self._grid_enabled or self._grid_size <= 0:
+            return pos
+        gs = self._grid_size
+        x = round(pos.x() / gs) * gs
+        y = round(pos.y() / gs) * gs
+        return QPointF(x, y)
+
+    def snap_to_edges(self, pos, exclude_shape=None):
+        """Snap point to nearby edges of existing shapes."""
+        if not self._edge_alignment:
+            return pos
+        threshold = 5.0 / self.scale if self.scale else 5.0
+        self._alignment_guides = []
+        snapped_x, snapped_y = pos.x(), pos.y()
+
+        for shape in self.shapes:
+            if shape is exclude_shape:
+                continue
+            for point in shape.points:
+                if abs(pos.x() - point.x()) < threshold:
+                    snapped_x = point.x()
+                    self._alignment_guides.append(('v', point.x()))
+                if abs(pos.y() - point.y()) < threshold:
+                    snapped_y = point.y()
+                    self._alignment_guides.append(('h', point.y()))
+
+        return QPointF(snapped_x, snapped_y)
+
+    def apply_snapping(self, pos, exclude_shape=None):
+        """Apply all active snapping modes to a position."""
+        pos = self.snap_to_grid(pos)
+        pos = self.snap_to_edges(pos, exclude_shape)
+        return pos
+
     def bounded_move_vertex(self, pos):
         index, shape = self.h_vertex, self.h_shape
         point = shape[index]
@@ -452,6 +517,8 @@ class Canvas(QWidget):
             clipped_x = min(max(0, pos.x()), size.width())
             clipped_y = min(max(0, pos.y()), size.height())
             pos = QPointF(clipped_x, clipped_y)
+
+        pos = self.apply_snapping(pos, exclude_shape=shape)
 
         if self.draw_square:
             opposite_point_index = (index + 2) % 4
@@ -583,6 +650,34 @@ class Canvas(QWidget):
             brush = QBrush(Qt.BDiagPattern)
             p.setBrush(brush)
             p.drawRect(int(left_top.x()), int(left_top.y()), int(rect_width), int(rect_height))
+
+        # Draw grid overlay
+        if self._grid_enabled and self.pixmap and self._grid_size > 0:
+            from libs.utils.styles import get_theme_colors, hex_to_qcolor
+            colors = get_theme_colors(getattr(self, '_theme', None))
+            grid_color = hex_to_qcolor(colors.get('grid_line', '#cccccc'), alpha=80)
+            p.setPen(grid_color)
+            gs = self._grid_size
+            w, h = self.pixmap.width(), self.pixmap.height()
+            for x in range(0, w + 1, gs):
+                p.drawLine(x, 0, x, h)
+            for y in range(0, h + 1, gs):
+                p.drawLine(0, y, w, y)
+
+        # Draw alignment guides
+        if self._alignment_guides:
+            from libs.utils.styles import get_theme_colors, hex_to_qcolor
+            colors = get_theme_colors(getattr(self, '_theme', None))
+            guide_color = hex_to_qcolor(colors.get('alignment_guide', '#4da6ff'))
+            pen = QPen(guide_color, 1, Qt.DashLine)
+            p.setPen(pen)
+            w, h = self.pixmap.width(), self.pixmap.height()
+            for orientation, position in self._alignment_guides:
+                if orientation == 'v':
+                    p.drawLine(int(position), 0, int(position), h)
+                else:
+                    p.drawLine(0, int(position), w, int(position))
+            self._alignment_guides = []
 
         if self.drawing() and not self.prev_point.isNull() and not self.out_of_pixmap(self.prev_point):
             p.setPen(self._crosshair_color)

@@ -39,6 +39,8 @@ LIGHT_COLORS = {
     'status_no_labels': '#969696',   # Gray
     'status_has_labels': '#4285f4',  # Blue
     'status_verified': '#34a853',    # Green
+    'grid_line': '#cccccc',
+    'alignment_guide': '#4da6ff',
 }
 
 DARK_COLORS = {
@@ -69,6 +71,8 @@ DARK_COLORS = {
     'status_no_labels': '#808080',   # Slightly lighter gray
     'status_has_labels': '#4da6ff',  # Brighter blue
     'status_verified': '#4caf50',    # Brighter green
+    'grid_line': '#404040',
+    'alignment_guide': '#4da6ff',
 }
 
 

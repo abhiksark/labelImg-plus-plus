@@ -1,6 +1,22 @@
 History
 =======
 
+2.2.0 (2026-03-05)
+------------------
+
+* Add Clear Recent Files option to File > Open Recent menu (#14)
+* Add Review Lock: prevent editing verified images via View > Lock on Verify (#22)
+* Add Batch Verify/Unverify dialog under Tools menu (#22)
+* Add status filter (All/Annotated/Verified/Unannotated) to file list (#22)
+* Add Snap to Grid overlay with configurable grid size (8/16/32/64px) (#18)
+* Add Edge Alignment mode with visual guide lines (#18)
+* Add customizable keyboard shortcuts with full editor dialog (#8)
+* Add shortcut export/import as JSON files (#8)
+* Add Dataset Splitting tool with train/val/test ratios (#21)
+* Add stratified split option for balanced class distribution (#21)
+* Add split manifest JSON generation for reproducibility (#21)
+
+
 2.1.1 (2026-02-05)
 ------------------
 
