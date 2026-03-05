@@ -16,10 +16,11 @@ try:
         QVariant, QObject, QRunnable, QThreadPool, pyqtSignal
     )
     from PyQt5.QtWidgets import (
-        QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
-        QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-        QMainWindow, QMenu, QMessageBox, QProgressDialog, QScrollArea,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+        QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
+        QDockWidget, QFileDialog, QHBoxLayout, QLabel, QListWidget,
+        QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+        QProgressDialog, QScrollArea, QTabWidget, QToolButton,
+        QVBoxLayout, QWidget, QWidgetAction
     )
 except ImportError:
     # needed for py3+qt4
@@ -522,8 +523,20 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_view_tabs.addTab(self.gallery_widget, get_str('galleryView'))
         self.file_view_tabs.currentChanged.connect(self.on_file_view_tab_changed)
 
+        # Status filter combo box
+        self.status_filter_combo = QComboBox()
+        self.status_filter_combo.addItems([
+            get_str('filterAll'),
+            get_str('filterAnnotated'),
+            get_str('filterVerified'),
+            get_str('filterUnannotated'),
+        ])
+        self.status_filter_combo.currentIndexChanged.connect(
+            self.apply_status_filter)
+
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
+        file_list_layout.addWidget(self.status_filter_combo)
         file_list_layout.addWidget(self.file_view_tabs)
         file_list_container = QWidget()
         file_list_container.setLayout(file_list_layout)
@@ -2504,6 +2517,65 @@ class MainWindow(QMainWindow, WindowMixin):
             f"Label fix: '{old_label}' → '{new_label}' (reload to see changes)",
             5000
         )
+
+    def apply_status_filter(self, index):
+        """Filter file list by annotation status.
+
+        Args:
+            index: Filter combo box index. 0=All, 1=Annotated,
+                   2=Verified, 3=Unannotated.
+        """
+        for i in range(self.file_list_widget.count()):
+            item = self.file_list_widget.item(i)
+            img_path = item.text()
+            show = True
+            if index == 1:  # Annotated Only
+                show = self._has_annotation(img_path)
+            elif index == 2:  # Verified Only
+                show = self._is_verified(img_path)
+            elif index == 3:  # Unannotated Only
+                show = not self._has_annotation(img_path)
+            item.setHidden(not show)
+
+    def _has_annotation(self, img_path):
+        """Check if image has an annotation file.
+
+        Args:
+            img_path: Path to the image file.
+
+        Returns:
+            True if an annotation file exists for the image.
+        """
+        basename = os.path.splitext(os.path.basename(img_path))[0]
+        save_dir = self.default_save_dir or os.path.dirname(img_path)
+        for ext in [XML_EXT, TXT_EXT, JSON_EXT]:
+            if os.path.isfile(os.path.join(save_dir, basename + ext)):
+                return True
+            if os.path.isfile(os.path.splitext(img_path)[0] + ext):
+                return True
+        return False
+
+    def _is_verified(self, img_path):
+        """Check if image annotation is verified.
+
+        Args:
+            img_path: Path to the image file.
+
+        Returns:
+            True if the annotation is marked as verified.
+        """
+        basename = os.path.splitext(os.path.basename(img_path))[0]
+        save_dir = self.default_save_dir or os.path.dirname(img_path)
+        xml_path = os.path.join(save_dir, basename + XML_EXT)
+        if not os.path.isfile(xml_path):
+            xml_path = os.path.splitext(img_path)[0] + XML_EXT
+        if os.path.isfile(xml_path):
+            try:
+                reader = PascalVocReader(xml_path)
+                return reader.verified
+            except Exception:
+                pass
+        return False
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
