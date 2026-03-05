@@ -71,10 +71,10 @@ from libs.utils.constants import (
     SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_FILENAME, SETTING_FILL_COLOR, SETTING_GALLERY_MODE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
-    SETTING_LINE_COLOR, SETTING_PAINT_LABEL, SETTING_RECENT_FILES,
-    SETTING_SAVE_DIR, SETTING_SINGLE_CLASS, SETTING_TOOLBAR_EXPANDED,
-    SETTING_WIN_POSE, SETTING_WIN_SIZE, SETTING_WIN_STATE, FORMAT_PASCALVOC,
-    FORMAT_YOLO, FORMAT_CREATEML
+    SETTING_LINE_COLOR, SETTING_LOCK_ON_VERIFY, SETTING_PAINT_LABEL,
+    SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SINGLE_CLASS,
+    SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE, SETTING_WIN_SIZE,
+    SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -778,6 +778,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
+        # Lock on verify: prevent editing when image is verified
+        self.lock_on_verify_option = QAction(get_str('lockOnVerify'), self)
+        self.lock_on_verify_option.setCheckable(True)
+        self.lock_on_verify_option.setChecked(settings.get(SETTING_LOCK_ON_VERIFY, False))
+        self.lock_on_verify_option.toggled.connect(self.toggle_lock_on_verify)
+
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
@@ -900,6 +906,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_save_enabled,
             self.single_class_mode,
             self.display_label_option,
+            self.lock_on_verify_option,
             labels, advanced_mode, gallery_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
@@ -2219,6 +2226,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 # Don't store full image data - saves memory
                 self.image_data = None
 
+            # Apply review lock based on verified state
+            if self.lock_on_verify_option.isChecked():
+                self.canvas.locked = self.canvas.verified
+            else:
+                self.canvas.locked = False
+
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
             self.file_path = unicode_file_path
@@ -2355,6 +2368,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
+        settings[SETTING_LOCK_ON_VERIFY] = self.lock_on_verify_option.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
         settings[SETTING_TOOLBAR_EXPANDED] = self.tools.is_expanded()
         settings[SETTING_DARK_MODE] = self.dark_mode_action.isChecked()
@@ -2571,6 +2585,8 @@ class MainWindow(QMainWindow, WindowMixin):
                     return
 
             self.canvas.verified = self.label_file.verified
+            if self.lock_on_verify_option.isChecked():
+                self.canvas.locked = self.canvas.verified
             self.paint_canvas()
             self.save_file()
             # Update gallery status after verify
@@ -2915,6 +2931,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_draw_square(self):
         self.canvas.set_drawing_shape_to_square(self.draw_squares_option.isChecked())
+
+    def toggle_lock_on_verify(self, checked):
+        if self.canvas and self.canvas.verified and checked:
+            self.canvas.locked = True
+        elif not checked:
+            self.canvas.locked = False
 
     def change_icon_size(self):
         """Change toolbar icon size based on user selection."""
