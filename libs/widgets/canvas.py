@@ -65,6 +65,7 @@ class Canvas(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
         self.verified = False
+        self._locked = False
         self.draw_square = False
 
         # Theme background color for dark mode support
@@ -124,6 +125,19 @@ class Canvas(QWidget):
         self.prev_point = QPointF()
         self.repaint()
 
+    @property
+    def locked(self):
+        return self._locked
+
+    @locked.setter
+    def locked(self, value):
+        self._locked = value
+        if value:
+            self.un_highlight()
+            self.de_select_shape()
+            self.override_cursor(CURSOR_DEFAULT)
+        self.update()
+
     def un_highlight(self, shape=None):
         if shape == None or shape == self.h_shape:
             if self.h_shape:
@@ -135,6 +149,8 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, ev):
         """Update line with last point and current coordinates."""
+        if self._locked:
+            return
         pos = self.transform_pos(ev.pos())
 
         # Update coordinates in status bar if image is opened
@@ -294,6 +310,9 @@ class Canvas(QWidget):
     def mousePressEvent(self, ev):
         pos = self.transform_pos(ev.pos())
 
+        if ev.button() == Qt.LeftButton and self._locked:
+            return
+
         if ev.button() == Qt.LeftButton:
             if self.drawing():
                 self.handle_drawing(pos)
@@ -382,6 +401,8 @@ class Canvas(QWidget):
         return self.drawing() and self.current and len(self.current) > 2
 
     def mouseDoubleClickEvent(self, ev):
+        if self._locked:
+            return
         # We need at least 4 points here, since the mousePress handler
         # adds an extra one before this handler is called.
         if self.can_close_shape() and len(self.current) > 3:
