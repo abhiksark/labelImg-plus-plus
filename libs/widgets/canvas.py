@@ -74,6 +74,12 @@ class Canvas(QWidget):
         self._verified_bg_color = QColor(184, 239, 38, 128)  # Default
         self._crosshair_color = QColor(0, 0, 0)  # Default light mode crosshair
 
+        # Grid and edge alignment state
+        self._grid_enabled = False
+        self._grid_size = 32
+        self._edge_alignment = False
+        self._alignment_guides = []
+
         # initialisation for panning
         self.pan_initial_pos = QPoint()
 
@@ -193,9 +199,10 @@ class Canvas(QWidget):
                     min_size = min(abs(pos.x() - min_x), abs(pos.y() - min_y))
                     direction_x = -1 if pos.x() - min_x < 0 else 1
                     direction_y = -1 if pos.y() - min_y < 0 else 1
-                    self.line[1] = QPointF(min_x + direction_x * min_size, min_y + direction_y * min_size)
+                    square_pos = QPointF(min_x + direction_x * min_size, min_y + direction_y * min_size)
+                    self.line[1] = self.apply_snapping(square_pos)
                 else:
-                    self.line[1] = pos
+                    self.line[1] = self.apply_snapping(pos)
 
                 self.line.line_color = color
                 self.prev_point = QPointF()
@@ -387,9 +394,10 @@ class Canvas(QWidget):
             self.current.add_point(QPointF(min_x, max_y))
             self.finalise()
         elif not self.out_of_pixmap(pos):
+            snapped = self.apply_snapping(pos)
             self.current = Shape()
-            self.current.add_point(pos)
-            self.line.points = [pos, pos]
+            self.current.add_point(snapped)
+            self.line.points = [snapped, snapped]
             self.set_hiding()
             self.drawingPolygon.emit(True)
             self.update()
@@ -465,6 +473,42 @@ class Canvas(QWidget):
 
         return x, y, False
 
+    def snap_to_grid(self, pos):
+        """Snap a point to the nearest grid intersection."""
+        if not self._grid_enabled or self._grid_size <= 0:
+            return pos
+        gs = self._grid_size
+        x = round(pos.x() / gs) * gs
+        y = round(pos.y() / gs) * gs
+        return QPointF(x, y)
+
+    def snap_to_edges(self, pos, exclude_shape=None):
+        """Snap point to nearby edges of existing shapes."""
+        if not self._edge_alignment:
+            return pos
+        threshold = 5.0 / self.scale if self.scale else 5.0
+        self._alignment_guides = []
+        snapped_x, snapped_y = pos.x(), pos.y()
+
+        for shape in self.shapes:
+            if shape is exclude_shape:
+                continue
+            for point in shape.points:
+                if abs(pos.x() - point.x()) < threshold:
+                    snapped_x = point.x()
+                    self._alignment_guides.append(('v', point.x()))
+                if abs(pos.y() - point.y()) < threshold:
+                    snapped_y = point.y()
+                    self._alignment_guides.append(('h', point.y()))
+
+        return QPointF(snapped_x, snapped_y)
+
+    def apply_snapping(self, pos, exclude_shape=None):
+        """Apply all active snapping modes to a position."""
+        pos = self.snap_to_grid(pos)
+        pos = self.snap_to_edges(pos, exclude_shape)
+        return pos
+
     def bounded_move_vertex(self, pos):
         index, shape = self.h_vertex, self.h_shape
         point = shape[index]
@@ -473,6 +517,8 @@ class Canvas(QWidget):
             clipped_x = min(max(0, pos.x()), size.width())
             clipped_y = min(max(0, pos.y()), size.height())
             pos = QPointF(clipped_x, clipped_y)
+
+        pos = self.apply_snapping(pos, exclude_shape=shape)
 
         if self.draw_square:
             opposite_point_index = (index + 2) % 4
