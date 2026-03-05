@@ -1031,7 +1031,11 @@ class MainWindow(QMainWindow, WindowMixin):
         batch_verify_action = action(
             get_str('batchVerify'), self.batch_verify,
             None, 'verify', get_str('batchVerifyDetail'))
-        add_actions(self.menus.tools, (check_labels, batch_verify_action))
+        split_dataset_action = action(
+            get_str('splitDataset'), self.split_dataset,
+            None, 'file', get_str('splitDatasetDetail'))
+        add_actions(self.menus.tools, (
+            check_labels, batch_verify_action, split_dataset_action))
 
         # Custom context menu for the canvas widget:
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
@@ -2721,6 +2725,57 @@ class MainWindow(QMainWindow, WindowMixin):
             f'{action_label} {count} images', 3000)
         if self.file_path:
             self.load_file(self.file_path)
+
+    def split_dataset(self):
+        """Open dialog to split dataset into train/val/test sets."""
+        if not self.m_img_list:
+            QMessageBox.warning(
+                self, 'Split Dataset',
+                'No images loaded. Open a directory first.')
+            return
+
+        from libs.widgets.splitDialog import SplitDialog
+        default_dir = self.default_save_dir or (
+            os.path.dirname(self.m_img_list[0]) if self.m_img_list else '')
+        dialog = SplitDialog(self, len(self.m_img_list), default_dir)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        if not dialog.output_dir:
+            QMessageBox.warning(
+                self, 'Split Dataset',
+                'Please select an output directory.')
+            return
+
+        from libs.tools.dataset_splitter import split_dataset, execute_split
+
+        splits = split_dataset(
+            self.m_img_list,
+            dialog.ratios,
+            seed=dialog.seed,
+            stratified=dialog.stratified,
+            save_dir=self.default_save_dir,
+        )
+
+        manifest_path = execute_split(
+            splits,
+            dialog.output_dir,
+            save_dir=self.default_save_dir,
+            copy=dialog.copy_mode,
+        )
+
+        counts = {k: len(v) for k, v in splits.items()}
+        QMessageBox.information(
+            self, 'Split Complete',
+            f'Dataset split into:\n'
+            f'  Train: {counts["train"]} images\n'
+            f'  Val: {counts["val"]} images\n'
+            f'  Test: {counts["test"]} images\n\n'
+            f'Manifest: {manifest_path}'
+        )
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
