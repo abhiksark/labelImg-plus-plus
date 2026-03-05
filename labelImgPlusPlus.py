@@ -17,8 +17,8 @@ try:
     )
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
-        QDockWidget, QFileDialog, QHBoxLayout, QLabel, QListWidget,
-        QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+        QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
+        QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
         QProgressDialog, QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
@@ -947,7 +947,10 @@ class MainWindow(QMainWindow, WindowMixin):
         # Tools menu actions
         check_labels = action('Check Label &Consistency', self.check_label_consistency,
                               'Ctrl+Shift+L', 'verify', 'Check for typos and inconsistent labels in dataset')
-        add_actions(self.menus.tools, (check_labels,))
+        batch_verify_action = action(
+            get_str('batchVerify'), self.batch_verify,
+            None, 'verify', get_str('batchVerifyDetail'))
+        add_actions(self.menus.tools, (check_labels, batch_verify_action))
 
         # Custom context menu for the canvas widget:
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
@@ -2576,6 +2579,54 @@ class MainWindow(QMainWindow, WindowMixin):
             except Exception:
                 pass
         return False
+
+    def batch_verify(self):
+        """Open dialog to batch verify or unverify all annotated images."""
+        if not self.m_img_list:
+            return
+
+        annotated = sum(
+            1 for img in self.m_img_list if self._has_annotation(img))
+
+        from libs.widgets.batchVerifyDialog import BatchVerifyDialog
+        dialog = BatchVerifyDialog(
+            self, len(self.m_img_list), annotated)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        verify = dialog.verify_mode
+        count = 0
+        for img_path in self.m_img_list:
+            if not self._has_annotation(img_path):
+                continue
+            basename = os.path.splitext(os.path.basename(img_path))[0]
+            save_dir = self.default_save_dir or os.path.dirname(img_path)
+            xml_path = os.path.join(save_dir, basename + XML_EXT)
+            if not os.path.isfile(xml_path):
+                xml_path = os.path.splitext(img_path)[0] + XML_EXT
+            if os.path.isfile(xml_path):
+                try:
+                    import xml.etree.ElementTree as ET
+                    tree = ET.parse(xml_path)
+                    root = tree.getroot()
+                    if verify:
+                        root.set('verified', 'yes')
+                    else:
+                        if 'verified' in root.attrib:
+                            del root.attrib['verified']
+                    tree.write(xml_path)
+                    count += 1
+                except Exception:
+                    pass
+
+        action_label = 'Verified' if verify else 'Unverified'
+        self.statusBar().showMessage(
+            f'{action_label} {count} images', 3000)
+        if self.file_path:
+            self.load_file(self.file_path)
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
