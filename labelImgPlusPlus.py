@@ -1506,6 +1506,17 @@ class MainWindow(QMainWindow, WindowMixin):
             action.triggered.connect(partial(self.load_recent, f))
             menu.addAction(action)
 
+        # Add clear option if there are recent files
+        if files:
+            menu.addSeparator()
+            clear_action = QAction(get_str('clearRecentFiles'), self)
+            clear_action.triggered.connect(self.clear_recent_files)
+            menu.addAction(clear_action)
+
+    def clear_recent_files(self):
+        self.recent_files.clear()
+        self.update_file_menu()
+
     def pop_label_list_menu(self, point):
         self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
 
