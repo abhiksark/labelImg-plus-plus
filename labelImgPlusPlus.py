@@ -70,7 +70,8 @@ from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
 from libs.utils.constants import (
     SETTING_ADVANCE_MODE, SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
     SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
-    SETTING_FILENAME, SETTING_FILL_COLOR, SETTING_GALLERY_MODE,
+    SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
+    SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
     SETTING_LINE_COLOR, SETTING_LOCK_ON_VERIFY, SETTING_PAINT_LABEL,
     SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SINGLE_CLASS,
@@ -797,6 +798,34 @@ class MainWindow(QMainWindow, WindowMixin):
         self.lock_on_verify_option.setChecked(settings.get(SETTING_LOCK_ON_VERIFY, False))
         self.lock_on_verify_option.toggled.connect(self.toggle_lock_on_verify)
 
+        # Grid overlay toggle
+        self.show_grid_option = QAction(get_str('showGrid'), self)
+        self.show_grid_option.setShortcut('Ctrl+Shift+G')
+        self.show_grid_option.setCheckable(True)
+        self.show_grid_option.setChecked(settings.get(SETTING_GRID_ENABLED, False))
+        self.show_grid_option.toggled.connect(self.toggle_grid)
+
+        # Edge alignment toggle
+        self.edge_alignment_option = QAction(get_str('edgeAlignment'), self)
+        self.edge_alignment_option.setCheckable(True)
+        self.edge_alignment_option.setChecked(settings.get(SETTING_EDGE_ALIGNMENT, False))
+        self.edge_alignment_option.toggled.connect(self.toggle_edge_alignment)
+
+        # Grid size submenu
+        self.grid_size_menu = QMenu(get_str('gridSize'), self)
+        self.grid_size_group = QActionGroup(self)
+        self.grid_size_group.setExclusive(True)
+        saved_grid_size = settings.get(SETTING_GRID_SIZE, 32)
+        for size in [8, 16, 32, 64]:
+            size_action = QAction(f'{size}px', self)
+            size_action.setCheckable(True)
+            size_action.setData(size)
+            if size == saved_grid_size:
+                size_action.setChecked(True)
+            size_action.triggered.connect(self._set_grid_size)
+            self.grid_size_group.addAction(size_action)
+            self.grid_size_menu.addAction(size_action)
+
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
@@ -927,6 +956,10 @@ class MainWindow(QMainWindow, WindowMixin):
             light_brighten, light_darken, light_org, None))
         self.menus.view.addMenu(self.auto_save_interval_menu)
         self.menus.view.addMenu(self.icon_size_menu)
+        self.menus.view.addSeparator()
+        self.menus.view.addAction(self.show_grid_option)
+        self.menus.view.addMenu(self.grid_size_menu)
+        self.menus.view.addAction(self.edge_alignment_option)
 
         # Dark mode toggle
         self.dark_mode_action = QAction('&Dark Mode', self)
@@ -2256,6 +2289,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.load_labels(self.label_file.shapes)
             self.set_clean()
             self.canvas.setEnabled(True)
+            if hasattr(self, 'show_grid_option'):
+                self.canvas._grid_enabled = self.show_grid_option.isChecked()
+                checked_action = self.grid_size_group.checkedAction()
+                self.canvas._grid_size = checked_action.data() if checked_action else 32
+                self.canvas._edge_alignment = self.edge_alignment_option.isChecked()
             self.adjust_scale(initial=True)
             self.paint_canvas()
             self.add_recent_file(self.file_path)
@@ -2388,6 +2426,9 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
         settings[SETTING_TOOLBAR_EXPANDED] = self.tools.is_expanded()
         settings[SETTING_DARK_MODE] = self.dark_mode_action.isChecked()
+        settings[SETTING_GRID_ENABLED] = self.show_grid_option.isChecked()
+        settings[SETTING_GRID_SIZE] = self.canvas._grid_size if self.canvas else 32
+        settings[SETTING_EDGE_ALIGNMENT] = self.edge_alignment_option.isChecked()
         settings.save()
 
     def load_recent(self, filename):
@@ -3060,6 +3101,21 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.locked = True
         elif not checked:
             self.canvas.locked = False
+
+    def toggle_grid(self, checked):
+        if self.canvas:
+            self.canvas._grid_enabled = checked
+            self.canvas.update()
+
+    def toggle_edge_alignment(self, checked):
+        if self.canvas:
+            self.canvas._edge_alignment = checked
+
+    def _set_grid_size(self):
+        action = self.grid_size_group.checkedAction()
+        if action and self.canvas:
+            self.canvas._grid_size = action.data()
+            self.canvas.update()
 
     def change_icon_size(self):
         """Change toolbar icon size based on user selection."""
