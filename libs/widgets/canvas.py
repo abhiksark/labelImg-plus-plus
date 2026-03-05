@@ -2,7 +2,7 @@
 """Canvas widget for drawing and editing bounding box annotations."""
 
 try:
-    from PyQt5.QtGui import QColor, QPixmap, QPainter, QCursor, QBrush
+    from PyQt5.QtGui import QColor, QPixmap, QPainter, QCursor, QBrush, QPen
     from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint
     from PyQt5.QtWidgets import QWidget, QMenu, QApplication
 except ImportError:
@@ -650,6 +650,34 @@ class Canvas(QWidget):
             brush = QBrush(Qt.BDiagPattern)
             p.setBrush(brush)
             p.drawRect(int(left_top.x()), int(left_top.y()), int(rect_width), int(rect_height))
+
+        # Draw grid overlay
+        if self._grid_enabled and self.pixmap and self._grid_size > 0:
+            from libs.utils.styles import get_theme_colors, hex_to_qcolor
+            colors = get_theme_colors(getattr(self, '_theme', None))
+            grid_color = hex_to_qcolor(colors.get('grid_line', '#cccccc'), alpha=80)
+            p.setPen(grid_color)
+            gs = self._grid_size
+            w, h = self.pixmap.width(), self.pixmap.height()
+            for x in range(0, w + 1, gs):
+                p.drawLine(x, 0, x, h)
+            for y in range(0, h + 1, gs):
+                p.drawLine(0, y, w, y)
+
+        # Draw alignment guides
+        if self._alignment_guides:
+            from libs.utils.styles import get_theme_colors, hex_to_qcolor
+            colors = get_theme_colors(getattr(self, '_theme', None))
+            guide_color = hex_to_qcolor(colors.get('alignment_guide', '#4da6ff'))
+            pen = QPen(guide_color, 1, Qt.DashLine)
+            p.setPen(pen)
+            w, h = self.pixmap.width(), self.pixmap.height()
+            for orientation, position in self._alignment_guides:
+                if orientation == 'v':
+                    p.drawLine(int(position), 0, int(position), h)
+                else:
+                    p.drawLine(0, int(position), w, int(position))
+            self._alignment_guides = []
 
         if self.drawing() and not self.prev_point.isNull() and not self.out_of_pixmap(self.prev_point):
             p.setPen(self._crosshair_color)
