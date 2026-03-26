@@ -1678,7 +1678,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add clear option if there are recent files
         if files:
             menu.addSeparator()
-            clear_action = QAction(get_str('clearRecentFiles'), self)
+            clear_action = QAction(self.string_bundle.get_string('clearRecentFiles'), self)
             clear_action.triggered.connect(self.clear_recent_files)
             menu.addAction(clear_action)
 
