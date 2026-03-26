@@ -59,6 +59,7 @@ class Shape(object):
         self.difficult = difficult
         self.paint_label = paint_label
         self.shape_type = shape_type
+        self.keypoints = None
 
         self._highlight_index = None
         self._highlight_mode = self.NEAR_VERTEX
@@ -160,6 +161,13 @@ class Shape(object):
                 best_index = i
                 best_dist = dist
         return best_index
+
+    @property
+    def num_keypoints(self):
+        """Count of keypoints with visibility > 0."""
+        if not self.keypoints:
+            return 0
+        return sum(1 for kp in self.keypoints if kp is not None and kp[2] > 0)
 
     def is_closed(self):
         return self._closed
@@ -275,6 +283,12 @@ class Shape(object):
 
     def move_by(self, offset):
         self.points = [p + offset for p in self.points]
+        if self.keypoints:
+            self.keypoints = [
+                (kp[0] + offset.x(), kp[1] + offset.y(), kp[2])
+                if kp is not None else None
+                for kp in self.keypoints
+            ]
 
     def move_vertex_by(self, i, offset):
         self.points[i] = self.points[i] + offset
@@ -297,6 +311,8 @@ class Shape(object):
         if self.fill_color != Shape.fill_color:
             shape.fill_color = self.fill_color
         shape.difficult = self.difficult
+        if self.keypoints is not None:
+            shape.keypoints = list(self.keypoints)
         return shape
 
     def __len__(self):

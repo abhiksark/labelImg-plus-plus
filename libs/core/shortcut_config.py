@@ -45,6 +45,7 @@ DEFAULT_SHORTCUTS = {
     'edit_label': 'Ctrl+E',
     'show_grid': 'Ctrl+Shift+G',
     'create_polygon': 'P',
+    'keypoint_mode': 'K',
 }
 
 
