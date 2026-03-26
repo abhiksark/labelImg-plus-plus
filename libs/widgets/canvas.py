@@ -11,7 +11,7 @@ except ImportError:
     )
     from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint
 
-from libs.core.shape import Shape
+from libs.core.shape import Shape, ShapeType
 from libs.utils.utils import distance
 from libs.utils.styles import Theme
 
@@ -31,7 +31,7 @@ class Canvas(QWidget):
     shapeMoved = pyqtSignal()
     drawingPolygon = pyqtSignal(bool)
 
-    CREATE, EDIT = list(range(2))
+    CREATE, EDIT, CREATE_POLYGON = list(range(3))
 
     epsilon = 24.0
 
@@ -83,6 +83,10 @@ class Canvas(QWidget):
         # initialisation for panning
         self.pan_initial_pos = QPoint()
 
+        # Freehand polygon drawing state
+        self._freehand_active = False
+        self._freehand_points = []
+
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
         self.drawing_rect_color = qcolor
@@ -118,14 +122,25 @@ class Canvas(QWidget):
         return self.visible.get(shape, True)
 
     def drawing(self):
-        return self.mode == self.CREATE
+        return self.mode in (self.CREATE, self.CREATE_POLYGON)
 
     def editing(self):
         return self.mode == self.EDIT
 
+    def drawing_polygon(self):
+        return self.mode == self.CREATE_POLYGON
+
     def set_editing(self, value=True):
         self.mode = self.EDIT if value else self.CREATE
         if not value:  # Create
+            self.un_highlight()
+            self.de_select_shape()
+        self.prev_point = QPointF()
+        self.repaint()
+
+    def set_polygon_drawing(self, value=True):
+        self.mode = self.CREATE_POLYGON if value else self.EDIT
+        if value:
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
@@ -169,44 +184,62 @@ class Canvas(QWidget):
         if self.drawing():
             self.override_cursor(CURSOR_DRAW)
             if self.current:
-                # Display annotation width and height while drawing
-                current_width = abs(self.current[0].x() - pos.x())
-                current_height = abs(self.current[0].y() - pos.y())
-                self.parent().window().label_coordinates.setText(
-                        'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
-
                 color = self.drawing_line_color
-                if self.out_of_pixmap(pos):
-                    # Don't allow the user to draw outside the pixmap.
-                    # Clip the coordinates to 0 or max,
-                    # if they are outside the range [0, max]
-                    size = self.pixmap.size()
-                    clipped_x = min(max(0, pos.x()), size.width())
-                    clipped_y = min(max(0, pos.y()), size.height())
-                    pos = QPointF(clipped_x, clipped_y)
-                elif len(self.current) > 1 and self.close_enough(pos, self.current[0]):
-                    # Attract line to starting point and colorise to alert the
-                    # user:
-                    pos = self.current[0]
-                    color = self.current.line_color
-                    self.override_cursor(CURSOR_POINT)
-                    self.current.highlight_vertex(0, Shape.NEAR_VERTEX)
 
-                if self.draw_square:
-                    init_pos = self.current[0]
-                    min_x = init_pos.x()
-                    min_y = init_pos.y()
-                    min_size = min(abs(pos.x() - min_x), abs(pos.y() - min_y))
-                    direction_x = -1 if pos.x() - min_x < 0 else 1
-                    direction_y = -1 if pos.y() - min_y < 0 else 1
-                    square_pos = QPointF(min_x + direction_x * min_size, min_y + direction_y * min_size)
-                    self.line[1] = self.apply_snapping(square_pos)
-                else:
+                if self.mode == self.CREATE_POLYGON:
+                    # Polygon mode: show close indicator near first vertex
+                    if len(self.current) >= 3 and self.close_enough(pos, self.current[0]):
+                        pos = self.current[0]
+                        color = self.current.line_color
+                        self.override_cursor(CURSOR_POINT)
+                        self.current.highlight_vertex(0, Shape.NEAR_VERTEX)
                     self.line[1] = self.apply_snapping(pos)
+                    self.line.line_color = color
+                    self.current.highlight_clear()
 
-                self.line.line_color = color
-                self.prev_point = QPointF()
-                self.current.highlight_clear()
+                    # Update status bar with vertex count
+                    window = self.parent().window()
+                    if hasattr(window, 'label_coordinates'):
+                        window.label_coordinates.setText(
+                            'Vertices: %d / X: %d; Y: %d' % (len(self.current), pos.x(), pos.y()))
+                else:
+                    # Rectangle mode: display annotation width and height while drawing
+                    current_width = abs(self.current[0].x() - pos.x())
+                    current_height = abs(self.current[0].y() - pos.y())
+                    self.parent().window().label_coordinates.setText(
+                            'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
+
+                    if self.out_of_pixmap(pos):
+                        # Don't allow the user to draw outside the pixmap.
+                        # Clip the coordinates to 0 or max,
+                        # if they are outside the range [0, max]
+                        size = self.pixmap.size()
+                        clipped_x = min(max(0, pos.x()), size.width())
+                        clipped_y = min(max(0, pos.y()), size.height())
+                        pos = QPointF(clipped_x, clipped_y)
+                    elif len(self.current) > 1 and self.close_enough(pos, self.current[0]):
+                        # Attract line to starting point and colorise to alert the
+                        # user:
+                        pos = self.current[0]
+                        color = self.current.line_color
+                        self.override_cursor(CURSOR_POINT)
+                        self.current.highlight_vertex(0, Shape.NEAR_VERTEX)
+
+                    if self.draw_square:
+                        init_pos = self.current[0]
+                        min_x = init_pos.x()
+                        min_y = init_pos.y()
+                        min_size = min(abs(pos.x() - min_x), abs(pos.y() - min_y))
+                        direction_x = -1 if pos.x() - min_x < 0 else 1
+                        direction_y = -1 if pos.y() - min_y < 0 else 1
+                        square_pos = QPointF(min_x + direction_x * min_size, min_y + direction_y * min_size)
+                        self.line[1] = self.apply_snapping(square_pos)
+                    else:
+                        self.line[1] = self.apply_snapping(pos)
+
+                    self.line.line_color = color
+                    self.prev_point = QPointF()
+                    self.current.highlight_clear()
             else:
                 self.prev_point = pos
             self.repaint()
@@ -382,6 +415,11 @@ class Canvas(QWidget):
             self.repaint()
 
     def handle_drawing(self, pos):
+        if self.mode == self.CREATE_POLYGON:
+            self._handle_polygon_drawing(pos)
+            return
+
+        # Original rectangle drawing logic (unchanged)
         if self.current and self.current.reach_max_points() is False:
             init_pos = self.current[0]
             min_x = init_pos.x()
@@ -402,6 +440,29 @@ class Canvas(QWidget):
             self.drawingPolygon.emit(True)
             self.update()
 
+    def _handle_polygon_drawing(self, pos):
+        """Handle click-to-place polygon vertex."""
+        if self.out_of_pixmap(pos):
+            return
+        snapped = self.apply_snapping(pos)
+
+        if self.current is None:
+            # First vertex
+            self.current = Shape(shape_type=ShapeType.POLYGON)
+            self.current.add_point(snapped)
+            self.line.points = [snapped, snapped]
+            self.set_hiding()
+            self.drawingPolygon.emit(True)
+            self.update()
+        elif self.close_enough(snapped, self.current[0]) and len(self.current) >= 3:
+            # Close polygon — clicked near first vertex
+            self.finalise()
+        else:
+            # Add vertex
+            self.current.add_point(snapped)
+            self.line.points = [snapped, snapped]
+            self.update()
+
     def set_hiding(self, enable=True):
         self._hide_background = self.hide_background if enable else False
 
@@ -411,9 +472,12 @@ class Canvas(QWidget):
     def mouseDoubleClickEvent(self, ev):
         if self._locked:
             return
-        # We need at least 4 points here, since the mousePress handler
-        # adds an extra one before this handler is called.
-        if self.can_close_shape() and len(self.current) > 3:
+        if self.mode == self.CREATE_POLYGON and self.current and len(self.current) >= 3:
+            # Close polygon on double-click
+            self.finalise()
+        elif self.can_close_shape() and len(self.current) > 3:
+            # We need at least 4 points here, since the mousePress handler
+            # adds an extra one before this handler is called.
             self.current.pop_point()
             self.finalise()
 
@@ -640,16 +704,25 @@ class Canvas(QWidget):
         if self.selected_shape_copy:
             self.selected_shape_copy.paint(p)
 
-        # Paint rect
+        # Paint rect / polygon preview
         if self.current is not None and len(self.line) == 2:
-            left_top = self.line[0]
-            right_bottom = self.line[1]
-            rect_width = right_bottom.x() - left_top.x()
-            rect_height = right_bottom.y() - left_top.y()
-            p.setPen(self.drawing_rect_color)
-            brush = QBrush(Qt.BDiagPattern)
-            p.setBrush(brush)
-            p.drawRect(int(left_top.x()), int(left_top.y()), int(rect_width), int(rect_height))
+            if self.mode == self.CREATE_POLYGON:
+                # Draw dotted line from cursor back to first vertex (close preview)
+                if len(self.current) >= 2:
+                    pen = QPen(self.drawing_line_color, 1, Qt.DashLine)
+                    p.setPen(pen)
+                    p.drawLine(self.line[1], self.current[0])
+            else:
+                # Rectangle preview
+                left_top = self.line[0]
+                right_bottom = self.line[1]
+                rect_width = right_bottom.x() - left_top.x()
+                rect_height = right_bottom.y() - left_top.y()
+                p.setPen(self.drawing_rect_color)
+                brush = QBrush(Qt.BDiagPattern)
+                p.setBrush(brush)
+                p.drawRect(int(left_top.x()), int(left_top.y()),
+                           int(rect_width), int(rect_height))
 
         # Draw grid overlay
         if self._grid_enabled and self.pixmap and self._grid_size > 0:
@@ -765,13 +838,21 @@ class Canvas(QWidget):
 
     def keyPressEvent(self, ev):
         key = ev.key()
+        mods = ev.modifiers()
+
         if key == Qt.Key_Escape and self.current:
-            print('ESC press')
             self.current = None
             self.drawingPolygon.emit(False)
             self.update()
         elif key == Qt.Key_Return and self.can_close_shape():
             self.finalise()
+        elif (key == Qt.Key_Z and mods == Qt.ControlModifier
+              and self.mode == self.CREATE_POLYGON
+              and self.current and len(self.current) > 1):
+            # Undo last vertex during polygon drawing
+            self.current.pop_point()
+            self.line.points = [self.current[-1], self.line[1]]
+            self.update()
         elif key == Qt.Key_Left and self.selected_shape:
             self.move_one_pixel('Left')
         elif key == Qt.Key_Right and self.selected_shape:
