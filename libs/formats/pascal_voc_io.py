@@ -80,6 +80,20 @@ class PascalVocWriter:
         bnd_box['difficult'] = difficult
         self.box_list.append(bnd_box)
 
+    def add_polygon(self, points, name, difficult):
+        """Add a polygon annotation. points is list of (x, y) tuples."""
+        x_min = min(p[0] for p in points)
+        y_min = min(p[1] for p in points)
+        x_max = max(p[0] for p in points)
+        y_max = max(p[1] for p in points)
+        entry = {
+            'xmin': int(x_min), 'ymin': int(y_min),
+            'xmax': int(x_max), 'ymax': int(y_max),
+            'name': name, 'difficult': difficult,
+            'polygon_points': points,
+        }
+        self.box_list.append(entry)
+
     def append_objects(self, top):
         for each_object in self.box_list:
             object_item = SubElement(top, 'object')
@@ -105,6 +119,15 @@ class PascalVocWriter:
             x_max.text = str(each_object['xmax'])
             y_max = SubElement(bnd_box, 'ymax')
             y_max.text = str(each_object['ymax'])
+            # Emit polygon points if present
+            if 'polygon_points' in each_object:
+                polygon_elem = SubElement(object_item, 'polygon')
+                for px, py in each_object['polygon_points']:
+                    pt = SubElement(polygon_elem, 'pt')
+                    x_elem = SubElement(pt, 'x')
+                    x_elem.text = str(int(px))
+                    y_elem = SubElement(pt, 'y')
+                    y_elem.text = str(int(py))
 
     def save(self, target_file=None):
         root = self.gen_xml()
@@ -133,7 +156,7 @@ class PascalVocReader:
             self.parse_xml()
         except FileNotFoundError:
             raise FileNotFoundError(f"Annotation file not found: {file_path}")
-        except ET.ParseError as e:
+        except ElementTree.ParseError as e:
             raise ValueError(f"Invalid XML in annotation file: {file_path}\nError: {e}")
         except Exception as e:
             raise ValueError(f"Error parsing annotation file: {file_path}\nError: {e}")
@@ -141,13 +164,21 @@ class PascalVocReader:
     def get_shapes(self):
         return self.shapes
 
-    def add_shape(self, label, bnd_box, difficult):
-        x_min = int(float(bnd_box.find('xmin').text))
-        y_min = int(float(bnd_box.find('ymin').text))
-        x_max = int(float(bnd_box.find('xmax').text))
-        y_max = int(float(bnd_box.find('ymax').text))
-        points = [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
-        self.shapes.append((label, points, None, None, difficult))
+    def add_shape(self, label, bnd_box, difficult, polygon_elem=None):
+        if polygon_elem is not None:
+            points = []
+            for pt in polygon_elem.findall('pt'):
+                x = int(float(pt.find('x').text))
+                y = int(float(pt.find('y').text))
+                points.append((x, y))
+            self.shapes.append((label, points, None, None, difficult, 'polygon'))
+        else:
+            x_min = int(float(bnd_box.find('xmin').text))
+            y_min = int(float(bnd_box.find('ymin').text))
+            x_max = int(float(bnd_box.find('xmax').text))
+            y_max = int(float(bnd_box.find('ymax').text))
+            points = [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
+            self.shapes.append((label, points, None, None, difficult, 'rectangle'))
 
     def parse_xml(self):
         assert self.file_path.endswith(XML_EXT), "Unsupported file format"
@@ -164,9 +195,9 @@ class PascalVocReader:
         for object_iter in xml_tree.findall('object'):
             bnd_box = object_iter.find("bndbox")
             label = object_iter.find('name').text
-            # Add chris
             difficult = False
             if object_iter.find('difficult') is not None:
                 difficult = bool(int(object_iter.find('difficult').text))
-            self.add_shape(label, bnd_box, difficult)
+            polygon_elem = object_iter.find('polygon')
+            self.add_shape(label, bnd_box, difficult, polygon_elem)
         return True

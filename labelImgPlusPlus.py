@@ -54,9 +54,10 @@ from libs.widgets.toolBar import ToolBar, DropdownToolButton
 from libs.widgets.galleryWidget import GalleryWidget, AnnotationStatus
 from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
+from libs.widgets.keypointPanel import KeypointPanel
 
 # Core
-from libs.core.shape import Shape, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
+from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
 from libs.core.settings import Settings
 from libs.core.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
 from libs.core.shortcut_config import ShortcutConfig
@@ -66,6 +67,8 @@ from libs.formats.labelFile import LabelFile, LabelFileError, LabelFileFormat
 from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
 from libs.formats.yolo_io import YoloReader, TXT_EXT
 from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
+from libs.formats.coco_io import COCOReader
+from libs.formats.yolo_seg_io import YOLOSegReader
 
 # Utils
 from libs.utils.constants import (
@@ -78,7 +81,8 @@ from libs.utils.constants import (
     SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SHORTCUTS,
     SETTING_SINGLE_CLASS,
     SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE, SETTING_WIN_SIZE,
-    SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML
+    SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
+    FORMAT_COCO, FORMAT_YOLO_SEG
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -496,18 +500,32 @@ class MainWindow(QMainWindow, WindowMixin):
         self.combo_box = ComboBox(self)
         list_layout.addWidget(self.combo_box)
 
-        # Create and add a widget for showing current label items
-        self.label_list = QListWidget()
+        # Create tabbed label lists for rectangles and polygons
+        self.label_tab_widget = QTabWidget()
+        self.rect_label_list = QListWidget()
+        self.poly_label_list = QListWidget()
+        self.label_tab_widget.addTab(self.rect_label_list, 'Rectangles (0)')
+        self.label_tab_widget.addTab(self.poly_label_list, 'Polygons (0)')
+
+        # Keep self.label_list as alias to rect list for backward compatibility
+        self.label_list = self.rect_label_list
+
         label_list_container = QWidget()
         label_list_container.setLayout(list_layout)
-        self.label_list.itemActivated.connect(self.label_selection_changed)
-        self.label_list.itemSelectionChanged.connect(self.label_selection_changed)
-        self.label_list.itemDoubleClicked.connect(self.edit_label)
-        # Connect to itemChanged to detect checkbox changes.
-        self.label_list.itemChanged.connect(self.label_item_changed)
-        list_layout.addWidget(self.label_list)
 
+        # Connect signals for both label lists
+        for lw in (self.rect_label_list, self.poly_label_list):
+            lw.itemActivated.connect(self.label_selection_changed)
+            lw.itemSelectionChanged.connect(self.label_selection_changed)
+            lw.itemDoubleClicked.connect(self.edit_label)
+            lw.itemChanged.connect(self.label_item_changed)
 
+        list_layout.addWidget(self.label_tab_widget)
+
+        # Keypoint annotation panel (shown for person shapes)
+        self.keypoint_panel = KeypointPanel()
+        self.keypoint_panel.keypointClicked.connect(self._on_keypoint_panel_click)
+        list_layout.addWidget(self.keypoint_panel)
 
         self.dock = QDockWidget(get_str('boxLabelText'), self)
         self.dock.setObjectName(get_str('labels'))
@@ -574,6 +592,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.canvas.newShape.connect(self.new_shape)
         self.canvas.shapeMoved.connect(self.set_dirty)
+        self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -634,15 +653,19 @@ class MainWindow(QMainWindow, WindowMixin):
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
 
         def get_format_meta(format):
-            """
-            returns a tuple containing (title, icon_name) of the selected format
-            """
+            """Return a tuple containing (title, icon_name) of the selected format."""
             if format == LabelFileFormat.PASCAL_VOC:
                 return '&PascalVOC', 'format_voc'
             elif format == LabelFileFormat.YOLO:
                 return '&YOLO', 'format_yolo'
             elif format == LabelFileFormat.CREATE_ML:
                 return '&CreateML', 'format_createml'
+            elif format == LabelFileFormat.COCO:
+                return '&COCO', 'format_createml'
+            elif format == LabelFileFormat.YOLO_SEG:
+                return '&YOLO-seg', 'format_yolo'
+            # Default fallback
+            return '&PascalVOC', 'format_voc'
 
         save_format = action(get_format_meta(self.label_file_format)[0],
                              self.change_format, self.shortcut_config.get('save_format'),
@@ -668,6 +691,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         create = action(get_str('crtBox'), self.create_shape,
                         self.shortcut_config.get('create'), 'new', get_str('crtBoxDetail'), enabled=False)
+        create_polygon = action(get_str('crtPolygon'), self.create_polygon_mode,
+                                self.shortcut_config.get('create_polygon'),
+                                'objects', get_str('crtPolygonDetail'), enabled=False)
+        keypoint_mode_action = action(
+            get_str('addKeypoints'),
+            self.toggle_keypoint_mode,
+            self.shortcut_config.get('keypoint_mode'),
+            'verify',
+            get_str('addKeypointsDetail'),
+            enabled=False)
         delete = action(get_str('delBox'), self.delete_selected_shape,
                         self.shortcut_config.get('delete'), 'delete', get_str('delBoxDetail'), enabled=False)
         copy = action(get_str('dupBox'), self.copy_selected_shape,
@@ -787,9 +820,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Label list context menu.
         label_menu = QMenu()
         add_actions(label_menu, (edit, delete))
-        self.label_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.label_list.customContextMenuRequested.connect(
-            self.pop_label_list_menu)
+        for lw in (self.rect_label_list, self.poly_label_list):
+            lw.setContextMenuPolicy(Qt.CustomContextMenu)
+            lw.customContextMenuRequested.connect(self.pop_label_list_menu)
 
         # Draw squares/rectangles
         self.draw_squares_option = QAction(get_str('drawSquares'), self)
@@ -852,6 +885,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'create_mode': create_mode,
             'edit_mode': edit_mode,
             'create': create,
+            'create_polygon': create_polygon,
             'delete': delete,
             'copy': copy,
             'copy_to_clipboard': copy_to_clipboard,
@@ -872,11 +906,14 @@ class MainWindow(QMainWindow, WindowMixin):
             'light_darken': light_darken,
             'light_org': light_org,
             'edit_label': edit,
+            'keypoint_mode': keypoint_mode_action,
         }
 
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
-                              lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
+                              lineColor=color1, create=create, create_polygon=create_polygon,
+                              keypoint_mode=keypoint_mode_action,
+                              delete=delete, edit=edit, copy=copy,
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
                               copyAllToClipboard=copy_all_to_clipboard,
                               undo=undo, redo=redo,
@@ -892,12 +929,13 @@ class MainWindow(QMainWindow, WindowMixin):
                               beginner=(), advanced=(),
                               editMenu=(undo, redo, None, edit, copy, copy_to_clipboard,
                                         paste_from_clipboard, copy_all_to_clipboard, delete,
+                                        None, keypoint_mode_action,
                                         None, color1, self.draw_squares_option),
-                              beginnerContext=(create, edit, copy, copy_to_clipboard, paste_from_clipboard, delete),
+                              beginnerContext=(create, create_polygon, edit, copy, copy_to_clipboard, paste_from_clipboard, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy, copy_to_clipboard,
                                                paste_from_clipboard, delete, shape_line_color, shape_fill_color),
                               onLoadActive=(
-                                  close, create, create_mode, edit_mode),
+                                  close, create, create_polygon, create_mode, edit_mode),
                               onShapesPresent=(save_as, hide_all, show_all))
 
         self.menus = Struct(
@@ -1059,13 +1097,15 @@ class MainWindow(QMainWindow, WindowMixin):
         )
 
         self.actions.beginner = (
-            file_dropdown, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
+            file_dropdown, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None,
+            create, create_polygon, keypoint_mode_action, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
             brightness_dropdown)
 
         self.actions.advanced = (
             file_dropdown, gallery_mode, None, open_next_image, open_prev_image, save, save_format, None,
             create_mode, edit_mode, None,
+            create_polygon, None,
             hide_all, show_all)
 
         self.statusBar().showMessage('%s started.' % __appname__)
@@ -1208,19 +1248,33 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_file_format = LabelFileFormat.CREATE_ML
             LabelFile.suffix = JSON_EXT
 
+        elif save_format == FORMAT_COCO:
+            self.actions.save_format.setText(FORMAT_COCO)
+            self.actions.save_format.setIcon(themed_icon("format_createml", theme))
+            self.label_file_format = LabelFileFormat.COCO
+            LabelFile.suffix = JSON_EXT
+
+        elif save_format == FORMAT_YOLO_SEG:
+            self.actions.save_format.setText(FORMAT_YOLO_SEG)
+            self.actions.save_format.setIcon(themed_icon("format_yolo", theme))
+            self.label_file_format = LabelFileFormat.YOLO_SEG
+            LabelFile.suffix = TXT_EXT
+
     def change_format(self):
-        # Determine the new format
-        if self.label_file_format == LabelFileFormat.PASCAL_VOC:
-            new_format = FORMAT_YOLO
-            warning = "Switching to YOLO format.\n\nNote: The 'difficult' flag will be lost."
-        elif self.label_file_format == LabelFileFormat.YOLO:
-            new_format = FORMAT_CREATEML
-            warning = "Switching to CreateML format."
-        elif self.label_file_format == LabelFileFormat.CREATE_ML:
-            new_format = FORMAT_PASCALVOC
-            warning = "Switching to PASCAL VOC format."
-        else:
+        """Cycle through annotation formats: VOC -> YOLO -> CreateML -> COCO -> YOLO-seg -> VOC."""
+        format_cycle = {
+            LabelFileFormat.PASCAL_VOC: (FORMAT_YOLO, "Switching to YOLO format.\n\nNote: The 'difficult' flag will be lost."),
+            LabelFileFormat.YOLO: (FORMAT_CREATEML, "Switching to CreateML format."),
+            LabelFileFormat.CREATE_ML: (FORMAT_COCO, "Switching to COCO format.\n\nSupports polygon annotations natively."),
+            LabelFileFormat.COCO: (FORMAT_YOLO_SEG, "Switching to YOLO-seg format.\n\nSupports polygon annotations natively."),
+            LabelFileFormat.YOLO_SEG: (FORMAT_PASCALVOC, "Switching to PASCAL VOC format."),
+        }
+
+        entry = format_cycle.get(self.label_file_format)
+        if entry is None:
             raise ValueError('Unknown label file format.')
+
+        new_format, warning = entry
 
         # Show confirmation dialog
         msg = QMessageBox()
@@ -1408,8 +1462,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.menus[0].clear()
         add_actions(self.canvas.menus[0], menu)
         self.menus.edit.clear()
-        actions = (self.actions.create,) if self.beginner()\
-            else (self.actions.createMode, self.actions.editMode)
+        actions = (self.actions.create, self.actions.create_polygon) if self.beginner()\
+            else (self.actions.createMode, self.actions.editMode, self.actions.create_polygon)
         add_actions(self.menus.edit, actions + self.actions.editMenu)
 
     def set_beginner(self):
@@ -1438,6 +1492,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dirty = False
         self.actions.save.setEnabled(False)
         self.actions.create.setEnabled(True)
+        self.actions.create_polygon.setEnabled(True)
         self.update_save_status(saved=True)
 
     def toggle_actions(self, value=True):
@@ -1506,7 +1561,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def reset_state(self):
         self.items_to_shapes.clear()
         self.shapes_to_items.clear()
-        self.label_list.clear()
+        self.rect_label_list.clear()
+        self.poly_label_list.clear()
+        self._update_tab_counts()
         self.file_path = None
         self.image_data = None
         self.label_file = None
@@ -1520,9 +1577,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_save_status(saved=True)
 
     def current_item(self):
-        items = self.label_list.selectedItems()
-        if items:
-            return items[0]
+        """Return the currently selected item from either label list."""
+        for lw in (self.rect_label_list, self.poly_label_list):
+            items = lw.selectedItems()
+            if items:
+                return items[0]
         return None
 
     def add_recent_file(self, file_path):
@@ -1577,29 +1636,89 @@ class MainWindow(QMainWindow, WindowMixin):
         assert self.beginner()
         self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
+        self.actions.create_polygon.setEnabled(True)
+
+    def create_polygon_mode(self):
+        """Switch to polygon drawing mode."""
+        self.canvas.set_polygon_drawing(True)
+        self.actions.create.setEnabled(True)
+        self.actions.create_polygon.setEnabled(False)
+        self.actions.editMode.setEnabled(True)
+
+    def toggle_keypoint_mode(self):
+        """Toggle keypoint annotation mode for the selected shape."""
+        from libs.core.keypoint_config import get_template
+
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas.exit_keypoint_mode()
+            self.keypoint_panel.hide()
+            return
+
+        shape = self.canvas.selected_shape
+        if not shape or shape.shape_type != ShapeType.RECTANGLE:
+            return
+
+        template = get_template(shape.label)
+        if not template:
+            return
+
+        template_name = shape.label.lower()
+        kp_count = len(template['names'])
+
+        if shape.keypoints is None:
+            shape.keypoints = [None] * kp_count
+
+        self.keypoint_panel.load_template(template_name)
+        self.canvas.set_keypoint_mode(shape, template_name)
+        self.keypoint_panel.set_keypoints(shape.keypoints)
+        self.keypoint_panel.set_current_index(self.canvas._keypoint_index)
+        self.keypoint_panel.show()
+
+    def _on_keypoint_panel_click(self, index):
+        """Handle click on a keypoint row in the panel."""
+        if self.canvas.mode != self.canvas.KEYPOINT_MODE:
+            self.toggle_keypoint_mode()
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas._keypoint_index = index
+            self.keypoint_panel.set_current_index(index)
+            self.canvas.update()
+
+    def _on_shape_moved_keypoints(self):
+        """Refresh the keypoint panel after a shape move."""
+        if (self.canvas.mode == self.canvas.KEYPOINT_MODE
+                and self.canvas._keypoint_shape):
+            self.keypoint_panel.set_keypoints(
+                self.canvas._keypoint_shape.keypoints)
+            self.keypoint_panel.set_current_index(
+                self.canvas._keypoint_index)
 
     def toggle_drawing_sensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""
         self.actions.editMode.setEnabled(not drawing)
+        self.actions.create_polygon.setEnabled(not drawing)
         if not drawing and self.beginner():
             # Cancel creation.
             print('Cancel creation.')
             self.canvas.set_editing(True)
             self.canvas.restore_cursor()
             self.actions.create.setEnabled(True)
+            self.actions.create_polygon.setEnabled(True)
 
     def toggle_draw_mode(self, edit=True):
         self.canvas.set_editing(edit)
         self.actions.createMode.setEnabled(edit)
         self.actions.editMode.setEnabled(not edit)
+        self.actions.create_polygon.setEnabled(edit)
 
     def set_create_mode(self):
         assert self.advanced()
         self.toggle_draw_mode(False)
+        self.actions.create_polygon.setEnabled(True)
 
     def set_edit_mode(self):
         assert self.advanced()
         self.toggle_draw_mode(True)
+        self.actions.create_polygon.setEnabled(True)
         self.label_selection_changed()
 
     def update_file_menu(self):
@@ -1621,7 +1740,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add clear option if there are recent files
         if files:
             menu.addSeparator()
-            clear_action = QAction(get_str('clearRecentFiles'), self)
+            clear_action = QAction(self.string_bundle.get_string('clearRecentFiles'), self)
             clear_action.triggered.connect(self.clear_recent_files)
             menu.addAction(clear_action)
 
@@ -1630,7 +1749,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_file_menu()
 
     def pop_label_list_menu(self, point):
-        self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
+        sender = self.sender()
+        if sender:
+            self.menus.labelList.exec_(sender.mapToGlobal(point))
+        else:
+            self.menus.labelList.exec_(self.rect_label_list.mapToGlobal(point))
 
     def edit_label(self):
         if not self.canvas.editing():
@@ -1861,8 +1984,11 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         item = self.current_item()
-        if not item:  # If not selected Item, take the first one
-            item = self.label_list.item(self.label_list.count() - 1)
+        if not item:  # If not selected Item, take the last one from rect list
+            if self.rect_label_list.count() > 0:
+                item = self.rect_label_list.item(self.rect_label_list.count() - 1)
+            elif self.poly_label_list.count() > 0:
+                item = self.poly_label_list.item(self.poly_label_list.count() - 1)
 
         difficult = self.diffc_button.isChecked()
 
@@ -1886,7 +2012,8 @@ class MainWindow(QMainWindow, WindowMixin):
             if shape:
                 self.shapes_to_items[shape].setSelected(True)
             else:
-                self.label_list.clearSelection()
+                self.rect_label_list.clearSelection()
+                self.poly_label_list.clearSelection()
         self.actions.delete.setEnabled(selected)
         self.actions.copy.setEnabled(selected)
         self.actions.copyToClipboard.setEnabled(selected)
@@ -1898,6 +2025,20 @@ class MainWindow(QMainWindow, WindowMixin):
         # Enable copy all if there are shapes
         self.actions.copyAllToClipboard.setEnabled(len(self.canvas.shapes) > 0)
 
+        # Show/hide keypoint panel based on selection
+        from libs.core.keypoint_config import get_template
+        shape = self.canvas.selected_shape
+        has_template = (shape is not None
+                        and shape.shape_type == ShapeType.RECTANGLE
+                        and get_template(shape.label) is not None)
+        self.actions.keypoint_mode.setEnabled(has_template)
+        if has_template and shape.keypoints:
+            self.keypoint_panel.load_template(shape.label.lower())
+            self.keypoint_panel.set_keypoints(shape.keypoints)
+            self.keypoint_panel.show()
+        else:
+            self.keypoint_panel.hide()
+
     def add_label(self, shape):
         shape.paint_label = self.display_label_option.isChecked()
         item = HashableQListWidgetItem(shape.label)
@@ -1906,17 +2047,24 @@ class MainWindow(QMainWindow, WindowMixin):
         item.setBackground(generate_color_by_text(shape.label))
         self.items_to_shapes[item] = shape
         self.shapes_to_items[shape] = item
-        self.label_list.addItem(item)
+        # Route to the appropriate label list based on shape type
+        target_list = self._label_list_for_shape(shape)
+        target_list.addItem(item)
+        self._update_tab_counts()
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
         self.update_combo_box()
 
     def remove_label(self, shape):
         if shape is None:
-            # print('rm empty label')
             return
         item = self.shapes_to_items[shape]
-        self.label_list.takeItem(self.label_list.row(item))
+        # Remove from whichever list contains the item
+        target_list = self._label_list_for_shape(shape)
+        row = target_list.row(item)
+        if row >= 0:
+            target_list.takeItem(row)
+        self._update_tab_counts()
         del self.shapes_to_items[shape]
         del self.items_to_shapes[item]
         self.update_combo_box()
@@ -1926,8 +2074,21 @@ class MainWindow(QMainWindow, WindowMixin):
         # Scale factor for converting original coords to display coords (Issue #31)
         scale = self._image_scale_factor if hasattr(self, '_image_scale_factor') else 1.0
 
-        for label, points, line_color, fill_color, difficult in shapes:
-            shape = Shape(label=label)
+        for shape_data in shapes:
+            # Handle 5-element (legacy), 6-element (with shape_type),
+            # and 7-element (with keypoints) tuples
+            if len(shape_data) == 7:
+                label, points, line_color, fill_color, difficult, shape_type_str, kp_data = shape_data
+            elif len(shape_data) == 6:
+                label, points, line_color, fill_color, difficult, shape_type_str = shape_data
+                kp_data = None
+            else:
+                label, points, line_color, fill_color, difficult = shape_data
+                shape_type_str = 'rectangle'
+                kp_data = None
+
+            st = ShapeType.POLYGON if shape_type_str == 'polygon' else ShapeType.RECTANGLE
+            shape = Shape(label=label, shape_type=st)
             for x, y in points:
                 # Scale coordinates from original to display space
                 x = x * scale
@@ -1940,6 +2101,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
                 shape.add_point(QPointF(x, y))
             shape.difficult = difficult
+            if kp_data:
+                shape.keypoints = [
+                    (kp[0] * scale, kp[1] * scale, kp[2])
+                    if kp is not None else None
+                    for kp in kp_data
+                ]
             shape.close()
             s.append(shape)
 
@@ -1958,8 +2125,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.load_shapes(s)
 
     def update_combo_box(self):
-        # Get the unique labels and add them to the Combobox.
-        items_text_list = [str(self.label_list.item(i).text()) for i in range(self.label_list.count())]
+        # Get the unique labels from both label lists and add them to the Combobox.
+        items_text_list = []
+        for lw in (self.rect_label_list, self.poly_label_list):
+            for i in range(lw.count()):
+                items_text_list.append(str(lw.item(i).text()))
 
         unique_text_list = list(set(items_text_list))
         # Add a null row for showing all the labels
@@ -1967,6 +2137,40 @@ class MainWindow(QMainWindow, WindowMixin):
         unique_text_list.sort()
 
         self.combo_box.update_items(unique_text_list)
+
+    def _label_list_for_shape(self, shape):
+        """Return the appropriate QListWidget for the given shape's type."""
+        if hasattr(shape, 'shape_type') and shape.shape_type == ShapeType.POLYGON:
+            return self.poly_label_list
+        return self.rect_label_list
+
+    def _update_tab_counts(self):
+        """Update the tab titles to reflect the count of shapes in each list."""
+        rect_count = self.rect_label_list.count()
+        poly_count = self.poly_label_list.count()
+        self.label_tab_widget.setTabText(0, f'Rectangles ({rect_count})')
+        self.label_tab_widget.setTabText(1, f'Polygons ({poly_count})')
+
+    def _check_polygon_degradation(self, format_name):
+        """Warn the user if polygons will be saved as bounding boxes.
+
+        Args:
+            format_name: Display name of the target format.
+
+        Returns:
+            True if saving should proceed, False to cancel.
+        """
+        polygon_count = sum(1 for s in self.canvas.shapes
+                            if s.shape_type == ShapeType.POLYGON)
+        if polygon_count == 0:
+            return True
+
+        get_str = lambda str_id: self.string_bundle.get_string(str_id)
+        msg = get_str('polygonDegradeWarning') % (polygon_count, format_name)
+        reply = QMessageBox.question(
+            self, 'Polygon Degradation', msg,
+            QMessageBox.Yes | QMessageBox.No)
+        return reply == QMessageBox.Yes
 
     def save_labels(self, annotation_file_path):
         annotation_file_path = ustr(annotation_file_path)
@@ -1980,11 +2184,30 @@ class MainWindow(QMainWindow, WindowMixin):
         def format_shape(s):
             # Scale coordinates from display space to original image space
             scaled_points = [(p.x() * inv_scale, p.y() * inv_scale) for p in s.points]
-            return dict(label=s.label,
-                        line_color=s.line_color.getRgb(),
-                        fill_color=s.fill_color.getRgb(),
-                        points=scaled_points,
-                        difficult=s.difficult)
+            result = dict(
+                label=s.label,
+                line_color=s.line_color.getRgb(),
+                fill_color=s.fill_color.getRgb(),
+                points=scaled_points,
+                difficult=s.difficult,
+                shape_type=s.shape_type.value,
+            )
+            if s.keypoints is not None:
+                result['keypoints'] = [
+                    (kp[0] * inv_scale, kp[1] * inv_scale, kp[2])
+                    if kp is not None else None
+                    for kp in s.keypoints
+                ]
+            return result
+
+        # Check for polygon degradation when saving to formats that don't support polygons
+        degradation_formats = {
+            LabelFileFormat.YOLO: FORMAT_YOLO,
+            LabelFileFormat.CREATE_ML: FORMAT_CREATEML,
+        }
+        if self.label_file_format in degradation_formats:
+            if not self._check_polygon_degradation(degradation_formats[self.label_file_format]):
+                return False
 
         shapes = [format_shape(shape) for shape in self.canvas.shapes]
         # Can add different annotation formats here
@@ -2004,6 +2227,16 @@ class MainWindow(QMainWindow, WindowMixin):
                     annotation_file_path += JSON_EXT
                 self.label_file.save_create_ml_format(annotation_file_path, shapes, self.file_path, self.image_data,
                                                       self.label_hist, self.line_color.getRgb(), self.fill_color.getRgb())
+            elif self.label_file_format == LabelFileFormat.COCO:
+                if annotation_file_path[-5:].lower() != ".json":
+                    annotation_file_path += JSON_EXT
+                self.label_file.save_coco_format(annotation_file_path, shapes, self.file_path, self.image_data,
+                                                 self.label_hist, self.line_color.getRgb(), self.fill_color.getRgb())
+            elif self.label_file_format == LabelFileFormat.YOLO_SEG:
+                if annotation_file_path[-4:].lower() != ".txt":
+                    annotation_file_path += TXT_EXT
+                self.label_file.save_yolo_seg_format(annotation_file_path, shapes, self.file_path, self.image_data,
+                                                     self.label_hist, self.line_color.getRgb(), self.fill_color.getRgb())
             else:
                 self.label_file.save(annotation_file_path, shapes, self.file_path, self.image_data,
                                      self.line_color.getRgb(), self.fill_color.getRgb())
@@ -2066,13 +2299,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def combo_selection_changed(self, index):
         text = self.combo_box.cb.itemText(index)
-        for i in range(self.label_list.count()):
-            if text == "":
-                self.label_list.item(i).setCheckState(2)
-            elif text != self.label_list.item(i).text():
-                self.label_list.item(i).setCheckState(0)
-            else:
-                self.label_list.item(i).setCheckState(2)
+        for lw in (self.rect_label_list, self.poly_label_list):
+            for i in range(lw.count()):
+                if text == "":
+                    lw.item(i).setCheckState(2)
+                elif text != lw.item(i).text():
+                    lw.item(i).setCheckState(0)
+                else:
+                    lw.item(i).setCheckState(2)
 
     def default_label_combo_selection_changed(self, index):
         self.default_label=self.label_hist[index]
@@ -2146,8 +2380,10 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.beginner():  # Switch to edit mode.
                 self.canvas.set_editing(True)
                 self.actions.create.setEnabled(True)
+                self.actions.create_polygon.setEnabled(True)
             else:
                 self.actions.editMode.setEnabled(True)
+                self.actions.create_polygon.setEnabled(True)
             self.set_dirty()
             self._update_current_image_stats()
 
@@ -2364,9 +2600,14 @@ class MainWindow(QMainWindow, WindowMixin):
             self.update_save_status(saved=True)
 
             # Default : select last item if there is at least one item
-            if self.label_list.count():
-                self.label_list.setCurrentItem(self.label_list.item(self.label_list.count() - 1))
-                self.label_list.item(self.label_list.count() - 1).setSelected(True)
+            if self.rect_label_list.count():
+                self.rect_label_list.setCurrentItem(
+                    self.rect_label_list.item(self.rect_label_list.count() - 1))
+                self.rect_label_list.item(self.rect_label_list.count() - 1).setSelected(True)
+            elif self.poly_label_list.count():
+                self.poly_label_list.setCurrentItem(
+                    self.poly_label_list.item(self.poly_label_list.count() - 1))
+                self.poly_label_list.item(self.poly_label_list.count() - 1).setSelected(True)
 
             self.canvas.setFocus(True)
             self._update_current_image_stats()
@@ -2385,29 +2626,29 @@ class MainWindow(QMainWindow, WindowMixin):
             xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
             txt_path = os.path.join(self.default_save_dir, basename + TXT_EXT)
             json_path = os.path.join(self.default_save_dir, basename + JSON_EXT)
-
-            """Annotation file priority:
-            PascalXML > YOLO
-            """
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
-            elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
-
         else:
             xml_path = os.path.splitext(file_path)[0] + XML_EXT
             txt_path = os.path.splitext(file_path)[0] + TXT_EXT
             json_path = os.path.splitext(file_path)[0] + JSON_EXT
 
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
-            elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
-            
+        # Dispatch based on current format for unambiguous types
+        if self.label_file_format == LabelFileFormat.COCO:
+            if os.path.isfile(json_path):
+                self.load_coco_json_by_filename(json_path, file_path)
+                return
+        elif self.label_file_format == LabelFileFormat.YOLO_SEG:
+            if os.path.isfile(txt_path):
+                self.load_yolo_seg_by_filename(txt_path)
+                return
+
+        # Fallback: auto-detect by file extension priority
+        # PascalXML > YOLO > CreateML
+        if os.path.isfile(xml_path):
+            self.load_pascal_xml_by_filename(xml_path)
+        elif os.path.isfile(txt_path):
+            self.load_yolo_txt_by_filename(txt_path)
+        elif os.path.isfile(json_path):
+            self.load_create_ml_json_by_filename(json_path, file_path)
 
     def resizeEvent(self, event):
         if self.canvas and not self.image.isNull()\
@@ -3190,6 +3431,71 @@ class MainWindow(QMainWindow, WindowMixin):
         self.load_labels(shapes)
         self.canvas.verified = create_ml_parse_reader.verified
 
+    def load_coco_json_by_filename(self, json_path, file_path):
+        """Load annotations from a COCO JSON file for the given image.
+
+        Args:
+            json_path: Path to the COCO JSON annotation file.
+            file_path: Path to the image file (used to match image entry).
+        """
+        if self.file_path is None:
+            return
+        if not os.path.isfile(json_path):
+            return
+
+        self.set_format(FORMAT_COCO)
+
+        image_filename = os.path.basename(file_path)
+        try:
+            reader = COCOReader(json_path, image_filename)
+            shapes = reader.get_shapes()
+            self.load_labels(shapes)
+            self.canvas.verified = reader.verified
+        except Exception as e:
+            self.error_message(
+                'Annotation Error',
+                f'Error loading COCO annotations from '
+                f'{os.path.basename(json_path)}: {e}')
+
+    def load_yolo_seg_by_filename(self, txt_path):
+        """Load annotations from a YOLO-seg text file.
+
+        Args:
+            txt_path: Path to the YOLO-seg annotation text file.
+        """
+        if self.file_path is None:
+            return
+        if not os.path.isfile(txt_path):
+            return
+
+        self.set_format(FORMAT_YOLO_SEG)
+
+        try:
+            if hasattr(self, '_original_image_size') and self._original_image_size is not None:
+                class MockImage:
+                    def __init__(self, size, grayscale=False):
+                        self._size = size
+                        self._grayscale = grayscale
+                    def width(self):
+                        return self._size.width()
+                    def height(self):
+                        return self._size.height()
+                    def isGrayscale(self):
+                        return self._grayscale
+                mock_img = MockImage(self._original_image_size,
+                                     self.image.isGrayscale())
+                reader = YOLOSegReader(txt_path, mock_img)
+            else:
+                reader = YOLOSegReader(txt_path, self.image)
+            shapes = reader.get_shapes()
+            self.load_labels(shapes)
+            self.canvas.verified = reader.verified
+        except Exception as e:
+            self.error_message(
+                'Annotation Error',
+                f'Error loading YOLO-seg annotations for '
+                f'{os.path.basename(txt_path)}: {e}')
+
     def copy_previous_bounding_boxes(self):
         current_index = self._path_to_idx.get(self.file_path, 0)
         if current_index - 1 >= 0:
@@ -3343,6 +3649,10 @@ class MainWindow(QMainWindow, WindowMixin):
             if hasattr(self.gallery_stats, 'apply_theme'):
                 self.gallery_stats.apply_theme(theme)
 
+        # Apply theme to keypoint panel
+        if hasattr(self, 'keypoint_panel'):
+            self.keypoint_panel.apply_theme(theme)
+
         # Refresh save status indicator colors
         if hasattr(self, 'label_save_status'):
             # Preserve current saved state (check if green/saved or orange/unsaved)
@@ -3356,6 +3666,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 LabelFileFormat.PASCAL_VOC: 'format_voc',
                 LabelFileFormat.YOLO: 'format_yolo',
                 LabelFileFormat.CREATE_ML: 'format_createml',
+                LabelFileFormat.COCO: 'format_createml',
+                LabelFileFormat.YOLO_SEG: 'format_yolo',
             }
             icon_name = format_icon_map.get(self.label_file_format)
             if icon_name:

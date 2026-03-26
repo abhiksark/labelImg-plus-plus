@@ -1,6 +1,28 @@
 History
 =======
 
+2.3.0 (2026-03-27)
+------------------
+
+* Add polygon annotation support with dual-mode tool system (#2)
+* Add click-to-place polygon drawing with vertex-by-vertex placement (#2)
+* Add freehand polygon drawing with Douglas-Peucker simplification (Shift+drag) (#2)
+* Add full polygon vertex editing: move, insert via midpoints, right-click delete (#2)
+* Add COCO JSON format reader/writer with polygon segmentation support (#2)
+* Add YOLO-seg format reader/writer for normalized polygon coordinates (#2)
+* Extend Pascal VOC XML format with polygon element support (#2)
+* Add tabbed label list separating Rectangles and Polygons (#2)
+* Add polygon degradation warning when saving to bbox-only formats (#2)
+* Add configurable polygon tool shortcut (default: P) (#2)
+* Add COCO 17-point human pose keypoint annotation (#15)
+* Add hybrid sequential/free keypoint placement workflow (#15)
+* Add skeleton visualization with colored bones on canvas (#15)
+* Add inline keypoint checklist panel in sidebar (#15)
+* Add COCO JSON keypoint export with skeleton definition (#15)
+* Add 5-point face landmark annotation template (#15)
+* Add keypoint template registry for extensible annotation types (#15)
+
+
 2.2.0 (2026-03-05)
 ------------------
 

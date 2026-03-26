@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from xml.etree import ElementTree
 
 dir_name = os.path.abspath(os.path.dirname(__file__))
 libs_path = os.path.join(dir_name, '..', '..', 'libs')
@@ -299,6 +300,60 @@ class TestCreateMLEdgeCases(unittest.TestCase):
 
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]['annotations'], [])
+
+
+class TestPascalVocPolygon(unittest.TestCase):
+    """Test cases for Pascal VOC polygon annotation support."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_write_polygon(self):
+        writer = PascalVocWriter('folder', 'test.jpg', [480, 640, 3])
+        points = [(10, 20), (50, 20), (50, 80)]
+        writer.add_polygon(points, 'dog', False)
+        out_path = os.path.join(self.tmp_dir, 'test.xml')
+        writer.save(target_file=out_path)
+
+        tree = ElementTree.parse(out_path)
+        root = tree.getroot()
+        obj = root.find('object')
+        polygon = obj.find('polygon')
+        self.assertIsNotNone(polygon)
+        pts = polygon.findall('pt')
+        self.assertEqual(len(pts), 3)
+
+    def test_read_polygon(self):
+        writer = PascalVocWriter('folder', 'test.jpg', [480, 640, 3])
+        points = [(10, 20), (50, 20), (50, 80)]
+        writer.add_polygon(points, 'dog', False)
+        out_path = os.path.join(self.tmp_dir, 'test.xml')
+        writer.save(target_file=out_path)
+
+        reader = PascalVocReader(out_path)
+        shapes = reader.get_shapes()
+        self.assertEqual(len(shapes), 1)
+        label, pts, _, _, difficult, shape_type = shapes[0]
+        self.assertEqual(label, 'dog')
+        self.assertEqual(shape_type, 'polygon')
+        self.assertEqual(len(pts), 3)
+
+    def test_backward_compat_no_polygon(self):
+        """Files without polygon element still load as rectangles."""
+        writer = PascalVocWriter('folder', 'test.jpg', [480, 640, 3])
+        writer.add_bnd_box(10, 20, 100, 200, 'cat', False)
+        out_path = os.path.join(self.tmp_dir, 'test.xml')
+        writer.save(target_file=out_path)
+
+        reader = PascalVocReader(out_path)
+        shapes = reader.get_shapes()
+        label, pts, _, _, difficult, shape_type = shapes[0]
+        self.assertEqual(shape_type, 'rectangle')
+        self.assertEqual(len(pts), 4)
 
 
 if __name__ == '__main__':

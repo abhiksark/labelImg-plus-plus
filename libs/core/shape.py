@@ -1,16 +1,28 @@
 #!/usr/bin/python
+# libs/core/shape.py
 # -*- coding: utf-8 -*-
 
+from enum import Enum
 
 try:
     from PyQt5.QtGui import QColor, QPen, QPainterPath, QFont, QFontMetrics
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import Qt, QPointF
 except ImportError:
     from PyQt4.QtGui import QColor, QPen, QPainterPath, QFont, QFontMetrics
-    from PyQt4.QtCore import Qt
+    from PyQt4.QtCore import Qt, QPointF
 
 from libs.utils import distance
 import sys
+
+
+class ShapeType(Enum):
+    """Supported annotation shape types."""
+
+    RECTANGLE = 'rectangle'
+    POLYGON = 'polygon'
+
+
+MAX_POLYGON_POINTS = 100
 
 DEFAULT_LINE_COLOR = QColor(0, 255, 0, 128)
 DEFAULT_FILL_COLOR = QColor(255, 0, 0, 128)
@@ -38,13 +50,16 @@ class Shape(object):
     scale = 1.0
     label_font_size = 8
 
-    def __init__(self, label=None, line_color=None, difficult=False, paint_label=False):
+    def __init__(self, label=None, line_color=None, difficult=False,
+                 paint_label=False, shape_type=ShapeType.RECTANGLE):
         self.label = label
         self.points = []
         self.fill = False
         self.selected = False
         self.difficult = difficult
         self.paint_label = paint_label
+        self.shape_type = shape_type
+        self.keypoints = None
 
         self._highlight_index = None
         self._highlight_mode = self.NEAR_VERTEX
@@ -65,9 +80,10 @@ class Shape(object):
         self._closed = True
 
     def reach_max_points(self):
-        if len(self.points) >= 4:
-            return True
-        return False
+        """Return True when the shape has reached its maximum allowed vertices."""
+        if self.shape_type == ShapeType.RECTANGLE:
+            return len(self.points) >= 4
+        return len(self.points) >= MAX_POLYGON_POINTS
 
     def add_point(self, point):
         if not self.reach_max_points():
@@ -77,6 +93,81 @@ class Shape(object):
         if self.points:
             return self.points.pop()
         return None
+
+    def remove_point(self, index):
+        """Remove vertex at index.
+
+        Polygon-only operation; enforces a minimum of 3 vertices.
+
+        Args:
+            index: The index of the vertex to remove.
+
+        Returns:
+            True if the point was removed, False otherwise.
+        """
+        if self.shape_type != ShapeType.POLYGON:
+            return False
+        if len(self.points) <= 3:
+            return False
+        self.points.pop(index)
+        return True
+
+    def insert_point(self, index, point):
+        """Insert a vertex at the given index. Polygon-only.
+
+        Args:
+            index: Position at which to insert the new vertex.
+            point: QPointF to insert.
+        """
+        if self.shape_type != ShapeType.POLYGON:
+            return
+        self.points.insert(index, point)
+
+    def midpoint_of_edge(self, i):
+        """Return the midpoint between vertex i and the next vertex.
+
+        The last edge wraps around to vertex 0.
+
+        Args:
+            i: Edge start vertex index.
+
+        Returns:
+            QPointF midpoint of the edge.
+        """
+        p1 = self.points[i]
+        p2 = self.points[(i + 1) % len(self.points)]
+        return QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+
+    def nearest_midpoint(self, point, epsilon):
+        """Find nearest midpoint handle within epsilon distance.
+
+        Polygon-only. Used for edge-click insertion of new vertices.
+
+        Args:
+            point: QPointF reference position.
+            epsilon: Maximum distance to qualify as 'nearest'.
+
+        Returns:
+            Edge index whose midpoint is closest, or None.
+        """
+        if self.shape_type != ShapeType.POLYGON:
+            return None
+        best_dist = epsilon
+        best_index = None
+        for i in range(len(self.points)):
+            mid = self.midpoint_of_edge(i)
+            dist = distance(mid - point)
+            if dist <= best_dist:
+                best_index = i
+                best_dist = dist
+        return best_index
+
+    @property
+    def num_keypoints(self):
+        """Count of keypoints with visibility > 0."""
+        if not self.keypoints:
+            return 0
+        return sum(1 for kp in self.keypoints if kp is not None and kp[2] > 0)
 
     def is_closed(self):
         return self._closed
@@ -192,6 +283,12 @@ class Shape(object):
 
     def move_by(self, offset):
         self.points = [p + offset for p in self.points]
+        if self.keypoints:
+            self.keypoints = [
+                (kp[0] + offset.x(), kp[1] + offset.y(), kp[2])
+                if kp is not None else None
+                for kp in self.keypoints
+            ]
 
     def move_vertex_by(self, i, offset):
         self.points[i] = self.points[i] + offset
@@ -204,7 +301,7 @@ class Shape(object):
         self._highlight_index = None
 
     def copy(self):
-        shape = Shape("%s" % self.label)
+        shape = Shape("%s" % self.label, shape_type=self.shape_type)
         shape.points = [p for p in self.points]
         shape.fill = self.fill
         shape.selected = self.selected
@@ -214,6 +311,8 @@ class Shape(object):
         if self.fill_color != Shape.fill_color:
             shape.fill_color = self.fill_color
         shape.difficult = self.difficult
+        if self.keypoints is not None:
+            shape.keypoints = list(self.keypoints)
         return shape
 
     def __len__(self):
