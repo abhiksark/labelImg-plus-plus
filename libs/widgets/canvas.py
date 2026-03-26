@@ -307,10 +307,9 @@ class Canvas(QWidget):
                 self.repaint()
 
                 # Display annotation width and height while moving vertex
-                point1 = self.h_shape[1]
-                point3 = self.h_shape[3]
-                current_width = abs(point1.x() - point3.x())
-                current_height = abs(point1.y() - point3.y())
+                rect = self.h_shape.bounding_rect()
+                current_width = rect.width()
+                current_height = rect.height()
                 self.parent().window().label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             elif self.selected_shape and self.prev_point:
@@ -320,10 +319,9 @@ class Canvas(QWidget):
                 self.repaint()
 
                 # Display annotation width and height while moving shape
-                point1 = self.selected_shape[1]
-                point3 = self.selected_shape[3]
-                current_width = abs(point1.x() - point3.x())
-                current_height = abs(point1.y() - point3.y())
+                rect = self.selected_shape.bounding_rect()
+                current_width = rect.width()
+                current_height = rect.height()
                 self.parent().window().label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             else:
@@ -377,10 +375,9 @@ class Canvas(QWidget):
                 self.update()
 
                 # Display annotation width and height while hovering inside
-                point1 = self.h_shape[1]
-                point3 = self.h_shape[3]
-                current_width = abs(point1.x() - point3.x())
-                current_height = abs(point1.y() - point3.y())
+                rect = self.h_shape.bounding_rect()
+                current_width = rect.width()
+                current_height = rect.height()
                 self.parent().window().label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             else:  # Nothing found, clear highlights, reset state.
@@ -406,6 +403,19 @@ class Canvas(QWidget):
                 else:
                     self.handle_drawing(pos)
             else:
+                # Check for midpoint click on selected polygon
+                if self.selected_shape and self.selected_shape.shape_type == ShapeType.POLYGON:
+                    mid_idx = self.selected_shape.nearest_midpoint(pos, self.epsilon)
+                    if mid_idx is not None:
+                        mid = self.selected_shape.midpoint_of_edge(mid_idx)
+                        self.selected_shape.insert_point(mid_idx + 1, mid)
+                        self.h_vertex = mid_idx + 1
+                        self.h_shape = self.selected_shape
+                        self.selected_shape.highlight_vertex(mid_idx + 1, Shape.MOVE_VERTEX)
+                        self.update()
+                        self.prev_point = pos
+                        return
+
                 selection = self.select_shape_point(pos)
                 self.prev_point = pos
 
@@ -433,6 +443,22 @@ class Canvas(QWidget):
             return
 
         if ev.button() == Qt.RightButton:
+            # Check if right-clicking a polygon vertex
+            if self.selected_shape and self.selected_shape.shape_type == ShapeType.POLYGON:
+                pos = self.transform_pos(ev.pos())
+                idx = self.selected_shape.nearest_vertex(pos, self.epsilon)
+                if idx is not None:
+                    vertex_menu = QMenu()
+                    delete_action = vertex_menu.addAction("Delete Vertex")
+                    if len(self.selected_shape.points) <= 3:
+                        delete_action.setEnabled(False)
+                    action = vertex_menu.exec_(self.mapToGlobal(ev.pos()))
+                    if action == delete_action:
+                        self.selected_shape.remove_point(idx)
+                        self.shapeMoved.emit()
+                        self.update()
+                    return
+
             menu = self.menus[bool(self.selected_shape_copy)]
             self.restore_cursor()
             if not menu.exec_(self.mapToGlobal(ev.pos()))\
@@ -645,15 +671,23 @@ class Canvas(QWidget):
 
         pos = self.apply_snapping(pos, exclude_shape=shape)
 
+        if shape.shape_type == ShapeType.POLYGON:
+            # Polygon: move vertex independently
+            shift_pos = pos - point
+            shape.move_vertex_by(index, shift_pos)
+            return
+
+        # Rectangle: existing constraint logic (unchanged)
         if self.draw_square:
             opposite_point_index = (index + 2) % 4
             opposite_point = shape[opposite_point_index]
-
-            min_size = min(abs(pos.x() - opposite_point.x()), abs(pos.y() - opposite_point.y()))
+            min_size = min(abs(pos.x() - opposite_point.x()),
+                           abs(pos.y() - opposite_point.y()))
             direction_x = -1 if pos.x() - opposite_point.x() < 0 else 1
             direction_y = -1 if pos.y() - opposite_point.y() < 0 else 1
-            shift_pos = QPointF(opposite_point.x() + direction_x * min_size - point.x(),
-                                opposite_point.y() + direction_y * min_size - point.y())
+            shift_pos = QPointF(
+                opposite_point.x() + direction_x * min_size - point.x(),
+                opposite_point.y() + direction_y * min_size - point.y())
         else:
             shift_pos = pos - point
 
@@ -661,8 +695,6 @@ class Canvas(QWidget):
 
         left_index = (index + 1) % 4
         right_index = (index + 3) % 4
-        left_shift = None
-        right_shift = None
         if index % 2 == 0:
             right_shift = QPointF(shift_pos.x(), 0)
             left_shift = QPointF(0, shift_pos.y())
@@ -731,6 +763,20 @@ class Canvas(QWidget):
         if not self.bounded_move_shape(shape, point - offset):
             self.bounded_move_shape(shape, point + offset)
 
+    def _draw_polygon_midpoints(self, painter, shape):
+        """Draw midpoint handles on polygon edges for the selected shape."""
+        if shape.shape_type != ShapeType.POLYGON or not shape.selected:
+            return
+        from libs.utils.styles import get_theme_colors, hex_to_qcolor
+        colors = get_theme_colors(self._theme)
+        mid_color = hex_to_qcolor(colors.get('midpoint_handle', '#999999'))
+        d = shape.point_size / shape.scale / 2
+        for i in range(len(shape.points)):
+            mid = shape.midpoint_of_edge(i)
+            painter.fillRect(
+                int(mid.x() - d/2), int(mid.y() - d/2),
+                int(d), int(d), mid_color)
+
     def paintEvent(self, event):
         if not self.pixmap:
             return super(Canvas, self).paintEvent(event)
@@ -759,6 +805,8 @@ class Canvas(QWidget):
             if (shape.selected or not self._hide_background) and self.isVisible(shape):
                 shape.fill = shape.selected or shape == self.h_shape
                 shape.paint(p)
+                if shape.selected:
+                    self._draw_polygon_midpoints(p, shape)
         if self.current:
             self.current.paint(p)
             self.line.paint(p)
@@ -931,32 +979,22 @@ class Canvas(QWidget):
             self.move_one_pixel('Down')
 
     def move_one_pixel(self, direction):
-        if direction == 'Left' and not self.move_out_of_bound(QPointF(-1.0, 0)):
-            self.selected_shape.points[0] += QPointF(-1.0, 0)
-            self.selected_shape.points[1] += QPointF(-1.0, 0)
-            self.selected_shape.points[2] += QPointF(-1.0, 0)
-            self.selected_shape.points[3] += QPointF(-1.0, 0)
-        elif direction == 'Right' and not self.move_out_of_bound(QPointF(1.0, 0)):
-            self.selected_shape.points[0] += QPointF(1.0, 0)
-            self.selected_shape.points[1] += QPointF(1.0, 0)
-            self.selected_shape.points[2] += QPointF(1.0, 0)
-            self.selected_shape.points[3] += QPointF(1.0, 0)
-        elif direction == 'Up' and not self.move_out_of_bound(QPointF(0, -1.0)):
-            self.selected_shape.points[0] += QPointF(0, -1.0)
-            self.selected_shape.points[1] += QPointF(0, -1.0)
-            self.selected_shape.points[2] += QPointF(0, -1.0)
-            self.selected_shape.points[3] += QPointF(0, -1.0)
-        elif direction == 'Down' and not self.move_out_of_bound(QPointF(0, 1.0)):
-            self.selected_shape.points[0] += QPointF(0, 1.0)
-            self.selected_shape.points[1] += QPointF(0, 1.0)
-            self.selected_shape.points[2] += QPointF(0, 1.0)
-            self.selected_shape.points[3] += QPointF(0, 1.0)
+        offsets = {
+            'Left': QPointF(-1.0, 0),
+            'Right': QPointF(1.0, 0),
+            'Up': QPointF(0, -1.0),
+            'Down': QPointF(0, 1.0),
+        }
+        step = offsets.get(direction)
+        if step and not self.move_out_of_bound(step):
+            for i in range(len(self.selected_shape.points)):
+                self.selected_shape.points[i] += step
         self.shapeMoved.emit()
         self.repaint()
 
     def move_out_of_bound(self, step):
-        points = [p1 + p2 for p1, p2 in zip(self.selected_shape.points, [step] * 4)]
-        return True in map(self.out_of_pixmap, points)
+        points = [p + step for p in self.selected_shape.points]
+        return any(self.out_of_pixmap(p) for p in points)
 
     def set_last_label(self, text, line_color=None):
         assert text
