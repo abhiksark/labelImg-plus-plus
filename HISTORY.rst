@@ -14,6 +14,11 @@ History
 * Add tabbed label list separating Rectangles and Polygons (#2)
 * Add polygon degradation warning when saving to bbox-only formats (#2)
 * Add configurable polygon tool shortcut (default: P) (#2)
+* Add COCO 17-point human pose keypoint annotation (#15)
+* Add hybrid sequential/free keypoint placement workflow (#15)
+* Add skeleton visualization with colored bones on canvas (#15)
+* Add inline keypoint checklist panel in sidebar (#15)
+* Add COCO JSON keypoint export with skeleton definition (#15)
 
 
 2.2.0 (2026-03-05)
