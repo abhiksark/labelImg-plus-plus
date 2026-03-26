@@ -19,6 +19,8 @@ History
 * Add skeleton visualization with colored bones on canvas (#15)
 * Add inline keypoint checklist panel in sidebar (#15)
 * Add COCO JSON keypoint export with skeleton definition (#15)
+* Add 5-point face landmark annotation template (#15)
+* Add keypoint template registry for extensible annotation types (#15)
 
 
 2.2.0 (2026-03-05)
