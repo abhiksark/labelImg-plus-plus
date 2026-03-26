@@ -427,6 +427,35 @@ class TestPolygonVertexOps(unittest.TestCase):
         copied = shape.copy()
         self.assertEqual(copied.shape_type, ShapeType.POLYGON)
 
+    def test_nearest_midpoint_hit(self):
+        """Test nearest_midpoint returns edge index when point is near midpoint."""
+        shape = self._make_triangle()
+        # Midpoint of edge 0 is (5, 0). Search near it.
+        result = shape.nearest_midpoint(QPointF(5.5, 0.5), 2.0)
+        self.assertEqual(result, 0)
+
+    def test_nearest_midpoint_miss(self):
+        """Test nearest_midpoint returns None when no midpoint is close."""
+        shape = self._make_triangle()
+        result = shape.nearest_midpoint(QPointF(100, 100), 2.0)
+        self.assertIsNone(result)
+
+    def test_nearest_midpoint_rectangle_returns_none(self):
+        """Test nearest_midpoint returns None for rectangle shapes."""
+        shape = Shape()
+        for p in [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10), QPointF(0, 10)]:
+            shape.add_point(p)
+        result = shape.nearest_midpoint(QPointF(5, 0), 2.0)
+        self.assertIsNone(result)
+
+    def test_insert_point_blocked_on_rectangle(self):
+        """Test insert_point is blocked on rectangle shapes."""
+        shape = Shape()
+        for p in [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10), QPointF(0, 10)]:
+            shape.add_point(p)
+        shape.insert_point(1, QPointF(5, 0))
+        self.assertEqual(len(shape.points), 4)  # unchanged
+
 
 if __name__ == '__main__':
     unittest.main()

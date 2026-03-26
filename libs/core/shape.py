@@ -112,12 +112,14 @@ class Shape(object):
         return True
 
     def insert_point(self, index, point):
-        """Insert a vertex at the given index.
+        """Insert a vertex at the given index. Polygon-only.
 
         Args:
             index: Position at which to insert the new vertex.
             point: QPointF to insert.
         """
+        if self.shape_type != ShapeType.POLYGON:
+            return
         self.points.insert(index, point)
 
     def midpoint_of_edge(self, i):
@@ -149,13 +151,14 @@ class Shape(object):
         """
         if self.shape_type != ShapeType.POLYGON:
             return None
+        best_dist = epsilon
         best_index = None
         for i in range(len(self.points)):
             mid = self.midpoint_of_edge(i)
             dist = distance(mid - point)
-            if dist <= epsilon:
+            if dist <= best_dist:
                 best_index = i
-                epsilon = dist
+                best_dist = dist
         return best_index
 
     def is_closed(self):
