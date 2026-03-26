@@ -1646,22 +1646,30 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.editMode.setEnabled(True)
 
     def toggle_keypoint_mode(self):
-        """Toggle keypoint annotation mode for the selected person shape."""
+        """Toggle keypoint annotation mode for the selected shape."""
+        from libs.core.keypoint_config import get_template
+
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
             return
 
         shape = self.canvas.selected_shape
-        if not shape or shape.label.lower() != 'person':
+        if not shape or shape.shape_type != ShapeType.RECTANGLE:
             return
-        if shape.shape_type != ShapeType.RECTANGLE:
+
+        template = get_template(shape.label)
+        if not template:
             return
+
+        template_name = shape.label.lower()
+        kp_count = len(template['names'])
 
         if shape.keypoints is None:
-            shape.keypoints = [None] * 17
+            shape.keypoints = [None] * kp_count
 
-        self.canvas.set_keypoint_mode(shape)
+        self.keypoint_panel.load_template(template_name)
+        self.canvas.set_keypoint_mode(shape, template_name)
         self.keypoint_panel.set_keypoints(shape.keypoints)
         self.keypoint_panel.set_current_index(self.canvas._keypoint_index)
         self.keypoint_panel.show()
@@ -2018,12 +2026,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.copyAllToClipboard.setEnabled(len(self.canvas.shapes) > 0)
 
         # Show/hide keypoint panel based on selection
+        from libs.core.keypoint_config import get_template
         shape = self.canvas.selected_shape
-        is_person = (shape is not None
-                     and shape.label.lower() == 'person'
-                     and shape.shape_type == ShapeType.RECTANGLE)
-        self.actions.keypoint_mode.setEnabled(is_person)
-        if is_person and shape.keypoints:
+        has_template = (shape is not None
+                        and shape.shape_type == ShapeType.RECTANGLE
+                        and get_template(shape.label) is not None)
+        self.actions.keypoint_mode.setEnabled(has_template)
+        if has_template and shape.keypoints:
+            self.keypoint_panel.load_template(shape.label.lower())
             self.keypoint_panel.set_keypoints(shape.keypoints)
             self.keypoint_panel.show()
         else:

@@ -125,6 +125,8 @@ class Canvas(QWidget):
         self._keypoint_shape = None
         self._keypoint_index = 0
         self._hovered_keypoint = -1
+        self._keypoint_template_name = None
+        self._keypoint_template = None
 
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
@@ -185,9 +187,12 @@ class Canvas(QWidget):
         self.prev_point = QPointF()
         self.repaint()
 
-    def set_keypoint_mode(self, shape):
+    def set_keypoint_mode(self, shape, template_name='person'):
         """Enter keypoint placement mode for the given shape."""
+        from libs.core.keypoint_config import get_template
         self._keypoint_shape = shape
+        self._keypoint_template_name = template_name
+        self._keypoint_template = get_template(template_name)
         self._keypoint_index = self._next_unplaced_keypoint(0)
         self.mode = self.KEYPOINT_MODE
         self.update()
@@ -197,16 +202,25 @@ class Canvas(QWidget):
         self._keypoint_shape = None
         self._keypoint_index = 0
         self._hovered_keypoint = -1
+        self._keypoint_template_name = None
+        self._keypoint_template = None
         self.mode = self.EDIT
         self.update()
 
+    def _keypoint_count(self):
+        """Return the number of keypoints in the current template."""
+        if self._keypoint_template:
+            return len(self._keypoint_template['names'])
+        return 17
+
     def _next_unplaced_keypoint(self, start):
-        """Find next unplaced keypoint index from start. Returns 17 if all done."""
+        """Find next unplaced keypoint index. Returns count if all done."""
+        count = self._keypoint_count()
         kps = self._keypoint_shape.keypoints
-        for i in range(start, 17):
+        for i in range(start, count):
             if kps is None or kps[i] is None:
                 return i
-        return 17
+        return count
 
     @property
     def locked(self):
@@ -433,28 +447,29 @@ class Canvas(QWidget):
 
         # Keypoint placement
         if self.mode == self.KEYPOINT_MODE and self._keypoint_shape:
-            if ev.button() == Qt.LeftButton and self._keypoint_index < 17:
+            kp_count = self._keypoint_count()
+            if ev.button() == Qt.LeftButton and self._keypoint_index < kp_count:
                 if not self.out_of_pixmap(pos):
                     if self._keypoint_shape.keypoints is None:
-                        self._keypoint_shape.keypoints = [None] * 17
+                        self._keypoint_shape.keypoints = [None] * kp_count
                     self._keypoint_shape.keypoints[self._keypoint_index] = (
                         pos.x(), pos.y(), 2)
                     self._keypoint_index = self._next_unplaced_keypoint(
                         self._keypoint_index + 1)
-                    if self._keypoint_index >= 17:
+                    if self._keypoint_index >= kp_count:
                         self.exit_keypoint_mode()
                     self.shapeMoved.emit()
                     self.update()
                 return
-            elif ev.button() == Qt.RightButton and self._keypoint_index < 17:
+            elif ev.button() == Qt.RightButton and self._keypoint_index < kp_count:
                 if not self.out_of_pixmap(pos):
                     if self._keypoint_shape.keypoints is None:
-                        self._keypoint_shape.keypoints = [None] * 17
+                        self._keypoint_shape.keypoints = [None] * kp_count
                     self._keypoint_shape.keypoints[self._keypoint_index] = (
                         pos.x(), pos.y(), 1)
                     self._keypoint_index = self._next_unplaced_keypoint(
                         self._keypoint_index + 1)
-                    if self._keypoint_index >= 17:
+                    if self._keypoint_index >= kp_count:
                         self.exit_keypoint_mode()
                     self.shapeMoved.emit()
                     self.update()
@@ -850,25 +865,34 @@ class Canvas(QWidget):
 
     def _draw_keypoints(self, painter, shape):
         """Draw keypoint dots and skeleton bones for a shape."""
-        from libs.core.keypoint_config import (
-            COCO_SKELETON, get_keypoint_color, COCO_KEYPOINT_NAMES)
+        from libs.core.keypoint_config import get_keypoint_color, get_template
         from libs.utils.styles import hex_to_qcolor
 
         kps = shape.keypoints
         if not kps:
             return
 
+        # Resolve template from shape label
+        template = get_template(shape.label) if shape.label else None
+        if not template:
+            return
+        template_name = shape.label.lower()
+        skeleton = template['skeleton']
+        names = template['names']
+
         dot_size = max(4, 8 / self.scale)
 
         # Draw skeleton bones first (under dots)
-        for start_idx, end_idx in COCO_SKELETON:
+        for start_idx, end_idx in skeleton:
+            if start_idx >= len(kps) or end_idx >= len(kps):
+                continue
             kp_a = kps[start_idx]
             kp_b = kps[end_idx]
             if kp_a is None or kp_b is None:
                 continue
             if kp_a[2] == 0 or kp_b[2] == 0:
                 continue
-            color = hex_to_qcolor(get_keypoint_color(start_idx))
+            color = hex_to_qcolor(get_keypoint_color(start_idx, template_name))
             pen_style = Qt.DashLine if (kp_a[2] == 1 or kp_b[2] == 1) else Qt.SolidLine
             pen = QPen(color, max(1, int(2 / self.scale)), pen_style)
             painter.setPen(pen)
@@ -880,7 +904,7 @@ class Canvas(QWidget):
         for i, kp in enumerate(kps):
             if kp is None or kp[2] == 0:
                 continue
-            color = hex_to_qcolor(get_keypoint_color(i))
+            color = hex_to_qcolor(get_keypoint_color(i, template_name))
             x, y, v = kp
             if v == 2:
                 painter.setPen(QPen(QColor(255, 255, 255), 1))
@@ -893,10 +917,10 @@ class Canvas(QWidget):
                 painter.drawEllipse(QPointF(x, y), dot_size / 2, dot_size / 2)
 
         # Draw label on hovered keypoint
-        if self._hovered_keypoint >= 0 and self._hovered_keypoint < 17:
-            kp = kps[self._hovered_keypoint]
+        if 0 <= self._hovered_keypoint < len(names):
+            kp = kps[self._hovered_keypoint] if self._hovered_keypoint < len(kps) else None
             if kp is not None:
-                name = COCO_KEYPOINT_NAMES[self._hovered_keypoint]
+                name = names[self._hovered_keypoint]
                 font = painter.font()
                 font.setPointSize(max(6, int(8 / self.scale)))
                 painter.setFont(font)
@@ -1090,12 +1114,13 @@ class Canvas(QWidget):
         mods = ev.modifiers()
 
         if key == Qt.Key_Escape and self.mode == self.KEYPOINT_MODE:
-            if self._keypoint_index < 17:
+            kp_count = self._keypoint_count()
+            if self._keypoint_index < kp_count:
                 if self._keypoint_shape and self._keypoint_shape.keypoints is None:
-                    self._keypoint_shape.keypoints = [None] * 17
+                    self._keypoint_shape.keypoints = [None] * kp_count
                 self._keypoint_index = self._next_unplaced_keypoint(
                     self._keypoint_index + 1)
-                if self._keypoint_index >= 17:
+                if self._keypoint_index >= kp_count:
                     self.exit_keypoint_mode()
                 self.update()
             else:
