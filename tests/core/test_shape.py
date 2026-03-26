@@ -457,5 +457,79 @@ class TestPolygonVertexOps(unittest.TestCase):
         self.assertEqual(len(shape.points), 4)  # unchanged
 
 
+class TestShapeKeypoints(unittest.TestCase):
+    """Test keypoint metadata on Shape."""
+
+    def _make_person_box(self):
+        shape = Shape(label='person')
+        for p in [QPointF(10, 10), QPointF(100, 10),
+                  QPointF(100, 200), QPointF(10, 200)]:
+            shape.add_point(p)
+        shape.close()
+        return shape
+
+    def test_keypoints_default_none(self):
+        shape = Shape()
+        self.assertIsNone(shape.keypoints)
+
+    def test_set_keypoints(self):
+        shape = self._make_person_box()
+        kps = [None] * 17
+        kps[0] = (50.0, 20.0, 2)
+        shape.keypoints = kps
+        self.assertEqual(shape.keypoints[0], (50.0, 20.0, 2))
+        self.assertIsNone(shape.keypoints[1])
+
+    def test_num_keypoints_none(self):
+        shape = Shape()
+        self.assertEqual(shape.num_keypoints, 0)
+
+    def test_num_keypoints_count(self):
+        shape = self._make_person_box()
+        kps = [None] * 17
+        kps[0] = (50.0, 20.0, 2)   # visible
+        kps[1] = (45.0, 18.0, 1)   # occluded
+        kps[2] = (55.0, 18.0, 0)   # not labeled
+        shape.keypoints = kps
+        self.assertEqual(shape.num_keypoints, 2)
+
+    def test_move_by_shifts_keypoints(self):
+        shape = self._make_person_box()
+        kps = [None] * 17
+        kps[0] = (50.0, 20.0, 2)
+        kps[5] = (30.0, 60.0, 1)
+        shape.keypoints = kps
+        shape.move_by(QPointF(10.0, 5.0))
+        self.assertAlmostEqual(shape.keypoints[0][0], 60.0)
+        self.assertAlmostEqual(shape.keypoints[0][1], 25.0)
+        self.assertEqual(shape.keypoints[0][2], 2)
+        self.assertAlmostEqual(shape.keypoints[5][0], 40.0)
+        self.assertAlmostEqual(shape.keypoints[5][1], 65.0)
+        self.assertIsNone(shape.keypoints[1])
+
+    def test_copy_preserves_keypoints(self):
+        shape = self._make_person_box()
+        kps = [None] * 17
+        kps[0] = (50.0, 20.0, 2)
+        shape.keypoints = kps
+        copied = shape.copy()
+        self.assertIsNotNone(copied.keypoints)
+        self.assertEqual(copied.keypoints[0], (50.0, 20.0, 2))
+
+    def test_copy_keypoints_independent(self):
+        shape = self._make_person_box()
+        kps = [None] * 17
+        kps[0] = (50.0, 20.0, 2)
+        shape.keypoints = kps
+        copied = shape.copy()
+        copied.keypoints[0] = (99.0, 99.0, 1)
+        self.assertEqual(shape.keypoints[0], (50.0, 20.0, 2))
+
+    def test_keypoints_none_after_copy_when_not_set(self):
+        shape = self._make_person_box()
+        copied = shape.copy()
+        self.assertIsNone(copied.keypoints)
+
+
 if __name__ == '__main__':
     unittest.main()
