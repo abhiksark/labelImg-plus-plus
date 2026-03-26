@@ -41,6 +41,7 @@ LIGHT_COLORS = {
     'status_verified': '#34a853',    # Green
     'grid_line': '#cccccc',
     'alignment_guide': '#4da6ff',
+    'midpoint_handle': '#999999',
 }
 
 DARK_COLORS = {
@@ -73,6 +74,7 @@ DARK_COLORS = {
     'status_verified': '#4caf50',    # Brighter green
     'grid_line': '#404040',
     'alignment_guide': '#4da6ff',
+    'midpoint_handle': '#666666',
 }
 
 
