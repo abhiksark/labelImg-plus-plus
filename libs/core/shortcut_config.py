@@ -44,6 +44,7 @@ DEFAULT_SHORTCUTS = {
     'light_org': 'Ctrl+Shift+=',
     'edit_label': 'Ctrl+E',
     'show_grid': 'Ctrl+Shift+G',
+    'create_polygon': 'P',
 }
 
 

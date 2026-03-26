@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 from PyQt5.QtCore import QPointF
 from PyQt5.QtWidgets import QApplication
 
-from libs.core.shape import Shape
+from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
@@ -342,6 +342,119 @@ class TestShapeClassConstants(unittest.TestCase):
         """Test vertex mode constants."""
         self.assertEqual(Shape.MOVE_VERTEX, 0)
         self.assertEqual(Shape.NEAR_VERTEX, 1)
+
+
+class TestShapeType(unittest.TestCase):
+    """Test ShapeType enum and type-aware behavior."""
+
+    def test_default_shape_type_is_rectangle(self):
+        shape = Shape()
+        self.assertEqual(shape.shape_type, ShapeType.RECTANGLE)
+
+    def test_polygon_shape_type(self):
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        self.assertEqual(shape.shape_type, ShapeType.POLYGON)
+
+    def test_rectangle_max_points_is_4(self):
+        shape = Shape()
+        for i in range(10):
+            shape.add_point(QPointF(i, i))
+        self.assertEqual(len(shape.points), 4)
+
+    def test_polygon_allows_many_points(self):
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        for i in range(50):
+            shape.add_point(QPointF(i, i))
+        self.assertEqual(len(shape.points), 50)
+
+    def test_polygon_max_points_cap(self):
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        for i in range(150):
+            shape.add_point(QPointF(i, i))
+        self.assertEqual(len(shape.points), 100)
+
+
+class TestPolygonVertexOps(unittest.TestCase):
+    """Test polygon-specific vertex operations."""
+
+    def _make_triangle(self):
+        shape = Shape(label='tri', shape_type=ShapeType.POLYGON)
+        shape.add_point(QPointF(0, 0))
+        shape.add_point(QPointF(10, 0))
+        shape.add_point(QPointF(5, 10))
+        shape.close()
+        return shape
+
+    def test_remove_point_polygon(self):
+        shape = self._make_triangle()
+        shape.add_point(QPointF(7, 5))  # now 4 points
+        shape.remove_point(2)
+        self.assertEqual(len(shape.points), 3)
+
+    def test_remove_point_enforces_min_3(self):
+        shape = self._make_triangle()
+        result = shape.remove_point(0)
+        self.assertFalse(result)
+        self.assertEqual(len(shape.points), 3)
+
+    def test_remove_point_not_allowed_on_rectangle(self):
+        shape = Shape()
+        for p in [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10), QPointF(0, 10)]:
+            shape.add_point(p)
+        result = shape.remove_point(0)
+        self.assertFalse(result)
+
+    def test_insert_point(self):
+        shape = self._make_triangle()
+        shape.insert_point(1, QPointF(7, 0))
+        self.assertEqual(len(shape.points), 4)
+        self.assertEqual(shape.points[1], QPointF(7, 0))
+
+    def test_midpoint_of_edge(self):
+        shape = self._make_triangle()
+        mid = shape.midpoint_of_edge(0)
+        self.assertAlmostEqual(mid.x(), 5.0)
+        self.assertAlmostEqual(mid.y(), 0.0)
+
+    def test_midpoint_of_last_edge_wraps(self):
+        shape = self._make_triangle()
+        mid = shape.midpoint_of_edge(2)  # edge from (5,10) back to (0,0)
+        self.assertAlmostEqual(mid.x(), 2.5)
+        self.assertAlmostEqual(mid.y(), 5.0)
+
+    def test_copy_preserves_shape_type(self):
+        shape = self._make_triangle()
+        copied = shape.copy()
+        self.assertEqual(copied.shape_type, ShapeType.POLYGON)
+
+    def test_nearest_midpoint_hit(self):
+        """Test nearest_midpoint returns edge index when point is near midpoint."""
+        shape = self._make_triangle()
+        # Midpoint of edge 0 is (5, 0). Search near it.
+        result = shape.nearest_midpoint(QPointF(5.5, 0.5), 2.0)
+        self.assertEqual(result, 0)
+
+    def test_nearest_midpoint_miss(self):
+        """Test nearest_midpoint returns None when no midpoint is close."""
+        shape = self._make_triangle()
+        result = shape.nearest_midpoint(QPointF(100, 100), 2.0)
+        self.assertIsNone(result)
+
+    def test_nearest_midpoint_rectangle_returns_none(self):
+        """Test nearest_midpoint returns None for rectangle shapes."""
+        shape = Shape()
+        for p in [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10), QPointF(0, 10)]:
+            shape.add_point(p)
+        result = shape.nearest_midpoint(QPointF(5, 0), 2.0)
+        self.assertIsNone(result)
+
+    def test_insert_point_blocked_on_rectangle(self):
+        """Test insert_point is blocked on rectangle shapes."""
+        shape = Shape()
+        for p in [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10), QPointF(0, 10)]:
+            shape.add_point(p)
+        shape.insert_point(1, QPointF(5, 0))
+        self.assertEqual(len(shape.points), 4)  # unchanged
 
 
 if __name__ == '__main__':

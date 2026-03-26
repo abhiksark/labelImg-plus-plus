@@ -9,16 +9,20 @@ except ImportError:
 import os.path
 from enum import Enum
 
+from libs.formats.coco_io import COCOWriter
 from libs.formats.create_ml_io import CreateMLWriter
 from libs.formats.pascal_voc_io import PascalVocWriter
 from libs.formats.pascal_voc_io import XML_EXT
 from libs.formats.yolo_io import YOLOWriter
+from libs.formats.yolo_seg_io import YOLOSegWriter
 
 
 class LabelFileFormat(Enum):
     PASCAL_VOC = 1
     YOLO = 2
     CREATE_ML = 3
+    COCO = 4
+    YOLO_SEG = 5
 
 
 class LabelFileError(Exception):
@@ -75,8 +79,13 @@ class LabelFile(object):
             label = shape['label']
             # Add Chris
             difficult = int(shape['difficult'])
-            bnd_box = LabelFile.convert_points_to_bnd_box(points)
-            writer.add_bnd_box(bnd_box[0], bnd_box[1], bnd_box[2], bnd_box[3], label, difficult)
+            shape_type = shape.get('shape_type', 'rectangle')
+
+            if shape_type == 'polygon':
+                writer.add_polygon(points, label, difficult)
+            else:
+                bnd_box = LabelFile.convert_points_to_bnd_box(points)
+                writer.add_bnd_box(bnd_box[0], bnd_box[1], bnd_box[2], bnd_box[3], label, difficult)
 
         writer.save(target_file=filename)
         return
@@ -110,6 +119,72 @@ class LabelFile(object):
 
         writer.save(target_file=filename, class_list=class_list)
         return
+
+    def save_coco_format(self, filename, shapes, image_path, image_data,
+                         class_list=None, line_color=None, fill_color=None,
+                         database_src=None):
+        img_folder_name = os.path.basename(os.path.dirname(image_path))
+        img_file_name = os.path.basename(image_path)
+
+        if isinstance(image_data, QImage):
+            image = image_data
+        else:
+            image = QImage()
+            image.load(image_path)
+        image_shape = [image.height(), image.width(),
+                       1 if image.isGrayscale() else 3]
+
+        writer = COCOWriter(img_folder_name, img_file_name, image_shape,
+                            local_img_path=image_path)
+        writer.verified = self.verified
+
+        for shape in shapes:
+            points = shape['points']
+            label = shape['label']
+            difficult = int(shape['difficult'])
+            shape_type = shape.get('shape_type', 'rectangle')
+
+            if shape_type == 'polygon':
+                writer.add_polygon(points, label, difficult)
+            else:
+                bnd_box = LabelFile.convert_points_to_bnd_box(points)
+                writer.add_bnd_box(bnd_box[0], bnd_box[1],
+                                   bnd_box[2], bnd_box[3], label, difficult)
+
+        writer.save(target_file=filename)
+
+    def save_yolo_seg_format(self, filename, shapes, image_path, image_data,
+                             class_list, line_color=None, fill_color=None,
+                             database_src=None):
+        img_folder_name = os.path.basename(os.path.dirname(image_path))
+        img_file_name = os.path.basename(image_path)
+
+        if isinstance(image_data, QImage):
+            image = image_data
+        else:
+            image = QImage()
+            image.load(image_path)
+        image_shape = [image.height(), image.width(),
+                       1 if image.isGrayscale() else 3]
+
+        writer = YOLOSegWriter(img_folder_name, img_file_name, image_shape,
+                               local_img_path=image_path)
+        writer.verified = self.verified
+
+        for shape in shapes:
+            points = shape['points']
+            label = shape['label']
+            difficult = int(shape['difficult'])
+            shape_type = shape.get('shape_type', 'rectangle')
+
+            if shape_type == 'polygon':
+                writer.add_polygon(points, label, difficult)
+            else:
+                bnd_box = LabelFile.convert_points_to_bnd_box(points)
+                writer.add_bnd_box(bnd_box[0], bnd_box[1],
+                                   bnd_box[2], bnd_box[3], label, difficult)
+
+        writer.save(target_file=filename, class_list=class_list)
 
     def toggle_verify(self):
         self.verified = not self.verified

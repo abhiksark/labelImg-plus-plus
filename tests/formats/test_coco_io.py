@@ -1,0 +1,116 @@
+# tests/formats/test_coco_io.py
+"""Tests for COCO JSON format I/O."""
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+dir_name = os.path.abspath(os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(dir_name, '..', '..'))
+
+from libs.formats.coco_io import COCOWriter, COCOReader
+
+
+class TestCOCOWriter(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.out_path = os.path.join(self.tmp_dir, 'annotations.json')
+
+    def test_write_rectangle(self):
+        writer = COCOWriter('test_folder', 'test.jpg', [480, 640, 3])
+        writer.add_bnd_box(10, 20, 100, 200, 'cat', False)
+        writer.save(self.out_path)
+
+        with open(self.out_path) as f:
+            data = json.load(f)
+
+        self.assertEqual(len(data['annotations']), 1)
+        ann = data['annotations'][0]
+        self.assertEqual(ann['bbox'], [10, 20, 90, 180])
+        self.assertNotIn('segmentation', ann)
+
+    def test_write_polygon(self):
+        writer = COCOWriter('test_folder', 'test.jpg', [480, 640, 3])
+        points = [(10, 20), (50, 20), (50, 80), (30, 90), (10, 60)]
+        writer.add_polygon(points, 'dog', False)
+        writer.save(self.out_path)
+
+        with open(self.out_path) as f:
+            data = json.load(f)
+
+        ann = data['annotations'][0]
+        self.assertEqual(ann['segmentation'], [[10, 20, 50, 20, 50, 80, 30, 90, 10, 60]])
+        self.assertEqual(ann['bbox'], [10, 20, 40, 70])
+
+    def test_write_mixed_shapes(self):
+        writer = COCOWriter('test_folder', 'test.jpg', [480, 640, 3])
+        writer.add_bnd_box(0, 0, 50, 50, 'cat', False)
+        writer.add_polygon([(10, 10), (40, 10), (25, 40)], 'dog', False)
+        writer.save(self.out_path)
+
+        with open(self.out_path) as f:
+            data = json.load(f)
+
+        self.assertEqual(len(data['annotations']), 2)
+        self.assertEqual(len(data['categories']), 2)
+
+    def test_categories_unique(self):
+        writer = COCOWriter('test_folder', 'test.jpg', [480, 640, 3])
+        writer.add_bnd_box(0, 0, 50, 50, 'cat', False)
+        writer.add_bnd_box(10, 10, 60, 60, 'cat', False)
+        writer.save(self.out_path)
+
+        with open(self.out_path) as f:
+            data = json.load(f)
+
+        self.assertEqual(len(data['categories']), 1)
+
+
+class TestCOCOReader(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def test_read_rectangle(self):
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg', 'width': 640, 'height': 480}],
+            'annotations': [{'id': 1, 'image_id': 1, 'category_id': 1,
+                             'bbox': [10, 20, 90, 180], 'iscrowd': 0}],
+            'categories': [{'id': 1, 'name': 'cat'}]
+        }
+        path = os.path.join(self.tmp_dir, 'annotations.json')
+        with open(path, 'w') as f:
+            json.dump(data, f)
+
+        reader = COCOReader(path, 'test.jpg')
+        shapes = reader.get_shapes()
+        self.assertEqual(len(shapes), 1)
+        label, points, _, _, difficult, shape_type = shapes[0]
+        self.assertEqual(label, 'cat')
+        self.assertEqual(shape_type, 'rectangle')
+
+    def test_read_polygon(self):
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg', 'width': 640, 'height': 480}],
+            'annotations': [{'id': 1, 'image_id': 1, 'category_id': 1,
+                             'segmentation': [[10, 20, 50, 20, 50, 80]],
+                             'bbox': [10, 20, 40, 60], 'iscrowd': 0}],
+            'categories': [{'id': 1, 'name': 'dog'}]
+        }
+        path = os.path.join(self.tmp_dir, 'annotations.json')
+        with open(path, 'w') as f:
+            json.dump(data, f)
+
+        reader = COCOReader(path, 'test.jpg')
+        shapes = reader.get_shapes()
+        self.assertEqual(len(shapes), 1)
+        label, points, _, _, difficult, shape_type = shapes[0]
+        self.assertEqual(label, 'dog')
+        self.assertEqual(shape_type, 'polygon')
+        self.assertEqual(points, [(10, 20), (50, 20), (50, 80)])
+
+
+if __name__ == '__main__':
+    unittest.main()
