@@ -58,8 +58,8 @@ class COCOWriter:
         self._annotations.append({
             'category_id': cat_id,
             'segmentation': [flat],
-            'bbox': [int(x_min), int(y_min),
-                     int(x_max - x_min), int(y_max - y_min)],
+            'bbox': [round(x_min), round(y_min),
+                     round(x_max - x_min), round(y_max - y_min)],
             'iscrowd': 0,
             'difficult': int(difficult),
         })

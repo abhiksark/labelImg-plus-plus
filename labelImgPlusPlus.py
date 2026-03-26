@@ -2106,7 +2106,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Check for polygon degradation when saving to formats that don't support polygons
         degradation_formats = {
-            LabelFileFormat.PASCAL_VOC: FORMAT_PASCALVOC,
             LabelFileFormat.YOLO: FORMAT_YOLO,
             LabelFileFormat.CREATE_ML: FORMAT_CREATEML,
         }
@@ -2531,29 +2530,29 @@ class MainWindow(QMainWindow, WindowMixin):
             xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
             txt_path = os.path.join(self.default_save_dir, basename + TXT_EXT)
             json_path = os.path.join(self.default_save_dir, basename + JSON_EXT)
-
-            """Annotation file priority:
-            PascalXML > YOLO
-            """
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
-            elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
-
         else:
             xml_path = os.path.splitext(file_path)[0] + XML_EXT
             txt_path = os.path.splitext(file_path)[0] + TXT_EXT
             json_path = os.path.splitext(file_path)[0] + JSON_EXT
 
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
-            elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
-            
+        # Dispatch based on current format for unambiguous types
+        if self.label_file_format == LabelFileFormat.COCO:
+            if os.path.isfile(json_path):
+                self.load_coco_json_by_filename(json_path, file_path)
+                return
+        elif self.label_file_format == LabelFileFormat.YOLO_SEG:
+            if os.path.isfile(txt_path):
+                self.load_yolo_seg_by_filename(txt_path)
+                return
+
+        # Fallback: auto-detect by file extension priority
+        # PascalXML > YOLO > CreateML
+        if os.path.isfile(xml_path):
+            self.load_pascal_xml_by_filename(xml_path)
+        elif os.path.isfile(txt_path):
+            self.load_yolo_txt_by_filename(txt_path)
+        elif os.path.isfile(json_path):
+            self.load_create_ml_json_by_filename(json_path, file_path)
 
     def resizeEvent(self, event):
         if self.canvas and not self.image.isNull()\
@@ -3335,6 +3334,71 @@ class MainWindow(QMainWindow, WindowMixin):
         shapes = create_ml_parse_reader.get_shapes()
         self.load_labels(shapes)
         self.canvas.verified = create_ml_parse_reader.verified
+
+    def load_coco_json_by_filename(self, json_path, file_path):
+        """Load annotations from a COCO JSON file for the given image.
+
+        Args:
+            json_path: Path to the COCO JSON annotation file.
+            file_path: Path to the image file (used to match image entry).
+        """
+        if self.file_path is None:
+            return
+        if not os.path.isfile(json_path):
+            return
+
+        self.set_format(FORMAT_COCO)
+
+        image_filename = os.path.basename(file_path)
+        try:
+            reader = COCOReader(json_path, image_filename)
+            shapes = reader.get_shapes()
+            self.load_labels(shapes)
+            self.canvas.verified = reader.verified
+        except Exception as e:
+            self.error_message(
+                'Annotation Error',
+                f'Error loading COCO annotations from '
+                f'{os.path.basename(json_path)}: {e}')
+
+    def load_yolo_seg_by_filename(self, txt_path):
+        """Load annotations from a YOLO-seg text file.
+
+        Args:
+            txt_path: Path to the YOLO-seg annotation text file.
+        """
+        if self.file_path is None:
+            return
+        if not os.path.isfile(txt_path):
+            return
+
+        self.set_format(FORMAT_YOLO_SEG)
+
+        try:
+            if hasattr(self, '_original_image_size') and self._original_image_size is not None:
+                class MockImage:
+                    def __init__(self, size, grayscale=False):
+                        self._size = size
+                        self._grayscale = grayscale
+                    def width(self):
+                        return self._size.width()
+                    def height(self):
+                        return self._size.height()
+                    def isGrayscale(self):
+                        return self._grayscale
+                mock_img = MockImage(self._original_image_size,
+                                     self.image.isGrayscale())
+                reader = YOLOSegReader(txt_path, mock_img)
+            else:
+                reader = YOLOSegReader(txt_path, self.image)
+            shapes = reader.get_shapes()
+            self.load_labels(shapes)
+            self.canvas.verified = reader.verified
+        except Exception as e:
+            self.error_message(
+                'Annotation Error',
+                f'Error loading YOLO-seg annotations for '
+                f'{os.path.basename(txt_path)}: {e}')
 
     def copy_previous_bounding_boxes(self):
         current_index = self._path_to_idx.get(self.file_path, 0)

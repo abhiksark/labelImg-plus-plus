@@ -116,4 +116,16 @@ class YOLOSegReader:
                     y = round(float(coords[i + 1]) * h)
                     points.append((x, y))
 
-                self.shapes.append((label, points, None, None, False, 'polygon'))
+                # Detect axis-aligned rectangles
+                if len(points) == 4:
+                    xs = [p[0] for p in points]
+                    ys = [p[1] for p in points]
+                    if len(set(xs)) == 2 and len(set(ys)) == 2:
+                        shape_type = 'rectangle'
+                    else:
+                        shape_type = 'polygon'
+                else:
+                    shape_type = 'polygon'
+
+                self.shapes.append(
+                    (label, points, None, None, False, shape_type))

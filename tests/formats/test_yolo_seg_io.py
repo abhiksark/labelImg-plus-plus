@@ -57,13 +57,32 @@ class TestYOLOSegReader(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.image = QImage(200, 100, QImage.Format_RGB32)
 
-    def test_read_polygon(self):
+    def test_read_axis_aligned_rectangle(self):
+        """4-point axis-aligned shapes should be detected as rectangles."""
         txt_path = os.path.join(self.tmp_dir, 'test.txt')
         classes_path = os.path.join(self.tmp_dir, 'classes.txt')
         with open(classes_path, 'w') as f:
             f.write('cat\n')
         with open(txt_path, 'w') as f:
             f.write('0 0.100000 0.100000 0.900000 0.100000 0.900000 0.900000 0.100000 0.900000\n')
+
+        reader = YOLOSegReader(txt_path, self.image, classes_path)
+        shapes = reader.get_shapes()
+        self.assertEqual(len(shapes), 1)
+        label, points, _, _, difficult, shape_type = shapes[0]
+        self.assertEqual(label, 'cat')
+        self.assertEqual(shape_type, 'rectangle')
+        self.assertEqual(len(points), 4)
+
+    def test_read_non_axis_aligned_quadrilateral(self):
+        """4-point non-axis-aligned shapes remain polygons."""
+        txt_path = os.path.join(self.tmp_dir, 'test.txt')
+        classes_path = os.path.join(self.tmp_dir, 'classes.txt')
+        with open(classes_path, 'w') as f:
+            f.write('cat\n')
+        with open(txt_path, 'w') as f:
+            # A rotated quadrilateral (not axis-aligned)
+            f.write('0 0.250000 0.100000 0.900000 0.250000 0.750000 0.900000 0.100000 0.750000\n')
 
         reader = YOLOSegReader(txt_path, self.image, classes_path)
         shapes = reader.get_shapes()
