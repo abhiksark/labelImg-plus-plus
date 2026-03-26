@@ -143,13 +143,15 @@ class LabelFile(object):
             label = shape['label']
             difficult = int(shape['difficult'])
             shape_type = shape.get('shape_type', 'rectangle')
+            keypoints = shape.get('keypoints', None)
 
             if shape_type == 'polygon':
                 writer.add_polygon(points, label, difficult)
             else:
                 bnd_box = LabelFile.convert_points_to_bnd_box(points)
                 writer.add_bnd_box(bnd_box[0], bnd_box[1],
-                                   bnd_box[2], bnd_box[3], label, difficult)
+                                   bnd_box[2], bnd_box[3], label, difficult,
+                                   keypoints=keypoints)
 
         writer.save(target_file=filename)
 
