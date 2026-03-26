@@ -54,6 +54,7 @@ from libs.widgets.toolBar import ToolBar, DropdownToolButton
 from libs.widgets.galleryWidget import GalleryWidget, AnnotationStatus
 from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
+from libs.widgets.keypointPanel import KeypointPanel
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -521,7 +522,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         list_layout.addWidget(self.label_tab_widget)
 
-
+        # Keypoint annotation panel (shown for person shapes)
+        self.keypoint_panel = KeypointPanel()
+        self.keypoint_panel.keypointClicked.connect(self._on_keypoint_panel_click)
+        list_layout.addWidget(self.keypoint_panel)
 
         self.dock = QDockWidget(get_str('boxLabelText'), self)
         self.dock.setObjectName(get_str('labels'))
@@ -588,6 +592,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.canvas.newShape.connect(self.new_shape)
         self.canvas.shapeMoved.connect(self.set_dirty)
+        self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -689,6 +694,13 @@ class MainWindow(QMainWindow, WindowMixin):
         create_polygon = action(get_str('crtPolygon'), self.create_polygon_mode,
                                 self.shortcut_config.get('create_polygon'),
                                 'objects', get_str('crtPolygonDetail'), enabled=False)
+        keypoint_mode_action = action(
+            get_str('addKeypoints'),
+            self.toggle_keypoint_mode,
+            self.shortcut_config.get('keypoint_mode'),
+            'verify',
+            get_str('addKeypointsDetail'),
+            enabled=False)
         delete = action(get_str('delBox'), self.delete_selected_shape,
                         self.shortcut_config.get('delete'), 'delete', get_str('delBoxDetail'), enabled=False)
         copy = action(get_str('dupBox'), self.copy_selected_shape,
@@ -894,11 +906,13 @@ class MainWindow(QMainWindow, WindowMixin):
             'light_darken': light_darken,
             'light_org': light_org,
             'edit_label': edit,
+            'keypoint_mode': keypoint_mode_action,
         }
 
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, create_polygon=create_polygon,
+                              keypoint_mode=keypoint_mode_action,
                               delete=delete, edit=edit, copy=copy,
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
                               copyAllToClipboard=copy_all_to_clipboard,
@@ -915,6 +929,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               beginner=(), advanced=(),
                               editMenu=(undo, redo, None, edit, copy, copy_to_clipboard,
                                         paste_from_clipboard, copy_all_to_clipboard, delete,
+                                        None, keypoint_mode_action,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, create_polygon, edit, copy, copy_to_clipboard, paste_from_clipboard, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy, copy_to_clipboard,
@@ -1083,7 +1098,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.actions.beginner = (
             file_dropdown, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None,
-            create, create_polygon, copy, delete, None,
+            create, create_polygon, keypoint_mode_action, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
             brightness_dropdown)
 
@@ -1630,6 +1645,45 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.create_polygon.setEnabled(False)
         self.actions.editMode.setEnabled(True)
 
+    def toggle_keypoint_mode(self):
+        """Toggle keypoint annotation mode for the selected person shape."""
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas.exit_keypoint_mode()
+            self.keypoint_panel.hide()
+            return
+
+        shape = self.canvas.selected_shape
+        if not shape or shape.label.lower() != 'person':
+            return
+        if shape.shape_type != ShapeType.RECTANGLE:
+            return
+
+        if shape.keypoints is None:
+            shape.keypoints = [None] * 17
+
+        self.canvas.set_keypoint_mode(shape)
+        self.keypoint_panel.set_keypoints(shape.keypoints)
+        self.keypoint_panel.set_current_index(self.canvas._keypoint_index)
+        self.keypoint_panel.show()
+
+    def _on_keypoint_panel_click(self, index):
+        """Handle click on a keypoint row in the panel."""
+        if self.canvas.mode != self.canvas.KEYPOINT_MODE:
+            self.toggle_keypoint_mode()
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas._keypoint_index = index
+            self.keypoint_panel.set_current_index(index)
+            self.canvas.update()
+
+    def _on_shape_moved_keypoints(self):
+        """Refresh the keypoint panel after a shape move."""
+        if (self.canvas.mode == self.canvas.KEYPOINT_MODE
+                and self.canvas._keypoint_shape):
+            self.keypoint_panel.set_keypoints(
+                self.canvas._keypoint_shape.keypoints)
+            self.keypoint_panel.set_current_index(
+                self.canvas._keypoint_index)
+
     def toggle_drawing_sensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""
         self.actions.editMode.setEnabled(not drawing)
@@ -1963,6 +2017,18 @@ class MainWindow(QMainWindow, WindowMixin):
         # Enable copy all if there are shapes
         self.actions.copyAllToClipboard.setEnabled(len(self.canvas.shapes) > 0)
 
+        # Show/hide keypoint panel based on selection
+        shape = self.canvas.selected_shape
+        is_person = (shape is not None
+                     and shape.label.lower() == 'person'
+                     and shape.shape_type == ShapeType.RECTANGLE)
+        self.actions.keypoint_mode.setEnabled(is_person)
+        if is_person and shape.keypoints:
+            self.keypoint_panel.set_keypoints(shape.keypoints)
+            self.keypoint_panel.show()
+        else:
+            self.keypoint_panel.hide()
+
     def add_label(self, shape):
         shape.paint_label = self.display_label_option.isChecked()
         item = HashableQListWidgetItem(shape.label)
@@ -1999,12 +2065,17 @@ class MainWindow(QMainWindow, WindowMixin):
         scale = self._image_scale_factor if hasattr(self, '_image_scale_factor') else 1.0
 
         for shape_data in shapes:
-            # Handle both 5-element (legacy) and 6-element (with shape_type) tuples
-            if len(shape_data) == 6:
+            # Handle 5-element (legacy), 6-element (with shape_type),
+            # and 7-element (with keypoints) tuples
+            if len(shape_data) == 7:
+                label, points, line_color, fill_color, difficult, shape_type_str, kp_data = shape_data
+            elif len(shape_data) == 6:
                 label, points, line_color, fill_color, difficult, shape_type_str = shape_data
+                kp_data = None
             else:
                 label, points, line_color, fill_color, difficult = shape_data
                 shape_type_str = 'rectangle'
+                kp_data = None
 
             st = ShapeType.POLYGON if shape_type_str == 'polygon' else ShapeType.RECTANGLE
             shape = Shape(label=label, shape_type=st)
@@ -2020,6 +2091,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
                 shape.add_point(QPointF(x, y))
             shape.difficult = difficult
+            if kp_data:
+                shape.keypoints = [
+                    (kp[0] * scale, kp[1] * scale, kp[2])
+                    if kp is not None else None
+                    for kp in kp_data
+                ]
             shape.close()
             s.append(shape)
 
@@ -2097,12 +2174,21 @@ class MainWindow(QMainWindow, WindowMixin):
         def format_shape(s):
             # Scale coordinates from display space to original image space
             scaled_points = [(p.x() * inv_scale, p.y() * inv_scale) for p in s.points]
-            return dict(label=s.label,
-                        line_color=s.line_color.getRgb(),
-                        fill_color=s.fill_color.getRgb(),
-                        points=scaled_points,
-                        difficult=s.difficult,
-                        shape_type=s.shape_type.value)
+            result = dict(
+                label=s.label,
+                line_color=s.line_color.getRgb(),
+                fill_color=s.fill_color.getRgb(),
+                points=scaled_points,
+                difficult=s.difficult,
+                shape_type=s.shape_type.value,
+            )
+            if s.keypoints is not None:
+                result['keypoints'] = [
+                    (kp[0] * inv_scale, kp[1] * inv_scale, kp[2])
+                    if kp is not None else None
+                    for kp in s.keypoints
+                ]
+            return result
 
         # Check for polygon degradation when saving to formats that don't support polygons
         degradation_formats = {
@@ -3552,6 +3638,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'gallery_stats') and self.gallery_stats:
             if hasattr(self.gallery_stats, 'apply_theme'):
                 self.gallery_stats.apply_theme(theme)
+
+        # Apply theme to keypoint panel
+        if hasattr(self, 'keypoint_panel'):
+            self.keypoint_panel.apply_theme(theme)
 
         # Refresh save status indicator colors
         if hasattr(self, 'label_save_status'):
