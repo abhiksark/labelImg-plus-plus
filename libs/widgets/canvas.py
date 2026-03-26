@@ -11,9 +11,43 @@ except ImportError:
     )
     from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint
 
+import math
+
 from libs.core.shape import Shape, ShapeType
 from libs.utils.utils import distance
 from libs.utils.styles import Theme
+
+
+def _perpendicular_distance(point, line_start, line_end):
+    """Calculate perpendicular distance from point to line segment."""
+    dx = line_end.x() - line_start.x()
+    dy = line_end.y() - line_start.y()
+    length_sq = dx * dx + dy * dy
+    if length_sq == 0:
+        return math.hypot(point.x() - line_start.x(), point.y() - line_start.y())
+    t = max(0, min(1, ((point.x() - line_start.x()) * dx +
+                        (point.y() - line_start.y()) * dy) / length_sq))
+    proj_x = line_start.x() + t * dx
+    proj_y = line_start.y() + t * dy
+    return math.hypot(point.x() - proj_x, point.y() - proj_y)
+
+
+def douglas_peucker(points, epsilon):
+    """Simplify a polyline using Douglas-Peucker algorithm."""
+    if len(points) <= 2:
+        return points
+    max_dist = 0
+    max_index = 0
+    for i in range(1, len(points) - 1):
+        d = _perpendicular_distance(points[i], points[0], points[-1])
+        if d > max_dist:
+            max_dist = d
+            max_index = i
+    if max_dist > epsilon:
+        left = douglas_peucker(points[:max_index + 1], epsilon)
+        right = douglas_peucker(points[max_index:], epsilon)
+        return left[:-1] + right
+    return [points[0], points[-1]]
 
 CURSOR_DEFAULT = Qt.ArrowCursor
 CURSOR_POINT = Qt.PointingHandCursor
@@ -179,6 +213,15 @@ class Canvas(QWidget):
         if window.file_path is not None:
             self.parent().window().label_coordinates.setText(
                 'X: %d; Y: %d' % (pos.x(), pos.y()))
+
+        # Freehand polygon tracing
+        if self._freehand_active and Qt.LeftButton & ev.buttons():
+            if not self.out_of_pixmap(pos):
+                last = self._freehand_points[-1]
+                if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 5.0:
+                    self._freehand_points.append(pos)
+                    self.update()
+            return
 
         # Polygon drawing.
         if self.drawing():
@@ -355,13 +398,18 @@ class Canvas(QWidget):
 
         if ev.button() == Qt.LeftButton:
             if self.drawing():
-                self.handle_drawing(pos)
+                if self.mode == self.CREATE_POLYGON and ev.modifiers() & Qt.ShiftModifier:
+                    # Start freehand drawing
+                    if not self.out_of_pixmap(pos):
+                        self._freehand_active = True
+                        self._freehand_points = [pos]
+                else:
+                    self.handle_drawing(pos)
             else:
                 selection = self.select_shape_point(pos)
                 self.prev_point = pos
 
                 if selection is None:
-                    # pan
                     QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
                     self.pan_initial_pos = ev.pos()
 
@@ -371,6 +419,19 @@ class Canvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, ev):
+        if self._freehand_active and ev.button() == Qt.LeftButton:
+            self._freehand_active = False
+            if len(self._freehand_points) >= 3:
+                simplified = douglas_peucker(self._freehand_points, 2.0)
+                if len(simplified) >= 3:
+                    self.current = Shape(shape_type=ShapeType.POLYGON)
+                    for pt in simplified:
+                        snapped = self.apply_snapping(pt)
+                        self.current.add_point(snapped)
+                    self.finalise()
+            self._freehand_points = []
+            return
+
         if ev.button() == Qt.RightButton:
             menu = self.menus[bool(self.selected_shape_copy)]
             self.restore_cursor()
@@ -723,6 +784,13 @@ class Canvas(QWidget):
                 p.setBrush(brush)
                 p.drawRect(int(left_top.x()), int(left_top.y()),
                            int(rect_width), int(rect_height))
+
+        # Draw freehand path in progress
+        if self._freehand_active and len(self._freehand_points) >= 2:
+            pen = QPen(self.drawing_line_color, 2)
+            p.setPen(pen)
+            for i in range(len(self._freehand_points) - 1):
+                p.drawLine(self._freehand_points[i], self._freehand_points[i + 1])
 
         # Draw grid overlay
         if self._grid_enabled and self.pixmap and self._grid_size > 0:
