@@ -59,7 +59,10 @@ from libs.widgets.keypointPanel import KeypointPanel
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
 from libs.core.settings import Settings
-from libs.core.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
+from libs.core.commands import (
+    UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand,
+    EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
+)
 from libs.core.shortcut_config import ShortcutConfig
 
 # Formats
@@ -593,6 +596,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.newShape.connect(self.new_shape)
         self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
+        self.canvas.polygonVerticesEdited.connect(
+            self._on_polygon_vertices_edited)
+        self.canvas.keypointsEdited.connect(self._on_keypoints_edited)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -1691,6 +1697,21 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas._keypoint_shape.keypoints)
             self.keypoint_panel.set_current_index(
                 self.canvas._keypoint_index)
+
+    def _on_polygon_vertices_edited(self, shape, old_points):
+        """Capture polygon vertex edits for undo support."""
+        cmd = EditPolygonVerticesCommand(
+            self, shape, old_points, list(shape.points))
+        self.undo_stack.push(cmd)
+        self.set_dirty()
+
+    def _on_keypoints_edited(self, shape, old_keypoints):
+        """Capture keypoint mutations for undo support."""
+        cmd = EditKeypointsCommand(
+            self, shape, old_keypoints,
+            list(shape.keypoints) if shape.keypoints else None)
+        self.undo_stack.push(cmd)
+        self.set_dirty()
 
     def toggle_drawing_sensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""

@@ -369,5 +369,76 @@ class TestMainWindowLoaderFormatPreservation(unittest.TestCase):
             shutil.rmtree(seg_dir, ignore_errors=True)
 
 
+class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
+    """Integration tests for polygon and keypoint undo support."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app, cls.win = get_main_app()
+        cls.temp_dir = tempfile.mkdtemp()
+        cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
+        img = QImage(100, 100, QImage.Format_RGB32)
+        img.fill(0xFFFFFF)
+        img.save(cls.test_image_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.temp_dir, ignore_errors=True)
+
+    def setUp(self):
+        """Reset state and clear the undo stack for a clean test."""
+        self.win.reset_state()
+        self.win.load_file(self.test_image_path)
+        self.win.undo_stack.clear()
+
+    def test_polygon_vertex_edit_pushes_undoable_command(self):
+        """polygonVerticesEdited -> pushes EditPolygonVerticesCommand,
+        and undo restores the pre-mutation points list."""
+        from libs.core.shape import ShapeType
+
+        shape = Shape(label='polygon', shape_type=ShapeType.POLYGON)
+        shape.add_point(QPointF(10, 10))
+        shape.add_point(QPointF(50, 10))
+        shape.add_point(QPointF(50, 50))
+        shape.add_point(QPointF(10, 50))
+        self.win.canvas.shapes.append(shape)
+        self.win.add_label(shape)
+        self.win.canvas.selected_shape = shape
+
+        old = [QPointF(p.x(), p.y()) for p in shape.points]
+
+        # Mutate then emit (mirrors what canvas does at each mutation site).
+        shape.remove_point(1)
+        self.win.canvas.polygonVerticesEdited.emit(shape, old)
+
+        self.assertTrue(self.win.undo_stack.can_undo())
+        self.assertEqual(len(shape.points), 3)
+
+        self.win.undo_stack.undo()
+
+        self.assertEqual(len(shape.points), 4)
+        for actual, expected in zip(shape.points, old):
+            self.assertEqual(actual.x(), expected.x())
+            self.assertEqual(actual.y(), expected.y())
+
+    def test_keypoint_edit_pushes_undoable_command(self):
+        """keypointsEdited -> pushes EditKeypointsCommand,
+        and undo restores the pre-mutation keypoints list."""
+        shape = Shape(label='person')
+        shape.add_point(QPointF(10, 10))
+        shape.add_point(QPointF(60, 60))
+        shape.close()
+        self.win.canvas.shapes.append(shape)
+        self.win.add_label(shape)
+
+        old = None  # no keypoints placed yet
+        shape.keypoints = [(20.0, 20.0, 2), None, None]
+        self.win.canvas.keypointsEdited.emit(shape, old)
+
+        self.assertTrue(self.win.undo_stack.can_undo())
+        self.win.undo_stack.undo()
+        self.assertIsNone(shape.keypoints)
+
+
 if __name__ == '__main__':
     unittest.main()
