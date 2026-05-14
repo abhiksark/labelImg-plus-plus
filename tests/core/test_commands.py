@@ -18,8 +18,10 @@ from libs.core.commands import (
     DeleteShapeCommand,
     MoveShapeCommand,
     EditLabelCommand,
+    EditPolygonVerticesCommand,
+    EditKeypointsCommand,
 )
-from libs.core.shape import Shape
+from libs.core.shape import Shape, ShapeType
 
 
 # Create a QApplication instance for tests
@@ -498,6 +500,63 @@ class TestEditLabelCommandEdgeCases(unittest.TestCase):
         cmd.execute()
 
         self.assertEqual(shape.label, 'same')
+
+
+class TestEditPolygonVerticesCommand(unittest.TestCase):
+    """Test cases for EditPolygonVerticesCommand."""
+
+    def test_edit_polygon_vertices_command_undo_restores_points(self):
+        class FakeMW:
+            class _C:
+                def update(self):
+                    pass
+            canvas = _C()
+
+        mw = FakeMW()
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        old = [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10)]
+        new = [
+            QPointF(0, 0),
+            QPointF(10, 0),
+            QPointF(10, 10),
+            QPointF(5, 5),
+        ]
+        shape.points = list(new)
+
+        cmd = EditPolygonVerticesCommand(mw, shape, old, new)
+        cmd.undo()
+        self.assertEqual(
+            [(p.x(), p.y()) for p in shape.points],
+            [(p.x(), p.y()) for p in old],
+        )
+        cmd.execute()
+        self.assertEqual(
+            [(p.x(), p.y()) for p in shape.points],
+            [(p.x(), p.y()) for p in new],
+        )
+
+
+class TestEditKeypointsCommand(unittest.TestCase):
+    """Test cases for EditKeypointsCommand."""
+
+    def test_edit_keypoints_command_undo_restores_keypoints(self):
+        class FakeMW:
+            class _C:
+                def update(self):
+                    pass
+            canvas = _C()
+
+        mw = FakeMW()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+        old = [None, None, None]
+        new = [(5.0, 5.0, 2), None, None]
+        shape.keypoints = list(new)
+
+        cmd = EditKeypointsCommand(mw, shape, old, new)
+        cmd.undo()
+        self.assertEqual(shape.keypoints, old)
+        cmd.execute()
+        self.assertEqual(shape.keypoints, new)
 
 
 if __name__ == '__main__':
