@@ -1240,6 +1240,15 @@ class Canvas(QWidget):
         self.un_highlight()
         self.selected_shape_copy = None
 
+        # Clear per-file drawing/keypoint state to avoid stale references.
+        self._keypoint_shape = None
+        self._keypoint_index = 0
+        self._keypoint_template = None
+        self._freehand_active = False
+        self._freehand_points = []
+        self.current = None
+        self.mode = self.EDIT
+
         self.restore_cursor()
         self.pixmap = None
         self.update()

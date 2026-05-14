@@ -16,7 +16,7 @@ from PyQt5.QtGui import QPixmap, QColor
 from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.canvas import Canvas
-from libs.core.shape import Shape
+from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
@@ -356,6 +356,30 @@ class TestCanvasVerified(unittest.TestCase):
         self.canvas.verified = True
 
         self.assertTrue(self.canvas.verified)
+
+
+class TestCanvasResetState(unittest.TestCase):
+    """Test cases for Canvas.reset_state clearing per-file drawing state."""
+
+    def test_reset_state_clears_keypoint_and_freehand_state(self):
+        """reset_state must clear all per-file drawing state."""
+        canvas = Canvas()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+        canvas._keypoint_shape = shape
+        canvas._keypoint_index = 3
+        canvas._freehand_active = True
+        canvas._freehand_points = [object(), object()]
+        canvas.current = Shape(shape_type=ShapeType.POLYGON)
+        canvas.mode = Canvas.KEYPOINT_MODE
+
+        canvas.reset_state()
+
+        self.assertIsNone(canvas._keypoint_shape)
+        self.assertEqual(canvas._keypoint_index, 0)
+        self.assertFalse(canvas._freehand_active)
+        self.assertEqual(canvas._freehand_points, [])
+        self.assertIsNone(canvas.current)
+        self.assertEqual(canvas.mode, Canvas.EDIT)
 
 
 if __name__ == '__main__':
