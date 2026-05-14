@@ -823,6 +823,10 @@ class Canvas(QWidget):
     def delete_selected(self):
         if self.selected_shape:
             shape = self.selected_shape
+            # If this shape is the active keypoint subject, exit keypoint mode
+            # before removing — otherwise the next click crashes on a stale ref.
+            if self._keypoint_shape is shape:
+                self.exit_keypoint_mode()
             self.un_highlight(shape)
             self.shapes.remove(self.selected_shape)
             self.selected_shape = None

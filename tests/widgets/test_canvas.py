@@ -382,5 +382,56 @@ class TestCanvasResetState(unittest.TestCase):
         self.assertEqual(canvas.mode, Canvas.EDIT)
 
 
+class TestCanvasDeleteSelected(unittest.TestCase):
+    """Test cases for Canvas.delete_selected interacting with keypoint mode."""
+
+    def _make_rect_shape(self, label='person'):
+        """Create a rectangle shape with corner points (Shape.__len__ returns
+        len(points), so a point-less Shape is falsy and short-circuits
+        delete_selected's `if self.selected_shape:` guard)."""
+        shape = Shape(label=label, shape_type=ShapeType.RECTANGLE)
+        shape.add_point(QPointF(0, 0))
+        shape.add_point(QPointF(100, 0))
+        shape.add_point(QPointF(100, 100))
+        shape.add_point(QPointF(0, 100))
+        shape.close()
+        return shape
+
+    def test_delete_selected_exits_keypoint_mode_when_subject_deleted(self):
+        """Deleting the active keypoint shape must exit keypoint mode safely."""
+        canvas = Canvas()
+        shape = self._make_rect_shape('person')
+        canvas.shapes = [shape]
+        canvas.selected_shape = shape
+        shape.selected = True
+        canvas._keypoint_shape = shape
+        canvas._keypoint_index = 2
+        canvas.mode = canvas.KEYPOINT_MODE
+
+        canvas.delete_selected()
+
+        self.assertIsNone(canvas._keypoint_shape)
+        self.assertEqual(canvas._keypoint_index, 0)
+        self.assertEqual(canvas.mode, canvas.EDIT)
+
+    def test_delete_selected_preserves_keypoint_mode_for_other_shape(self):
+        """Deleting a non-subject shape must NOT exit keypoint mode."""
+        canvas = Canvas()
+        subject = self._make_rect_shape('person')
+        other = self._make_rect_shape('other')
+        canvas.shapes = [subject, other]
+        canvas.selected_shape = other
+        other.selected = True
+        canvas._keypoint_shape = subject
+        canvas._keypoint_index = 2
+        canvas.mode = canvas.KEYPOINT_MODE
+
+        canvas.delete_selected()
+
+        self.assertIs(canvas._keypoint_shape, subject)
+        self.assertEqual(canvas._keypoint_index, 2)
+        self.assertEqual(canvas.mode, canvas.KEYPOINT_MODE)
+
+
 if __name__ == '__main__':
     unittest.main()
