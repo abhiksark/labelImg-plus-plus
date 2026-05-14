@@ -525,11 +525,9 @@ class Canvas(QWidget):
                         self.selected_shape.insert_point(mid_idx + 1, mid)
                         self._emit_polygon_edit(
                             self.selected_shape, old_points)
-                        # Clear drag snapshot so release doesn't re-emit:
-                        # the insert + drag-to-position is treated as one
-                        # edit by the midpoint emit above. Recapture so a
-                        # subsequent move-while-held still records the
-                        # post-insert state as the drag baseline.
+                        # Reseat the drag baseline to the post-insert state so a
+                        # subsequent drag-while-held emits a second edit covering
+                        # only the move, not the insert (already emitted above).
                         self._polygon_drag_old_points = list(
                             self.selected_shape.points)
                         self.h_vertex = mid_idx + 1
