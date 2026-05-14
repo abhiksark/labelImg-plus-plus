@@ -305,5 +305,69 @@ class TestMainWindowModes(unittest.TestCase):
         self.assertLess(self.win.zoom_widget.value(), initial_zoom)
 
 
+class TestMainWindowLoaderFormatPreservation(unittest.TestCase):
+    """Tests that loader methods don't mutate label_file_format on reader failure."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Create app once for all tests."""
+        cls.app, cls.win = get_main_app()
+        cls.temp_dir = tempfile.mkdtemp()
+        cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
+        img = QImage(100, 100, QImage.Format_RGB32)
+        img.fill(0xFFFFFF)
+        img.save(cls.test_image_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up after tests."""
+        shutil.rmtree(cls.temp_dir, ignore_errors=True)
+
+    def setUp(self):
+        """Reset and load test image; silence error_message dialog."""
+        self.win.reset_state()
+        self.win.load_file(self.test_image_path)
+        # Save and silence error_message so we don't pop dialogs in tests.
+        self._orig_error_message = self.win.error_message
+        self.win.error_message = lambda *a, **kw: None
+
+    def tearDown(self):
+        """Restore error_message."""
+        self.win.error_message = self._orig_error_message
+
+    def test_load_coco_json_does_not_change_format_on_reader_failure(self):
+        """Reader failure must not leave label_file_format mutated."""
+        from libs.formats.labelFile import LabelFileFormat
+
+        bad_json = os.path.join(self.temp_dir, 'bad.json')
+        with open(bad_json, 'w') as f:
+            f.write('{ this is not valid json')
+
+        self.win.label_file_format = LabelFileFormat.YOLO  # known start state
+        self.win.load_coco_json_by_filename(bad_json, self.test_image_path)
+        self.assertEqual(
+            self.win.label_file_format, LabelFileFormat.YOLO,
+            'format must not be mutated on reader failure')
+
+    def test_load_yolo_seg_does_not_change_format_on_reader_failure(self):
+        """Reader failure (missing classes.txt) must not mutate format."""
+        from libs.formats.labelFile import LabelFileFormat
+
+        # Valid YOLO-seg txt content but no classes.txt sibling -> reader raises.
+        seg_dir = tempfile.mkdtemp()
+        try:
+            seg_txt = os.path.join(seg_dir, 'x.txt')
+            with open(seg_txt, 'w') as f:
+                f.write('0 0.1 0.1 0.2 0.1 0.2 0.2\n')
+
+            self.win.label_file_format = LabelFileFormat.YOLO  # known start state
+            self.win.load_yolo_seg_by_filename(seg_txt)
+            self.assertEqual(
+                self.win.label_file_format, LabelFileFormat.YOLO,
+                'format must not be mutated on reader failure')
+        finally:
+            shutil.rmtree(seg_dir, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
