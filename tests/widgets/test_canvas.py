@@ -433,5 +433,72 @@ class TestCanvasDeleteSelected(unittest.TestCase):
         self.assertEqual(canvas.mode, canvas.KEYPOINT_MODE)
 
 
+class TestCanvasEditSignals(unittest.TestCase):
+    """Tests for polygonVerticesEdited / keypointsEdited signal emission."""
+
+    def test_emit_polygon_edit_emits_with_snapshot(self):
+        """_emit_polygon_edit emits a deep-copy snapshot of old_points."""
+        canvas = Canvas()
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        old_points = [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10)]
+
+        received = []
+
+        def handler(emitted_shape, emitted_points):
+            received.append((emitted_shape, emitted_points))
+
+        canvas.polygonVerticesEdited.connect(handler)
+        canvas._emit_polygon_edit(shape, old_points)
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, emitted_points = received[0]
+        self.assertIs(emitted_shape, shape)
+        self.assertEqual(
+            [(p.x(), p.y()) for p in emitted_points],
+            [(p.x(), p.y()) for p in old_points],
+        )
+        # Verify snapshot is a deep copy: mutating the original should
+        # not affect the emitted list.
+        old_points[0].setX(999)
+        self.assertEqual(emitted_points[0].x(), 0)
+
+    def test_emit_keypoints_edit_emits_with_snapshot(self):
+        """_emit_keypoints_edit emits a copy of the old keypoints list."""
+        canvas = Canvas()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+        old_keypoints = [(1.0, 2.0, 2), None, (5.0, 6.0, 1)]
+
+        received = []
+
+        def handler(emitted_shape, emitted_kps):
+            received.append((emitted_shape, emitted_kps))
+
+        canvas.keypointsEdited.connect(handler)
+        canvas._emit_keypoints_edit(shape, old_keypoints)
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, emitted_kps = received[0]
+        self.assertIs(emitted_shape, shape)
+        self.assertEqual(emitted_kps, old_keypoints)
+        # Snapshot must not alias the original list.
+        old_keypoints.append((9.0, 9.0, 2))
+        self.assertEqual(len(emitted_kps), 3)
+
+    def test_emit_keypoints_edit_with_none(self):
+        """_emit_keypoints_edit handles None old keypoints (first placement)."""
+        canvas = Canvas()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+
+        received = []
+        canvas.keypointsEdited.connect(
+            lambda s, kps: received.append((s, kps)))
+
+        canvas._emit_keypoints_edit(shape, None)
+
+        self.assertEqual(len(received), 1)
+        self.assertIs(received[0][0], shape)
+        self.assertIsNone(received[0][1])
+
+
 if __name__ == '__main__':
     unittest.main()

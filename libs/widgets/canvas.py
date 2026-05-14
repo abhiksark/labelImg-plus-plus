@@ -64,6 +64,12 @@ class Canvas(QWidget):
     selectionChanged = pyqtSignal(bool)
     shapeMoved = pyqtSignal()
     drawingPolygon = pyqtSignal(bool)
+    # Emitted on polygon vertex insert / remove / drag-move with the
+    # pre-mutation points list so MainWindow can push an undo command.
+    polygonVerticesEdited = pyqtSignal(object, object)  # (shape, old_points)
+    # Emitted on keypoint placement / mutation with the pre-mutation
+    # keypoints list (may be None) for undo support.
+    keypointsEdited = pyqtSignal(object, object)        # (shape, old_keypoints)
 
     CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE = list(range(4))
 
@@ -127,6 +133,11 @@ class Canvas(QWidget):
         self._hovered_keypoint = -1
         self._keypoint_template_name = None
         self._keypoint_template = None
+
+        # Snapshot of points list captured at the start of a polygon
+        # vertex drag, so we can emit polygonVerticesEdited on release
+        # if the drag actually changed any vertex position.
+        self._polygon_drag_old_points = None
 
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
@@ -445,15 +456,27 @@ class Canvas(QWidget):
     def mousePressEvent(self, ev):
         pos = self.transform_pos(ev.pos())
 
+        # Snapshot polygon points before any potential vertex drag.
+        # Emitted on release if any point actually changed.
+        self._polygon_drag_old_points = None
+        if (ev.button() == Qt.LeftButton
+                and self.selected_shape
+                and self.selected_shape.shape_type == ShapeType.POLYGON):
+            self._polygon_drag_old_points = list(self.selected_shape.points)
+
         # Keypoint placement
         if self.mode == self.KEYPOINT_MODE and self._keypoint_shape:
             kp_count = self._keypoint_count()
             if ev.button() == Qt.LeftButton and self._keypoint_index < kp_count:
                 if not self.out_of_pixmap(pos):
+                    old_kps = (list(self._keypoint_shape.keypoints)
+                               if self._keypoint_shape.keypoints else None)
                     if self._keypoint_shape.keypoints is None:
                         self._keypoint_shape.keypoints = [None] * kp_count
                     self._keypoint_shape.keypoints[self._keypoint_index] = (
                         pos.x(), pos.y(), 2)
+                    self._emit_keypoints_edit(
+                        self._keypoint_shape, old_kps)
                     self._keypoint_index = self._next_unplaced_keypoint(
                         self._keypoint_index + 1)
                     if self._keypoint_index >= kp_count:
@@ -463,10 +486,14 @@ class Canvas(QWidget):
                 return
             elif ev.button() == Qt.RightButton and self._keypoint_index < kp_count:
                 if not self.out_of_pixmap(pos):
+                    old_kps = (list(self._keypoint_shape.keypoints)
+                               if self._keypoint_shape.keypoints else None)
                     if self._keypoint_shape.keypoints is None:
                         self._keypoint_shape.keypoints = [None] * kp_count
                     self._keypoint_shape.keypoints[self._keypoint_index] = (
                         pos.x(), pos.y(), 1)
+                    self._emit_keypoints_edit(
+                        self._keypoint_shape, old_kps)
                     self._keypoint_index = self._next_unplaced_keypoint(
                         self._keypoint_index + 1)
                     if self._keypoint_index >= kp_count:
@@ -494,7 +521,17 @@ class Canvas(QWidget):
                     mid_idx = self.selected_shape.nearest_midpoint(pos, self.epsilon)
                     if mid_idx is not None:
                         mid = self.selected_shape.midpoint_of_edge(mid_idx)
+                        old_points = list(self.selected_shape.points)
                         self.selected_shape.insert_point(mid_idx + 1, mid)
+                        self._emit_polygon_edit(
+                            self.selected_shape, old_points)
+                        # Clear drag snapshot so release doesn't re-emit:
+                        # the insert + drag-to-position is treated as one
+                        # edit by the midpoint emit above. Recapture so a
+                        # subsequent move-while-held still records the
+                        # post-insert state as the drag baseline.
+                        self._polygon_drag_old_points = list(
+                            self.selected_shape.points)
                         self.h_vertex = mid_idx + 1
                         self.h_shape = self.selected_shape
                         self.selected_shape.highlight_vertex(mid_idx + 1, Shape.MOVE_VERTEX)
@@ -526,7 +563,27 @@ class Canvas(QWidget):
                         self.current.add_point(snapped)
                     self.finalise()
             self._freehand_points = []
+            self._polygon_drag_old_points = None
             return
+
+        # If a polygon was selected on press and any vertex moved during
+        # the drag, emit polygonVerticesEdited so MainWindow can push an
+        # undo command. Compares pre-press snapshot to current points.
+        if (ev.button() == Qt.LeftButton
+                and self._polygon_drag_old_points is not None
+                and self.selected_shape
+                and self.selected_shape.shape_type == ShapeType.POLYGON):
+            new_pts = self.selected_shape.points
+            old_pts = self._polygon_drag_old_points
+            moved = (
+                len(new_pts) != len(old_pts)
+                or any((a.x(), a.y()) != (b.x(), b.y())
+                       for a, b in zip(old_pts, new_pts))
+            )
+            if moved:
+                self._emit_polygon_edit(self.selected_shape, old_pts)
+        if ev.button() == Qt.LeftButton:
+            self._polygon_drag_old_points = None
 
         if ev.button() == Qt.RightButton:
             # Check if right-clicking a polygon vertex
@@ -540,7 +597,10 @@ class Canvas(QWidget):
                         delete_action.setEnabled(False)
                     action = vertex_menu.exec_(self.mapToGlobal(ev.pos()))
                     if action == delete_action:
+                        old_points = list(self.selected_shape.points)
                         self.selected_shape.remove_point(idx)
+                        self._emit_polygon_edit(
+                            self.selected_shape, old_points)
                         self.shapeMoved.emit()
                         self.update()
                     return
@@ -811,6 +871,16 @@ class Canvas(QWidget):
             self.prev_point = pos
             return True
         return False
+
+    def _emit_polygon_edit(self, shape, old_points):
+        """Emit polygonVerticesEdited with a deep-copy snapshot of old_points."""
+        snapshot = [QPointF(p.x(), p.y()) for p in old_points]
+        self.polygonVerticesEdited.emit(shape, snapshot)
+
+    def _emit_keypoints_edit(self, shape, old_keypoints):
+        """Emit keypointsEdited with a deep-copy snapshot."""
+        snapshot = list(old_keypoints) if old_keypoints else None
+        self.keypointsEdited.emit(shape, snapshot)
 
     def de_select_shape(self):
         if self.selected_shape:
