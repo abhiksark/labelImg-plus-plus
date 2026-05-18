@@ -1,6 +1,22 @@
 History
 =======
 
+2.3.1 (2026-05-14)
+------------------
+
+Patch release fixing five blocker-tier issues identified in the v2.3.0 review.
+
+* Restore Ctrl-Z for polygon vertex insert, vertex delete, vertex drag-move, and
+  keypoint placement — these previously silently undid the prior rectangle action
+* Clear polygon/keypoint mode state when loading a new file, preventing
+  stale-reference crashes after switching images mid-annotation
+* Exit keypoint mode safely when the active keypoint shape is deleted
+* Defer format switch in COCO and YOLO-seg loaders until the reader succeeds,
+  so a malformed annotation file no longer silently flips the saved format
+* Clamp YOLO-seg normalized coordinates to ``[0.0, 1.0]`` to prevent
+  out-of-range values when a vertex is dragged past the image edge
+
+
 2.3.0 (2026-03-27)
 ------------------
 

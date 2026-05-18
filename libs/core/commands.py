@@ -189,6 +189,82 @@ class EditLabelCommand(Command):
         return f"Edit label '{self.old_label}' -> '{self.new_label}'"
 
 
+class EditPolygonVerticesCommand(Command):
+    """Command for polygon vertex insert / remove / move operations.
+
+    Snapshots the full points list before and after the mutation;
+    undo restores the snapshot.
+    """
+
+    def __init__(self, main_window, shape, old_points, new_points):
+        """Initialize with shape and its point lists.
+
+        Args:
+            main_window: The MainWindow instance.
+            shape: The Shape object being edited.
+            old_points: List of QPointF before the mutation.
+            new_points: List of QPointF after the mutation.
+        """
+        self.main_window = main_window
+        self.shape = shape
+        self.old_points = [QPointF(p.x(), p.y()) for p in old_points]
+        self.new_points = [QPointF(p.x(), p.y()) for p in new_points]
+
+    def execute(self):
+        """Apply the post-mutation point list."""
+        self.shape.points = [QPointF(p.x(), p.y()) for p in self.new_points]
+        self.main_window.canvas.update()
+
+    def undo(self):
+        """Restore the pre-mutation point list."""
+        self.shape.points = [QPointF(p.x(), p.y()) for p in self.old_points]
+        self.main_window.canvas.update()
+
+    @property
+    def description(self):
+        return (
+            f"Edit polygon vertices "
+            f"({len(self.old_points)} -> {len(self.new_points)})"
+        )
+
+
+class EditKeypointsCommand(Command):
+    """Command for keypoint placement / clear operations.
+
+    Snapshots the keypoints list before and after; undo restores.
+    """
+
+    def __init__(self, main_window, shape, old_keypoints, new_keypoints):
+        """Initialize with shape and keypoint snapshots.
+
+        Args:
+            main_window: The MainWindow instance.
+            shape: The Shape object being edited.
+            old_keypoints: List of keypoint tuples before mutation (or None).
+            new_keypoints: List of keypoint tuples after mutation (or None).
+        """
+        self.main_window = main_window
+        self.shape = shape
+        self.old_keypoints = list(old_keypoints) if old_keypoints else None
+        self.new_keypoints = list(new_keypoints) if new_keypoints else None
+
+    def execute(self):
+        """Apply the post-mutation keypoint list."""
+        self.shape.keypoints = (
+            list(self.new_keypoints) if self.new_keypoints else None)
+        self.main_window.canvas.update()
+
+    def undo(self):
+        """Restore the pre-mutation keypoint list."""
+        self.shape.keypoints = (
+            list(self.old_keypoints) if self.old_keypoints else None)
+        self.main_window.canvas.update()
+
+    @property
+    def description(self):
+        return f"Edit keypoints on '{self.shape.label}'"
+
+
 class UndoStack:
     """Manages command history for undo/redo operations.
 

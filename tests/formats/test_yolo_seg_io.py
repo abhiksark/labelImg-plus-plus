@@ -108,5 +108,26 @@ class TestYOLOSegReader(unittest.TestCase):
         self.assertEqual(len(points), 3)
 
 
+def test_writer_clamps_coords_to_unit_interval(tmp_path):
+    """Vertices outside the image bounds must clamp to [0.0, 1.0]."""
+    writer = YOLOSegWriter('folder', 'img.jpg', (100, 100, 3))
+    # x=-5 must clamp to 0.0; x=120 must clamp to 1.0; y=200 must clamp to 1.0
+    writer.add_polygon([(-5.0, 50.0), (120.0, 50.0), (50.0, 200.0)],
+                       'thing',
+                       difficult=False)
+    out = tmp_path / 'img.txt'
+    writer.save(target_file=str(out), class_list=['thing'])
+    line = out.read_text().strip().split()
+    coords = [float(x) for x in line[1:]]
+    assert all(0.0 <= c <= 1.0 for c in coords), \
+        'coords escaped [0,1]: %s' % coords
+    # Sanity: first vertex (-5, 50) -> (0.0, 0.5)
+    assert coords[0] == 0.0
+    assert coords[1] == 0.5
+    # Third vertex (50, 200) -> (0.5, 1.0)
+    assert coords[4] == 0.5
+    assert coords[5] == 1.0
+
+
 if __name__ == '__main__':
     unittest.main()

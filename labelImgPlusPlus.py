@@ -59,7 +59,10 @@ from libs.widgets.keypointPanel import KeypointPanel
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
 from libs.core.settings import Settings
-from libs.core.commands import UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand, EditLabelCommand
+from libs.core.commands import (
+    UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand,
+    EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
+)
 from libs.core.shortcut_config import ShortcutConfig
 
 # Formats
@@ -593,6 +596,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.newShape.connect(self.new_shape)
         self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
+        self.canvas.polygonVerticesEdited.connect(
+            self._on_polygon_vertices_edited)
+        self.canvas.keypointsEdited.connect(self._on_keypoints_edited)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -1691,6 +1697,21 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas._keypoint_shape.keypoints)
             self.keypoint_panel.set_current_index(
                 self.canvas._keypoint_index)
+
+    def _on_polygon_vertices_edited(self, shape, old_points):
+        """Capture polygon vertex edits for undo support."""
+        cmd = EditPolygonVerticesCommand(
+            self, shape, old_points, list(shape.points))
+        self.undo_stack.push(cmd)
+        self.set_dirty()
+
+    def _on_keypoints_edited(self, shape, old_keypoints):
+        """Capture keypoint mutations for undo support."""
+        cmd = EditKeypointsCommand(
+            self, shape, old_keypoints,
+            list(shape.keypoints) if shape.keypoints else None)
+        self.undo_stack.push(cmd)
+        self.set_dirty()
 
     def toggle_drawing_sensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""
@@ -3443,19 +3464,20 @@ class MainWindow(QMainWindow, WindowMixin):
         if not os.path.isfile(json_path):
             return
 
-        self.set_format(FORMAT_COCO)
-
         image_filename = os.path.basename(file_path)
         try:
             reader = COCOReader(json_path, image_filename)
             shapes = reader.get_shapes()
-            self.load_labels(shapes)
-            self.canvas.verified = reader.verified
         except Exception as e:
             self.error_message(
                 'Annotation Error',
                 f'Error loading COCO annotations from '
                 f'{os.path.basename(json_path)}: {e}')
+            return
+
+        self.set_format(FORMAT_COCO)
+        self.load_labels(shapes)
+        self.canvas.verified = reader.verified
 
     def load_yolo_seg_by_filename(self, txt_path):
         """Load annotations from a YOLO-seg text file.
@@ -3467,8 +3489,6 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if not os.path.isfile(txt_path):
             return
-
-        self.set_format(FORMAT_YOLO_SEG)
 
         try:
             if hasattr(self, '_original_image_size') and self._original_image_size is not None:
@@ -3488,13 +3508,16 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 reader = YOLOSegReader(txt_path, self.image)
             shapes = reader.get_shapes()
-            self.load_labels(shapes)
-            self.canvas.verified = reader.verified
         except Exception as e:
             self.error_message(
                 'Annotation Error',
                 f'Error loading YOLO-seg annotations for '
                 f'{os.path.basename(txt_path)}: {e}')
+            return
+
+        self.set_format(FORMAT_YOLO_SEG)
+        self.load_labels(shapes)
+        self.canvas.verified = reader.verified
 
     def copy_previous_bounding_boxes(self):
         current_index = self._path_to_idx.get(self.file_path, 0)
