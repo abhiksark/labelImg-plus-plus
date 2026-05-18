@@ -5,9 +5,9 @@ name: SonarCloud
 
 on:
   push:
-    branches: [master, develop]
+    branches: [master, dev]
   pull_request:
-    branches: [master, develop]
+    branches: [master, dev]
 
 jobs:
   sonarcloud:
@@ -40,8 +40,13 @@ jobs:
           pyrcc5 -o libs/resources.py resources.qrc
 
       - name: Run tests with coverage
+        # Run coverage and pytest as separate processes so coverage's atexit
+        # finalization does not collide with PyQt5 QApplication teardown
+        # (the combined `pytest --cov` invocation segfaults at shutdown).
         run: |
-          pytest tests/ --cov=libs --cov=labelImgPlusPlus --cov-report=xml --cov-report=term -v
+          coverage run --source=libs,labelImgPlusPlus -m pytest tests/ -v
+          coverage xml
+          coverage report
         env:
           QT_QPA_PLATFORM: offscreen
 
