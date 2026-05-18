@@ -53,8 +53,10 @@ class YOLOSegWriter:
 
                 coords = []
                 for x, y in entry['points']:
-                    coords.append('%.6f' % (x / w))
-                    coords.append('%.6f' % (y / h))
+                    nx = max(0.0, min(1.0, x / w))
+                    ny = max(0.0, min(1.0, y / h))
+                    coords.append('%.6f' % nx)
+                    coords.append('%.6f' % ny)
 
                 f.write('%d %s\n' % (class_idx, ' '.join(coords)))
 

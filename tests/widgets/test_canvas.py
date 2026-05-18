@@ -16,7 +16,7 @@ from PyQt5.QtGui import QPixmap, QColor
 from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.canvas import Canvas
-from libs.core.shape import Shape
+from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
@@ -356,6 +356,148 @@ class TestCanvasVerified(unittest.TestCase):
         self.canvas.verified = True
 
         self.assertTrue(self.canvas.verified)
+
+
+class TestCanvasResetState(unittest.TestCase):
+    """Test cases for Canvas.reset_state clearing per-file drawing state."""
+
+    def test_reset_state_clears_keypoint_and_freehand_state(self):
+        """reset_state must clear all per-file drawing state."""
+        canvas = Canvas()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+        canvas._keypoint_shape = shape
+        canvas._keypoint_index = 3
+        canvas._freehand_active = True
+        canvas._freehand_points = [object(), object()]
+        canvas.current = Shape(shape_type=ShapeType.POLYGON)
+        canvas.mode = Canvas.KEYPOINT_MODE
+
+        canvas.reset_state()
+
+        self.assertIsNone(canvas._keypoint_shape)
+        self.assertEqual(canvas._keypoint_index, 0)
+        self.assertFalse(canvas._freehand_active)
+        self.assertEqual(canvas._freehand_points, [])
+        self.assertIsNone(canvas.current)
+        self.assertEqual(canvas.mode, Canvas.EDIT)
+
+
+class TestCanvasDeleteSelected(unittest.TestCase):
+    """Test cases for Canvas.delete_selected interacting with keypoint mode."""
+
+    def _make_rect_shape(self, label='person'):
+        """Create a rectangle shape with corner points (Shape.__len__ returns
+        len(points), so a point-less Shape is falsy and short-circuits
+        delete_selected's `if self.selected_shape:` guard)."""
+        shape = Shape(label=label, shape_type=ShapeType.RECTANGLE)
+        shape.add_point(QPointF(0, 0))
+        shape.add_point(QPointF(100, 0))
+        shape.add_point(QPointF(100, 100))
+        shape.add_point(QPointF(0, 100))
+        shape.close()
+        return shape
+
+    def test_delete_selected_exits_keypoint_mode_when_subject_deleted(self):
+        """Deleting the active keypoint shape must exit keypoint mode safely."""
+        canvas = Canvas()
+        shape = self._make_rect_shape('person')
+        canvas.shapes = [shape]
+        canvas.selected_shape = shape
+        shape.selected = True
+        canvas._keypoint_shape = shape
+        canvas._keypoint_index = 2
+        canvas.mode = canvas.KEYPOINT_MODE
+
+        canvas.delete_selected()
+
+        self.assertIsNone(canvas._keypoint_shape)
+        self.assertEqual(canvas._keypoint_index, 0)
+        self.assertEqual(canvas.mode, canvas.EDIT)
+
+    def test_delete_selected_preserves_keypoint_mode_for_other_shape(self):
+        """Deleting a non-subject shape must NOT exit keypoint mode."""
+        canvas = Canvas()
+        subject = self._make_rect_shape('person')
+        other = self._make_rect_shape('other')
+        canvas.shapes = [subject, other]
+        canvas.selected_shape = other
+        other.selected = True
+        canvas._keypoint_shape = subject
+        canvas._keypoint_index = 2
+        canvas.mode = canvas.KEYPOINT_MODE
+
+        canvas.delete_selected()
+
+        self.assertIs(canvas._keypoint_shape, subject)
+        self.assertEqual(canvas._keypoint_index, 2)
+        self.assertEqual(canvas.mode, canvas.KEYPOINT_MODE)
+
+
+class TestCanvasEditSignals(unittest.TestCase):
+    """Tests for polygonVerticesEdited / keypointsEdited signal emission."""
+
+    def test_emit_polygon_edit_emits_with_snapshot(self):
+        """_emit_polygon_edit emits a deep-copy snapshot of old_points."""
+        canvas = Canvas()
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        old_points = [QPointF(0, 0), QPointF(10, 0), QPointF(10, 10)]
+
+        received = []
+
+        def handler(emitted_shape, emitted_points):
+            received.append((emitted_shape, emitted_points))
+
+        canvas.polygonVerticesEdited.connect(handler)
+        canvas._emit_polygon_edit(shape, old_points)
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, emitted_points = received[0]
+        self.assertIs(emitted_shape, shape)
+        self.assertEqual(
+            [(p.x(), p.y()) for p in emitted_points],
+            [(p.x(), p.y()) for p in old_points],
+        )
+        # Verify snapshot is a deep copy: mutating the original should
+        # not affect the emitted list.
+        old_points[0].setX(999)
+        self.assertEqual(emitted_points[0].x(), 0)
+
+    def test_emit_keypoints_edit_emits_with_snapshot(self):
+        """_emit_keypoints_edit emits a copy of the old keypoints list."""
+        canvas = Canvas()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+        old_keypoints = [(1.0, 2.0, 2), None, (5.0, 6.0, 1)]
+
+        received = []
+
+        def handler(emitted_shape, emitted_kps):
+            received.append((emitted_shape, emitted_kps))
+
+        canvas.keypointsEdited.connect(handler)
+        canvas._emit_keypoints_edit(shape, old_keypoints)
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, emitted_kps = received[0]
+        self.assertIs(emitted_shape, shape)
+        self.assertEqual(emitted_kps, old_keypoints)
+        # Snapshot must not alias the original list.
+        old_keypoints.append((9.0, 9.0, 2))
+        self.assertEqual(len(emitted_kps), 3)
+
+    def test_emit_keypoints_edit_with_none(self):
+        """_emit_keypoints_edit handles None old keypoints (first placement)."""
+        canvas = Canvas()
+        shape = Shape(label='person', shape_type=ShapeType.RECTANGLE)
+
+        received = []
+        canvas.keypointsEdited.connect(
+            lambda s, kps: received.append((s, kps)))
+
+        canvas._emit_keypoints_edit(shape, None)
+
+        self.assertEqual(len(received), 1)
+        self.assertIs(received[0][0], shape)
+        self.assertIsNone(received[0][1])
 
 
 if __name__ == '__main__':
