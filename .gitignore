@@ -48,3 +48,15 @@ CLAUDE.md
 .claude/
 labelImgPlusPlus.egg-info/
 *.bak
+
+# Test coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local-only working dirs — plans, specs and design notes never push to remote
+.superpowers/
+docs/plans/
+docs/specs/
+docs/superpowers/
