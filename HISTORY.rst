@@ -1,6 +1,30 @@
 History
 =======
 
+2.3.2 (2026-05-20)
+------------------
+
+Patch release hardening the annotation format loaders against malformed
+input. Slightly corrupt or hand-edited label files previously crashed the
+load or silently dropped valid annotations.
+
+* Skip individual malformed YOLO lines instead of discarding the whole
+  file — a line with non-numeric values no longer raises an error that
+  drops every annotation in that file
+* Report corrupt CreateML JSON through an error dialog instead of
+  silently loading zero annotations, and defer the format switch until
+  the reader succeeds so a bad file no longer flips the saved format
+* Fix the CreateML branch of label extraction, which passed the wrong
+  number of constructor arguments and could never return labels
+* Replace a mutable default argument in the YOLO writer that could leak
+  class names across files and corrupt class indices in ``classes.txt``
+* Guard ``load_predefined_classes`` against a missing class-file path
+
+Internal: tolerate a PyQt5/coverage shutdown segfault in CI, ignore
+coverage and local working-directory artifacts, and add 8 regression
+tests (full suite now 471 passing).
+
+
 2.3.1 (2026-05-14)
 ------------------
 
