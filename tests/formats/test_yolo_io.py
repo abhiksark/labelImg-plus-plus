@@ -126,6 +126,45 @@ class TestYOLOWriter(unittest.TestCase):
         # new_class should have been appended
         self.assertIn('new_class', class_list)
 
+    def test_save_default_class_list_does_not_leak_between_writers(self):
+        """save() with no class_list must not share state across instances.
+
+        Regression: a mutable default argument (class_list=[]) is shared at
+        function-definition time, so classes from one save() would bleed into
+        the next, corrupting class indices in the second file's classes.txt.
+        """
+        first_txt = os.path.join(self.temp_dir, 'first.txt')
+        first = YOLOWriter(self.temp_dir, 'first', (100, 100, 3))
+        first.add_bnd_box(10, 10, 50, 50, 'cat', difficult=0)
+        first.save(target_file=first_txt)  # no class_list -> default arg
+
+        second_dir = tempfile.mkdtemp()
+        try:
+            second_txt = os.path.join(second_dir, 'second.txt')
+            second = YOLOWriter(second_dir, 'second', (100, 100, 3))
+            second.add_bnd_box(10, 10, 50, 50, 'dog', difficult=0)
+            second.save(target_file=second_txt)  # no class_list -> default arg
+
+            with open(os.path.join(second_dir, 'classes.txt')) as f:
+                classes = f.read().strip().split('\n')
+            # Second writer only saw 'dog'; 'cat' must not leak in.
+            self.assertEqual(classes, ['dog'])
+        finally:
+            shutil.rmtree(second_dir, ignore_errors=True)
+
+    def test_bnd_box_to_yolo_line_default_class_list_isolated(self):
+        """bnd_box_to_yolo_line() called without class_list stays isolated."""
+        writer_a = YOLOWriter(self.temp_dir, 'a', (100, 100, 3))
+        idx_a, *_ = writer_a.bnd_box_to_yolo_line(
+            {'xmin': 0, 'ymin': 0, 'xmax': 10, 'ymax': 10, 'name': 'cat'})
+        self.assertEqual(idx_a, 0)
+
+        writer_b = YOLOWriter(self.temp_dir, 'b', (100, 100, 3))
+        idx_b, *_ = writer_b.bnd_box_to_yolo_line(
+            {'xmin': 0, 'ymin': 0, 'xmax': 10, 'ymax': 10, 'name': 'dog'})
+        # 'dog' is the first class this writer saw -> index 0, not 1.
+        self.assertEqual(idx_b, 0)
+
     def test_coordinate_normalization(self):
         """Test that coordinates are properly normalized to [0, 1]."""
         txt_path = os.path.join(self.temp_dir, 'norm.txt')
@@ -331,6 +370,56 @@ class TestYoloReader(unittest.TestCase):
 
         # Negative index should be skipped
         self.assertEqual(len(shapes), 0)
+
+    def test_non_numeric_class_skipped(self):
+        """A 5-token line whose class index is not an integer is skipped."""
+        txt_path = os.path.join(self.temp_dir, 'non_numeric_class.txt')
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+
+        with open(txt_path, 'w') as f:
+            f.write("foo 0.5 0.5 0.2 0.2\n")  # class token is not an int
+
+        with open(classes_path, 'w') as f:
+            f.write("person\n")
+
+        mock_image = MockQImage(100, 100)
+        # Must not raise ValueError - non-numeric lines are skipped.
+        reader = YoloReader(txt_path, mock_image, classes_path)
+        self.assertEqual(len(reader.get_shapes()), 0)
+
+    def test_non_numeric_coordinate_skipped(self):
+        """A 5-token line with a non-numeric coordinate is skipped."""
+        txt_path = os.path.join(self.temp_dir, 'non_numeric_coord.txt')
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+
+        with open(txt_path, 'w') as f:
+            f.write("0 abc 0.5 0.2 0.2\n")  # x_center is not a float
+
+        with open(classes_path, 'w') as f:
+            f.write("person\n")
+
+        mock_image = MockQImage(100, 100)
+        # Must not raise ValueError - non-numeric lines are skipped.
+        reader = YoloReader(txt_path, mock_image, classes_path)
+        self.assertEqual(len(reader.get_shapes()), 0)
+
+    def test_valid_lines_loaded_despite_non_numeric_line(self):
+        """Valid lines still load when another line has non-numeric tokens."""
+        txt_path = os.path.join(self.temp_dir, 'mixed_non_numeric.txt')
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+
+        with open(txt_path, 'w') as f:
+            f.write("0 0.5 0.5 0.2 0.2\n")    # Valid
+            f.write("foo 0.5 0.5 0.2 0.2\n")  # Non-numeric class
+            f.write("0 abc 0.5 0.2 0.2\n")    # Non-numeric coordinate
+            f.write("0 0.7 0.7 0.2 0.2\n")    # Valid
+
+        with open(classes_path, 'w') as f:
+            f.write("person\n")
+
+        mock_image = MockQImage(100, 100)
+        reader = YoloReader(txt_path, mock_image, classes_path)
+        self.assertEqual(len(reader.get_shapes()), 2)
 
     def test_roundtrip_write_read(self):
         """Test that write/read roundtrip preserves data."""

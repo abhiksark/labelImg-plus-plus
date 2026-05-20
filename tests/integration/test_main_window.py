@@ -65,6 +65,14 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Should not crash, file_path should be unchanged or empty
         self.assertNotEqual(self.win.file_path, fake_path)
 
+    def test_load_predefined_classes_none_does_not_raise(self):
+        """load_predefined_classes(None) must no-op, not raise TypeError.
+
+        The MainWindow constructor permits a None class file; the loader
+        must tolerate it instead of passing None into os.path.exists.
+        """
+        self.win.load_predefined_classes(None)
+
     def test_dirty_flag_on_annotation(self):
         """Test that dirty flag is set when adding annotation."""
         self.win.load_file(self.test_image_path)
@@ -367,6 +375,21 @@ class TestMainWindowLoaderFormatPreservation(unittest.TestCase):
                 'format must not be mutated on reader failure')
         finally:
             shutil.rmtree(seg_dir, ignore_errors=True)
+
+    def test_load_create_ml_bad_json_does_not_raise(self):
+        """A malformed CreateML JSON must be reported, not crash the load."""
+        from libs.formats.labelFile import LabelFileFormat
+
+        bad_json = os.path.join(self.temp_dir, 'bad_createml.json')
+        with open(bad_json, 'w') as f:
+            f.write('{ this is not valid json')
+
+        self.win.label_file_format = LabelFileFormat.YOLO  # known start state
+        # Must not raise - reader failure is caught and surfaced via dialog.
+        self.win.load_create_ml_json_by_filename(bad_json, self.test_image_path)
+        self.assertEqual(
+            self.win.label_file_format, LabelFileFormat.YOLO,
+            'format must not be mutated on reader failure')
 
 
 class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
