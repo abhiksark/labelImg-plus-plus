@@ -73,6 +73,37 @@ class TestMainWindowFileOperations(unittest.TestCase):
         """
         self.win.load_predefined_classes(None)
 
+    def test_get_labels_for_image_reads_createml(self):
+        """_get_labels_for_image must read labels from a CreateML JSON.
+
+        Regression: CreateMLReader was called with a single argument though
+        its constructor needs two, raising a TypeError that a bare except
+        swallowed - so the CreateML branch could never return any labels.
+        """
+        import json
+
+        work_dir = tempfile.mkdtemp()
+        try:
+            img_path = os.path.join(work_dir, 'pic.png')
+            img = QImage(80, 60, QImage.Format_RGB32)
+            img.fill(0xFFFFFF)
+            img.save(img_path)
+
+            with open(os.path.join(work_dir, 'pic.json'), 'w') as f:
+                json.dump([{
+                    'image': 'pic.png',
+                    'verified': False,
+                    'annotations': [{
+                        'label': 'cat',
+                        'coordinates': {'x': 40, 'y': 30,
+                                        'width': 20, 'height': 20},
+                    }],
+                }], f)
+
+            self.assertIn('cat', self.win._get_labels_for_image(img_path))
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
     def test_dirty_flag_on_annotation(self):
         """Test that dirty flag is set when adding annotation."""
         self.win.load_file(self.test_image_path)

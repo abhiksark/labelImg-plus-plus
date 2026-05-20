@@ -3839,7 +3839,7 @@ class MainWindow(QMainWindow, WindowMixin):
         json_path = base_path + JSON_EXT
         if os.path.exists(json_path):
             try:
-                reader = CreateMLReader(json_path)
+                reader = CreateMLReader(json_path, img_path)
                 shapes = reader.get_shapes()
                 labels = [shape[0] for shape in shapes]
             except Exception:

@@ -152,8 +152,8 @@ class YoloReader:
                 # instead of raising ValueError out of the reader.
                 try:
                     idx = int(class_index)
-                    for token in (x_center, y_center, w, h):
-                        float(token)
+                    x_center, y_center, w, h = (
+                        float(x_center), float(y_center), float(w), float(h))
                 except ValueError:
                     print(f"Warning: Skipping invalid annotation in {self.file_path}: "
                           f"line {line_num} has non-numeric values")
