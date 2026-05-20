@@ -3384,7 +3384,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_dirty()
 
     def load_predefined_classes(self, predef_classes_file):
-        if os.path.exists(predef_classes_file) is True:
+        if predef_classes_file and os.path.exists(predef_classes_file):
             with codecs.open(predef_classes_file, 'r', 'utf8') as f:
                 for line in f:
                     line = line.strip()
@@ -3445,10 +3445,17 @@ class MainWindow(QMainWindow, WindowMixin):
         if os.path.isfile(json_path) is False:
             return
 
-        self.set_format(FORMAT_CREATEML)
+        try:
+            create_ml_parse_reader = CreateMLReader(json_path, file_path)
+            shapes = create_ml_parse_reader.get_shapes()
+        except Exception as e:
+            self.error_message(
+                'Annotation Error',
+                f'Error loading CreateML annotations from '
+                f'{os.path.basename(json_path)}: {e}')
+            return
 
-        create_ml_parse_reader = CreateMLReader(json_path, file_path)
-        shapes = create_ml_parse_reader.get_shapes()
+        self.set_format(FORMAT_CREATEML)
         self.load_labels(shapes)
         self.canvas.verified = create_ml_parse_reader.verified
 
@@ -3832,7 +3839,7 @@ class MainWindow(QMainWindow, WindowMixin):
         json_path = base_path + JSON_EXT
         if os.path.exists(json_path):
             try:
-                reader = CreateMLReader(json_path)
+                reader = CreateMLReader(json_path, img_path)
                 shapes = reader.get_shapes()
                 labels = [shape[0] for shape in shapes]
             except Exception:

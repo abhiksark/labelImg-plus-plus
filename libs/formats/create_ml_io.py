@@ -87,10 +87,9 @@ class CreateMLReader:
         self.shapes = []
         self.verified = False
         self.filename = os.path.basename(file_path)
-        try:
-            self.parse_json()
-        except ValueError:
-            print("JSON decoding failed")
+        # Let parse failures propagate so callers can surface them, instead
+        # of silently swallowing a malformed file into an empty shape list.
+        self.parse_json()
 
     def parse_json(self):
         with open(self.json_path, "r") as file:

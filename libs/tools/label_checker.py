@@ -8,9 +8,7 @@ from difflib import SequenceMatcher
 from enum import IntEnum
 from typing import Dict, List, Optional, Set, Tuple
 
-from libs.formats.yolo_io import YoloReader
 from libs.formats.pascal_voc_io import PascalVocReader
-from libs.formats.create_ml_io import CreateMLReader
 
 
 class IssueType(IntEnum):

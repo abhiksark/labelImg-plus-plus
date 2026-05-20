@@ -252,16 +252,19 @@ class TestCreateMLEdgeCases(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_read_corrupt_json_returns_empty(self):
-        """Test reading corrupt JSON file returns empty shapes (error is logged)."""
+    def test_read_corrupt_json_raises_error(self):
+        """Reading a corrupt JSON file raises, so callers can surface it.
+
+        A malformed file must not be silently swallowed into an empty shape
+        list - that hides data loss. This matches the FileNotFoundError
+        contract for a missing file.
+        """
         json_path = os.path.join(self.temp_dir, 'corrupt.json')
         with open(json_path, 'w') as f:
             f.write('{invalid json content')
 
-        # CreateMLReader catches ValueError and prints error
-        reader = CreateMLReader(json_path, 'folder/test.jpg')
-        shapes = reader.get_shapes()
-        self.assertEqual(shapes, [])
+        with self.assertRaises(ValueError):
+            CreateMLReader(json_path, 'folder/test.jpg')
 
     def test_read_json_array_empty(self):
         """Test reading JSON with empty array."""

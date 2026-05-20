@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
+# libs/formats/yolo_io.py
 import codecs
 import os
 
@@ -25,7 +26,10 @@ class YOLOWriter:
         bnd_box['difficult'] = difficult
         self.box_list.append(bnd_box)
 
-    def bnd_box_to_yolo_line(self, box, class_list=[]):
+    def bnd_box_to_yolo_line(self, box, class_list=None):
+        if class_list is None:
+            class_list = []
+
         x_min = box['xmin']
         x_max = box['xmax']
         y_min = box['ymin']
@@ -46,7 +50,10 @@ class YOLOWriter:
 
         return class_index, x_center, y_center, w, h
 
-    def save(self, class_list=[], target_file=None):
+    def save(self, class_list=None, target_file=None):
+        if class_list is None:
+            class_list = []
+
         if target_file is None:
             out_path = self.filename + TXT_EXT
         else:
@@ -140,8 +147,19 @@ class YoloReader:
                     continue  # Skip malformed lines
                 class_index, x_center, y_center, w, h = parts
 
+                # Validate that all tokens are numeric - a line can have the
+                # right token count yet still hold garbage. Skip gracefully
+                # instead of raising ValueError out of the reader.
+                try:
+                    idx = int(class_index)
+                    x_center, y_center, w, h = (
+                        float(x_center), float(y_center), float(w), float(h))
+                except ValueError:
+                    print(f"Warning: Skipping invalid annotation in {self.file_path}: "
+                          f"line {line_num} has non-numeric values")
+                    continue  # Skip this line, continue with next
+
                 # Validate class index - skip invalid lines gracefully
-                idx = int(class_index)
                 if idx < 0 or idx >= len(self.classes):
                     print(f"Warning: Skipping invalid annotation in {self.file_path}: "
                           f"class index {idx} at line {line_num} is out of range "
