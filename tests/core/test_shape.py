@@ -303,6 +303,29 @@ class TestShapeCopy(unittest.TestCase):
         self.assertEqual(shape.label, 'original')
         self.assertEqual(shape[0].x(), 0)
 
+    def test_copy_points_are_distinct_objects(self):
+        """Copied points must not alias the originals (in-place mutation safe)."""
+        shape = Shape(label='original')
+        shape.add_point(QPointF(0, 0))
+        shape.add_point(QPointF(100, 100))
+
+        copied = shape.copy()
+        # Mutate a point of the copy IN PLACE.
+        copied[0].setX(999)
+
+        # The original's point must be unaffected.
+        self.assertEqual(shape[0].x(), 0)
+        self.assertIsNot(copied.points[0], shape.points[0])
+
+    def test_copy_of_unlabeled_shape_preserves_none_label(self):
+        """copy() of a label-less shape must keep label None, not the string 'None'."""
+        shape = Shape()  # label defaults to None
+        shape.add_point(QPointF(0, 0))
+
+        copied = shape.copy()
+
+        self.assertIsNone(copied.label)
+
     def test_copy_preserves_difficult(self):
         """Test that copy preserves difficult flag."""
         shape = Shape(difficult=True)
