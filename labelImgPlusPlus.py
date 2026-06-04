@@ -2537,20 +2537,19 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if unicode_file_path and os.path.exists(unicode_file_path):
             if LabelFile.is_label_file(unicode_file_path):
-                try:
-                    self.label_file = LabelFile(unicode_file_path)
-                except LabelFileError as e:
-                    self.error_message(u'Error opening file',
-                                       (u"<p><b>%s</b></p>"
-                                        u"<p>Make sure <i>%s</i> is a valid label file.")
-                                       % (e, unicode_file_path))
-                    self.status("Error reading %s" % unicode_file_path)
-                    
-                    return False
-                self.image_data = self.label_file.image_data
-                self.line_color = QColor(*self.label_file.lineColor)
-                self.fill_color = QColor(*self.label_file.fillColor)
-                self.canvas.verified = self.label_file.verified
+                # Annotation files cannot be opened directly: in this fork
+                # LabelFile is a write-only dispatcher with no reader and no
+                # embedded image, so there is nothing to display. Report a
+                # clear error rather than crashing. Open the corresponding
+                # image instead; its annotations load automatically.
+                self.error_message(
+                    u'Cannot open annotation file',
+                    (u"<p><b>%s</b> is an annotation file, not an image.</p>"
+                     u"<p>Open the image it describes instead - its "
+                     u"annotations will load automatically.</p>")
+                    % unicode_file_path)
+                self.status("Cannot open annotation file %s" % unicode_file_path)
+                return False
             else:
                 # Load image with memory-efficient downsampling for large images
                 self.label_file = None

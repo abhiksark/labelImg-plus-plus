@@ -65,6 +65,30 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Should not crash, file_path should be unchanged or empty
         self.assertNotEqual(self.win.file_path, fake_path)
 
+    def test_load_file_on_annotation_file_does_not_crash(self):
+        """Opening an annotation file (suffix == LabelFile.suffix) must fail
+        gracefully, not crash.
+
+        Regression: the is_label_file branch in load_file referenced
+        LabelFile.lineColor (which does not exist) and left `image` unbound,
+        raising AttributeError/UnboundLocalError instead of reporting a clean
+        error.
+        """
+        from unittest.mock import patch
+        from libs.formats.labelFile import LabelFile
+        annot_path = os.path.join(self.temp_dir, 'annotation' + LabelFile.suffix)
+        with open(annot_path, 'w') as f:
+            f.write('<annotation><filename>x.jpg</filename></annotation>')
+
+        # error_message shows a modal QMessageBox; stub it so the test does
+        # not block, while still exercising the real load_file branch.
+        with patch.object(self.win, 'error_message') as mock_error:
+            result = self.win.load_file(annot_path)
+
+        self.assertFalse(result)
+        self.assertNotEqual(self.win.file_path, annot_path)
+        mock_error.assert_called_once()
+
     def test_load_predefined_classes_none_does_not_raise(self):
         """load_predefined_classes(None) must no-op, not raise TypeError.
 
