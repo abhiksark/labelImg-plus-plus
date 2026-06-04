@@ -405,6 +405,19 @@ class TestPascalVocPolygon(unittest.TestCase):
         self.assertEqual(shape_type, 'polygon')
         self.assertEqual(len(pts), 3)
 
+    def test_polygon_subpixel_coords_round(self):
+        """Polygon vertices must round on write/read, not truncate to zero."""
+        writer = PascalVocWriter('folder', 'test.jpg', [480, 640, 3])
+        writer.add_polygon([(10.9, 20.4), (30.6, 20.4), (20.7, 40.8)],
+                           'tri', False)
+        out_path = os.path.join(self.tmp_dir, 'poly.xml')
+        writer.save(target_file=out_path)
+
+        reader = PascalVocReader(out_path)
+        _, pts, _, _, _, shape_type = reader.get_shapes()[0]
+        self.assertEqual(shape_type, 'polygon')
+        self.assertEqual(pts, [(11, 20), (31, 20), (21, 41)])
+
     def test_backward_compat_no_polygon(self):
         """Files without polygon element still load as rectangles."""
         writer = PascalVocWriter('folder', 'test.jpg', [480, 640, 3])

@@ -87,8 +87,8 @@ class PascalVocWriter:
         x_max = max(p[0] for p in points)
         y_max = max(p[1] for p in points)
         entry = {
-            'xmin': int(x_min), 'ymin': int(y_min),
-            'xmax': int(x_max), 'ymax': int(y_max),
+            'xmin': round(x_min), 'ymin': round(y_min),
+            'xmax': round(x_max), 'ymax': round(y_max),
             'name': name, 'difficult': difficult,
             'polygon_points': points,
         }
@@ -125,9 +125,9 @@ class PascalVocWriter:
                 for px, py in each_object['polygon_points']:
                     pt = SubElement(polygon_elem, 'pt')
                     x_elem = SubElement(pt, 'x')
-                    x_elem.text = str(int(px))
+                    x_elem.text = str(round(px))
                     y_elem = SubElement(pt, 'y')
-                    y_elem.text = str(int(py))
+                    y_elem.text = str(round(py))
 
     def save(self, target_file=None):
         root = self.gen_xml()
@@ -168,8 +168,8 @@ class PascalVocReader:
         if polygon_elem is not None:
             points = []
             for pt in polygon_elem.findall('pt'):
-                x = int(float(pt.find('x').text))
-                y = int(float(pt.find('y').text))
+                x = round(float(pt.find('x').text))
+                y = round(float(pt.find('y').text))
                 points.append((x, y))
             self.shapes.append((label, points, None, None, difficult, 'polygon'))
         else:
