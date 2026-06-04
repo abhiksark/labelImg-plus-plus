@@ -75,6 +75,7 @@ from libs.formats.yolo_io import TXT_EXT
 from libs.formats.create_ml_io import JSON_EXT
 from libs.formats.annotation_probe import probe as probe_annotation
 from libs.formats import annotation_loader
+from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
@@ -546,24 +547,10 @@ class MainWindow(QMainWindow, WindowMixin):
         save = action(get_str('save'), self.save_file,
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
 
-        def get_format_meta(format):
-            """Return a tuple containing (title, icon_name) of the selected format."""
-            if format == LabelFileFormat.PASCAL_VOC:
-                return '&PascalVOC', 'format_voc'
-            elif format == LabelFileFormat.YOLO:
-                return '&YOLO', 'format_yolo'
-            elif format == LabelFileFormat.CREATE_ML:
-                return '&CreateML', 'format_createml'
-            elif format == LabelFileFormat.COCO:
-                return '&COCO', 'format_createml'
-            elif format == LabelFileFormat.YOLO_SEG:
-                return '&YOLO-seg', 'format_yolo'
-            # Default fallback
-            return '&PascalVOC', 'format_voc'
-
-        save_format = action(get_format_meta(self.label_file_format)[0],
+        current_format_meta = format_metadata.meta_for_enum(self.label_file_format)
+        save_format = action(current_format_meta.menu_title,
                              self.change_format, self.shortcut_config.get('save_format'),
-                             get_format_meta(self.label_file_format)[1],
+                             current_format_meta.icon,
                              get_str('changeSaveFormat'), enabled=True)
 
         save_as = action(get_str('saveAs'), self.save_file_as,
@@ -1123,52 +1110,18 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Support Functions #
     def set_format(self, save_format):
+        meta = format_metadata.by_name(save_format)
+        if meta is None:
+            return
         theme = getattr(self, '_current_theme', Theme.LIGHT)
-        if save_format == FORMAT_PASCALVOC:
-            self.actions.save_format.setText(FORMAT_PASCALVOC)
-            self.actions.save_format.setIcon(themed_icon("format_voc", theme))
-            self.label_file_format = LabelFileFormat.PASCAL_VOC
-            LabelFile.suffix = XML_EXT
-
-        elif save_format == FORMAT_YOLO:
-            self.actions.save_format.setText(FORMAT_YOLO)
-            self.actions.save_format.setIcon(themed_icon("format_yolo", theme))
-            self.label_file_format = LabelFileFormat.YOLO
-            LabelFile.suffix = TXT_EXT
-
-        elif save_format == FORMAT_CREATEML:
-            self.actions.save_format.setText(FORMAT_CREATEML)
-            self.actions.save_format.setIcon(themed_icon("format_createml", theme))
-            self.label_file_format = LabelFileFormat.CREATE_ML
-            LabelFile.suffix = JSON_EXT
-
-        elif save_format == FORMAT_COCO:
-            self.actions.save_format.setText(FORMAT_COCO)
-            self.actions.save_format.setIcon(themed_icon("format_createml", theme))
-            self.label_file_format = LabelFileFormat.COCO
-            LabelFile.suffix = JSON_EXT
-
-        elif save_format == FORMAT_YOLO_SEG:
-            self.actions.save_format.setText(FORMAT_YOLO_SEG)
-            self.actions.save_format.setIcon(themed_icon("format_yolo", theme))
-            self.label_file_format = LabelFileFormat.YOLO_SEG
-            LabelFile.suffix = TXT_EXT
+        self.actions.save_format.setText(meta.name)
+        self.actions.save_format.setIcon(themed_icon(meta.icon, theme))
+        self.label_file_format = meta.enum
+        LabelFile.suffix = meta.suffix
 
     def change_format(self):
         """Cycle through annotation formats: VOC -> YOLO -> CreateML -> COCO -> YOLO-seg -> VOC."""
-        format_cycle = {
-            LabelFileFormat.PASCAL_VOC: (FORMAT_YOLO, "Switching to YOLO format.\n\nNote: The 'difficult' flag will be lost."),
-            LabelFileFormat.YOLO: (FORMAT_CREATEML, "Switching to CreateML format."),
-            LabelFileFormat.CREATE_ML: (FORMAT_COCO, "Switching to COCO format.\n\nSupports polygon annotations natively."),
-            LabelFileFormat.COCO: (FORMAT_YOLO_SEG, "Switching to YOLO-seg format.\n\nSupports polygon annotations natively."),
-            LabelFileFormat.YOLO_SEG: (FORMAT_PASCALVOC, "Switching to PASCAL VOC format."),
-        }
-
-        entry = format_cycle.get(self.label_file_format)
-        if entry is None:
-            raise ValueError('Unknown label file format.')
-
-        new_format, warning = entry
+        new_format, warning = format_metadata.next_in_cycle(self.label_file_format)
 
         # Show confirmation dialog
         msg = QMessageBox()
