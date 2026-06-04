@@ -3253,9 +3253,17 @@ class MainWindow(QMainWindow, WindowMixin):
         if os.path.isfile(xml_path) is False:
             return
 
-        self.set_format(FORMAT_PASCALVOC)
+        try:
+            loaded = annotation_loader.load_pascal_voc(xml_path)
+        except Exception as e:
+            self.error_message(
+                'Annotation Error',
+                f'Error loading PASCAL VOC annotations from '
+                f'{os.path.basename(xml_path)}: {e}')
+            return
 
-        loaded = annotation_loader.load_pascal_voc(xml_path)
+        # Defer the format switch until the reader succeeds (Issue #69).
+        self.set_format(FORMAT_PASCALVOC)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
 
@@ -3265,18 +3273,21 @@ class MainWindow(QMainWindow, WindowMixin):
         if os.path.isfile(txt_path) is False:
             return
 
-        self.set_format(FORMAT_YOLO)
         # YOLO stores normalized coords; convert against the original image
         # size rather than the (possibly scaled) display image (Issue #31).
         original_size = getattr(self, '_original_image_size', None)
         try:
             loaded = annotation_loader.load_yolo(
                 txt_path, self.image, original_size)
-            self.load_labels(loaded.shapes)
-            self.canvas.verified = loaded.verified
         except Exception as e:
             self.error_message('Annotation Error',
                 f'Error loading YOLO annotations for {os.path.basename(txt_path)}: {e}')
+            return
+
+        # Defer the format switch until the reader succeeds (Issue #69).
+        self.set_format(FORMAT_YOLO)
+        self.load_labels(loaded.shapes)
+        self.canvas.verified = loaded.verified
 
     def load_create_ml_json_by_filename(self, json_path, file_path):
         if self.file_path is None:
