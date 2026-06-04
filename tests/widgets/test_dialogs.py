@@ -229,5 +229,21 @@ class TestLabelDialogCompleter(unittest.TestCase):
         self.assertEqual(model.rowCount(), 0)
 
 
+class TestShortcutsDialogTheme(unittest.TestCase):
+    """The shortcuts dialog must source its colors from the palette."""
+
+    def test_default_shortcut_color_is_themed(self):
+        from libs.widgets.shortcutsDialog import ShortcutsDialog
+        from libs.core.shortcut_config import ShortcutConfig
+        from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
+
+        dialog = ShortcutsDialog(ShortcutConfig(), {})
+        dialog.apply_theme(Theme.LIGHT)
+
+        fg = dialog.table.item(0, 2).foreground().color()
+        expected = hex_to_qcolor(get_theme_colors(Theme.LIGHT)['text_secondary'])
+        self.assertEqual(fg, expected)
+
+
 if __name__ == '__main__':
     unittest.main()

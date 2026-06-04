@@ -6,7 +6,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QHeaderView, QKeySequenceEdit, QMessageBox, QFileDialog
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+
+from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
 
 
 class ShortcutsDialog(QDialog):
@@ -17,6 +18,7 @@ class ShortcutsDialog(QDialog):
         self.config = shortcut_config
         self.action_map = action_map  # {action_name: QAction}
         self._pending = dict(shortcut_config.get_all())
+        self._theme = Theme.LIGHT
 
         layout = QVBoxLayout()
 
@@ -74,7 +76,8 @@ class ShortcutsDialog(QDialog):
             # Default (read-only, gray)
             default_item = QTableWidgetItem(self.config.get_default(name))
             default_item.setFlags(default_item.flags() & ~Qt.ItemIsEditable)
-            default_item.setForeground(QColor(150, 150, 150))
+            colors = get_theme_colors(self._theme)
+            default_item.setForeground(hex_to_qcolor(colors['text_secondary']))
             self.table.setItem(row, 2, default_item)
 
     def _on_shortcut_changed(self, row, action_name, key_sequence):
@@ -90,7 +93,9 @@ class ShortcutsDialog(QDialog):
         # Highlight conflict
         widget = self.table.cellWidget(row, 1)
         if conflict:
-            widget.setStyleSheet('background-color: #ffcccc;')
+            colors = get_theme_colors(self._theme)
+            widget.setStyleSheet(
+                'background-color: %s;' % colors['issue_typo'])
             widget.setToolTip(f'Conflicts with: {conflict}')
         else:
             widget.setStyleSheet('')
@@ -140,4 +145,7 @@ class ShortcutsDialog(QDialog):
 
     def apply_theme(self, theme):
         from libs.utils.styles import get_stylesheet
+        self._theme = theme
         self.setStyleSheet(get_stylesheet(theme))
+        # Re-render rows so the themed default-shortcut color is applied.
+        self._refresh_table()

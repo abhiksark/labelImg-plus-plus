@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import pyqtSignal, Qt
 
 from libs.core.keypoint_config import get_keypoint_color, get_template
-from libs.utils.styles import get_theme_colors
+from libs.utils.styles import Theme, get_theme_colors
 
 
 class KeypointPanel(QWidget):
@@ -21,6 +21,9 @@ class KeypointPanel(QWidget):
         self._current_index = -1
         self._template_name = None
         self._template = None
+        # Active theme palette; status glyph colors are sourced from it so
+        # they re-theme instead of being hardcoded.
+        self._colors = get_theme_colors(Theme.LIGHT)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(4, 4, 4, 4)
         self._layout.setSpacing(2)
@@ -87,23 +90,26 @@ class KeypointPanel(QWidget):
         self._keypoints = keypoints
         total = len(self._rows)
         placed = 0
+        missing = 'color: %s;' % self._colors['text_disabled']
         for i, row in enumerate(self._rows):
             if keypoints is None or i >= len(keypoints) or keypoints[i] is None:
                 row['status'].setText('\u25cb')
-                row['status'].setStyleSheet('color: #888;')
+                row['status'].setStyleSheet(missing)
             else:
                 v = keypoints[i][2]
                 if v == 2:
                     row['status'].setText('\u25cf')
-                    row['status'].setStyleSheet('color: #4caf50;')
+                    row['status'].setStyleSheet(
+                        'color: %s;' % self._colors['success'])
                     placed += 1
                 elif v == 1:
                     row['status'].setText('\u25cc')
-                    row['status'].setStyleSheet('color: #ff9800;')
+                    row['status'].setStyleSheet(
+                        'color: %s;' % self._colors['warning'])
                     placed += 1
                 else:
                     row['status'].setText('\u2014')
-                    row['status'].setStyleSheet('color: #888;')
+                    row['status'].setStyleSheet(missing)
         self._count_label.setText('%d/%d placed' % (placed, total))
 
     def set_current_index(self, index):
@@ -118,9 +124,12 @@ class KeypointPanel(QWidget):
 
     def apply_theme(self, theme):
         """Apply theme styling."""
-        colors = get_theme_colors(theme)
+        self._colors = get_theme_colors(theme)
         self._count_label.setStyleSheet(
-            'color: %s;' % colors['text_secondary'])
+            'color: %s;' % self._colors['text_secondary'])
+        # Repaint existing rows so status colors follow the new theme.
+        self.set_keypoints(self._keypoints)
+        self.set_current_index(self._current_index)
 
     def clear(self):
         """Reset panel to empty state."""
@@ -128,7 +137,8 @@ class KeypointPanel(QWidget):
         self._current_index = -1
         for row in self._rows:
             row['status'].setText('\u25cb')
-            row['status'].setStyleSheet('color: #888;')
+            row['status'].setStyleSheet(
+                'color: %s;' % self._colors['text_disabled'])
             row['button'].setStyleSheet('')
         total = len(self._rows)
         self._count_label.setText('0/%d placed' % total)
