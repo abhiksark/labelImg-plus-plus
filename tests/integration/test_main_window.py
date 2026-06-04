@@ -21,8 +21,8 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtCore import QPointF
-from PyQt5.QtGui import QImage
+from PyQt5.QtCore import QPointF, Qt, QEvent
+from PyQt5.QtGui import QImage, QMouseEvent
 
 from labelImgPlusPlus import get_main_app
 from libs.core.shape import Shape
@@ -635,6 +635,61 @@ class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
 
         self.assertEqual(shape.points[0].x(), 10)
         self.assertEqual(shape.points[1].x(), 50)
+
+    def test_polygon_insert_then_drag_via_real_mouse_events_is_undoable(self):
+        """End-to-end through real QMouseEvents (Issue #70).
+
+        Pressing a polygon edge midpoint inserts a vertex; dragging it moves
+        it; two undos restore the original geometry. This exercises the actual
+        mousePress/Move/Release handlers, so a regression that severs the
+        mouse-event -> edit-signal -> command wiring is caught — unlike the
+        signal-level tests above, which emit the signals directly.
+        """
+        from libs.core.shape import ShapeType
+
+        canvas = self.win.canvas
+        canvas.mode = canvas.EDIT
+        canvas.scale = 1.0
+
+        shape = Shape(label='polygon', shape_type=ShapeType.POLYGON)
+        for x, y in [(10, 10), (50, 10), (50, 50), (10, 50)]:
+            shape.add_point(QPointF(x, y))
+        canvas.shapes.append(shape)
+        self.win.add_label(shape)
+        canvas.selected_shape = shape
+        self.win.undo_stack.clear()
+
+        original = [(p.x(), p.y()) for p in shape.points]
+
+        def evt(etype, x, y, button, buttons):
+            # Map image-space -> widget-space (inverse of transform_pos).
+            off = canvas.offset_to_center()
+            wp = QPointF((x + off.x()) * canvas.scale,
+                         (y + off.y()) * canvas.scale)
+            return QMouseEvent(etype, wp, button, buttons, Qt.NoModifier)
+
+        # 1. Press the midpoint of the top edge (10,10)-(50,10) -> insert vertex.
+        canvas.mousePressEvent(
+            evt(QEvent.MouseButtonPress, 30, 10,
+                Qt.LeftButton, Qt.LeftButton))
+        self.assertEqual(len(shape.points), 5,
+                         'pressing an edge midpoint should insert a vertex')
+
+        # 2. Drag the freshly inserted vertex down and release -> move.
+        canvas.mouseMoveEvent(
+            evt(QEvent.MouseMove, 30, 40, Qt.NoButton, Qt.LeftButton))
+        canvas.mouseReleaseEvent(
+            evt(QEvent.MouseButtonRelease, 30, 40,
+                Qt.LeftButton, Qt.NoButton))
+
+        # Both the insert and the drag-move must have pushed undo commands.
+        self.assertEqual(len(self.win.undo_stack._undo_stack), 2,
+                         'insert and drag-move should each push a command')
+
+        # 3. Undo the move, then the insert -> back to the original 4 vertices.
+        self.win.undo_stack.undo()
+        self.win.undo_stack.undo()
+        self.assertEqual([(p.x(), p.y()) for p in shape.points], original)
 
 
 class TestUndoStateConsistency(unittest.TestCase):
