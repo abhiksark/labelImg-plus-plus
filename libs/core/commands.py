@@ -84,12 +84,14 @@ class DeleteShapeCommand(Command):
         self.main_window = main_window
         self.shape = shape  # Keep reference to original shape
         self.index = index
+        self._list_row = None  # label-list row, captured on execute
 
     def execute(self):
         """Remove the shape from canvas and label list."""
         if self.shape in self.main_window.canvas.shapes:
             self.main_window.canvas.shapes.remove(self.shape)
-        self.main_window.remove_label(self.shape)
+        # Capture the label-list row so undo can restore the exact ordering.
+        self._list_row = self.main_window.remove_label(self.shape)
         if self.main_window.canvas.selected_shape == self.shape:
             self.main_window.canvas.selected_shape = None
         self.main_window.canvas.update()
@@ -100,7 +102,7 @@ class DeleteShapeCommand(Command):
             self.main_window.canvas.shapes.insert(self.index, self.shape)
         else:
             self.main_window.canvas.shapes.append(self.shape)
-        self.main_window.add_label(self.shape)
+        self.main_window.add_label(self.shape, row=self._list_row)
         self.main_window.canvas.update()
 
     @property
@@ -168,12 +170,14 @@ class EditLabelCommand(Command):
         """Apply new label."""
         self.shape.label = self.new_label
         self._update_list_item()
+        self.main_window.update_combo_box()
         self.main_window.canvas.update()
 
     def undo(self):
         """Restore old label."""
         self.shape.label = self.old_label
         self._update_list_item()
+        self.main_window.update_combo_box()
         self.main_window.canvas.update()
 
     def _update_list_item(self):
@@ -181,7 +185,7 @@ class EditLabelCommand(Command):
         if self.shape in self.main_window.shapes_to_items:
             item = self.main_window.shapes_to_items[self.shape]
             item.setText(self.shape.label)
-            from libs.hashableQListWidgetItem import generate_color_by_text
+            from libs.utils.utils import generate_color_by_text
             item.setBackground(generate_color_by_text(self.shape.label))
 
     @property

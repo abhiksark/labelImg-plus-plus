@@ -1880,7 +1880,7 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             self.keypoint_panel.hide()
 
-    def add_label(self, shape):
+    def add_label(self, shape, row=None):
         shape.paint_label = self.display_label_option.isChecked()
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -1890,15 +1890,21 @@ class MainWindow(QMainWindow, WindowMixin):
         self.shapes_to_items[shape] = item
         # Route to the appropriate label list based on shape type
         target_list = self._label_list_for_shape(shape)
-        target_list.addItem(item)
+        # Restore at a specific row (undo of a delete) when given, else append.
+        if row is not None and row >= 0:
+            target_list.insertItem(row, item)
+        else:
+            target_list.addItem(item)
         self._update_tab_counts()
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
         self.update_combo_box()
 
     def remove_label(self, shape):
+        """Remove a shape's label-list item. Returns the row it occupied
+        (or None) so a caller can restore the exact ordering on undo."""
         if shape is None:
-            return
+            return None
         item = self.shapes_to_items[shape]
         # Remove from whichever list contains the item
         target_list = self._label_list_for_shape(shape)
@@ -1909,6 +1915,7 @@ class MainWindow(QMainWindow, WindowMixin):
         del self.shapes_to_items[shape]
         del self.items_to_shapes[item]
         self.update_combo_box()
+        return row
 
     def load_labels(self, shapes):
         s = []

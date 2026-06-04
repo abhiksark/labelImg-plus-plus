@@ -600,5 +600,71 @@ class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
         self.assertEqual(shape.points[1].x(), 50)
 
 
+class TestUndoStateConsistency(unittest.TestCase):
+    """Undo must restore label-list ordering and combo-box contents."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app, cls.win = get_main_app()
+        cls.temp_dir = tempfile.mkdtemp()
+        cls.img = os.path.join(cls.temp_dir, 'i.png')
+        im = QImage(100, 100, QImage.Format_RGB32)
+        im.fill(0xFFFFFF)
+        im.save(cls.img)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.temp_dir, ignore_errors=True)
+
+    def setUp(self):
+        self.win.reset_state()
+        self.win.load_file(self.img)
+        self.win.undo_stack.clear()
+
+    def _rect(self, label):
+        s = Shape(label=label)
+        s.add_point(QPointF(10, 10))
+        s.add_point(QPointF(50, 50))
+        s.close()
+        return s
+
+    def _combo_items(self):
+        cb = self.win.combo_box.cb
+        return [cb.itemText(i) for i in range(cb.count())]
+
+    def test_delete_undo_restores_label_list_row(self):
+        """Deleting a non-last shape then undoing must put its list item back
+        at the same row, not append it to the bottom."""
+        from libs.core.commands import DeleteShapeCommand
+        a, b, c = self._rect('a'), self._rect('b'), self._rect('c')
+        for s in (a, b, c):
+            self.win.canvas.shapes.append(s)
+            self.win.add_label(s)
+        self.assertEqual(self.win.rect_label_list.row(self.win.shapes_to_items[b]), 1)
+
+        cmd = DeleteShapeCommand(self.win, b, self.win.canvas.shapes.index(b))
+        cmd.execute()
+        self.win.undo_stack.push(cmd)
+        self.win.undo_stack.undo()
+
+        self.assertEqual(self.win.rect_label_list.row(self.win.shapes_to_items[b]), 1)
+
+    def test_edit_label_updates_combo_box(self):
+        """Editing a label (and undoing) must refresh the label combo box."""
+        from libs.core.commands import EditLabelCommand
+        s = self._rect('cat')
+        self.win.canvas.shapes.append(s)
+        self.win.add_label(s)
+        self.assertIn('cat', self._combo_items())
+
+        cmd = EditLabelCommand(self.win, s, 'cat', 'dog')
+        cmd.execute()
+        self.win.undo_stack.push(cmd)
+        self.assertIn('dog', self._combo_items())
+
+        self.win.undo_stack.undo()
+        self.assertIn('cat', self._combo_items())
+
+
 if __name__ == '__main__':
     unittest.main()

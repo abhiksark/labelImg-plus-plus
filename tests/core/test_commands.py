@@ -52,6 +52,9 @@ class MockMainWindow:
             def addItem(self, item):
                 self.items.append(item)
 
+            def insertItem(self, row, item):
+                self.items.insert(row, item)
+
             def takeItem(self, idx):
                 return self.items.pop(idx)
 
@@ -60,15 +63,18 @@ class MockMainWindow:
 
         self.label_list = MockLabelList()
 
-    def add_label(self, shape):
+    def add_label(self, shape, row=None):
         item = shape.label
         self.items_to_shapes[item] = shape
         self.shapes_to_items[shape] = item
-        self.label_list.addItem(item)
+        if row is not None and row >= 0:
+            self.label_list.insertItem(row, item)
+        else:
+            self.label_list.addItem(item)
 
     def remove_label(self, shape):
         if shape is None:
-            return
+            return None
         if shape in self.shapes_to_items:
             item = self.shapes_to_items[shape]
             idx = self.label_list.row(item)
@@ -76,6 +82,8 @@ class MockMainWindow:
                 self.label_list.takeItem(idx)
             del self.shapes_to_items[shape]
             del self.items_to_shapes[item]
+            return idx
+        return None
 
     def update_combo_box(self):
         pass
