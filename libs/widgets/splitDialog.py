@@ -95,6 +95,9 @@ class SplitDialog(QDialog):
 
         self.setLayout(layout)
 
+        # Establish the initial enabled/label state now that run_btn exists.
+        self._sync_ratios()
+
     def _create_ratio_row(self, layout, label, default):
         """Create a labeled spin box row for a split ratio.
 
@@ -125,7 +128,14 @@ class SplitDialog(QDialog):
         self.test_spin.setValue(max(0, test))
         self.test_spin.blockSignals(False)
         total = train + val + max(0, test)
-        self.total_label.setText(f'Total: {total}%')
+        # Only train+val > 100 can push the total off 100%.
+        valid = (total == 100) and self._image_count > 0
+        if total != 100:
+            self.total_label.setText(f'Total: {total}% (must equal 100%)')
+        else:
+            self.total_label.setText(f'Total: {total}%')
+        if hasattr(self, 'run_btn'):
+            self.run_btn.setEnabled(valid)
         self._update_preview()
 
     def _update_preview(self):
