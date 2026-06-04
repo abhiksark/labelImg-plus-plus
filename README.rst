@@ -239,7 +239,7 @@ If you encounter issues, reset the settings:
 
 .. code:: shell
 
-    rm ~/.labelImgSettings.pkl
+    rm ~/.labelImgSettings.json
 
 Or use **Menu > File > Reset All**
 

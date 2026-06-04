@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Tests for Settings class with proper isolation (uses temp files)."""
+import json
 import os
 import sys
 import tempfile
@@ -165,6 +166,87 @@ class TestSettingsEdgeCases(unittest.TestCase):
         nested = new_settings.get('nested')
         self.assertEqual(nested['level1']['level2']['list'], [1, 2, 3])
         self.assertEqual(nested['level1']['level2']['dict']['a'], 'b')
+
+
+class TestSettingsJsonMigration(unittest.TestCase):
+    """Settings must persist as JSON, never via pickle (arbitrary-code-exec)."""
+
+    def setUp(self):
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+        self.temp_file.close()
+        self.settings = Settings()
+        self.settings.path = self.temp_file.name
+
+    def tearDown(self):
+        if os.path.exists(self.temp_file.name):
+            os.remove(self.temp_file.name)
+
+    def test_saved_file_is_valid_json(self):
+        """The on-disk settings file must be JSON text, not a pickle blob."""
+        self.settings['key'] = 'value'
+        self.settings['n'] = 7
+        self.settings.save()
+
+        with open(self.temp_file.name, 'r', encoding='utf-8') as f:
+            data = json.load(f)  # raises if the file is a pickle
+        self.assertEqual(data['key'], 'value')
+        self.assertEqual(data['n'], 7)
+
+    def test_load_does_not_execute_pickle_payload(self):
+        """A malicious legacy pickle must NOT execute code when load() runs."""
+        import pickle
+        sentinel = tempfile.mktemp(prefix='labelimg_pwned_')
+
+        class Exploit:
+            def __reduce__(self):
+                return (os.system, ('touch %s' % sentinel,))
+
+        with open(self.temp_file.name, 'wb') as f:
+            pickle.dump(Exploit(), f)
+
+        try:
+            self.settings.load()  # must not run the payload
+            self.assertFalse(
+                os.path.exists(sentinel),
+                'pickle payload executed - settings.load() is unsafe')
+        finally:
+            if os.path.exists(sentinel):
+                os.remove(sentinel)
+
+    def test_qt_types_roundtrip(self):
+        """QSize/QPoint/QColor/QByteArray/enum must survive a save/load cycle."""
+        from PyQt5.QtCore import QByteArray, QPoint, QSize
+        from PyQt5.QtGui import QColor
+        from libs.formats.labelFile import LabelFileFormat
+
+        self.settings['size'] = QSize(640, 480)
+        self.settings['pos'] = QPoint(12, 34)
+        self.settings['color'] = QColor(10, 20, 30, 200)
+        self.settings['state'] = QByteArray(b'\x00\x01\x02\xff')
+        self.settings['fmt'] = LabelFileFormat.YOLO
+        self.settings.save()
+
+        loaded = Settings()
+        loaded.path = self.temp_file.name
+        self.assertTrue(loaded.load())
+
+        self.assertEqual(loaded.get('size'), QSize(640, 480))
+        self.assertEqual(loaded.get('pos'), QPoint(12, 34))
+        self.assertEqual(loaded.get('color'), QColor(10, 20, 30, 200))
+        self.assertEqual(loaded.get('state'), QByteArray(b'\x00\x01\x02\xff'))
+        self.assertEqual(loaded.get('fmt'), LabelFileFormat.YOLO)
+
+    def test_reset_keeps_path_so_persistence_survives(self):
+        """reset() must not null the path (which would disable all saving)."""
+        self.settings['k'] = 'v'
+        self.settings.save()
+        self.settings.reset()
+
+        self.assertEqual(self.settings.data, {})
+        self.assertIsNotNone(self.settings.path)
+        # Persistence still works after reset.
+        self.settings['k2'] = 'v2'
+        self.assertTrue(self.settings.save())
 
 
 if __name__ == '__main__':
