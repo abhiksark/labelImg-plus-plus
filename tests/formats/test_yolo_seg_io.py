@@ -74,6 +74,32 @@ class TestYOLOSegReader(unittest.TestCase):
         self.assertEqual(shape_type, 'rectangle')
         self.assertEqual(len(points), 4)
 
+    def test_missing_classes_file_raises_friendly_error(self):
+        """A missing classes.txt must raise FileNotFoundError mentioning it,
+        mirroring the plain YOLO reader (recoverable, not an opaque crash)."""
+        txt_path = os.path.join(self.tmp_dir, 'noclasses.txt')
+        with open(txt_path, 'w') as f:
+            f.write('0 0.1 0.1 0.9 0.1 0.9 0.9 0.1 0.9\n')
+        missing = os.path.join(self.tmp_dir, 'classes.txt')  # not created
+
+        with self.assertRaises(FileNotFoundError) as ctx:
+            YOLOSegReader(txt_path, self.image, missing)
+        self.assertIn('classes.txt', str(ctx.exception))
+
+    def test_malformed_tokens_are_skipped(self):
+        """Non-numeric class index or coordinates must skip the line, not crash."""
+        txt_path = os.path.join(self.tmp_dir, 'test.txt')
+        classes_path = os.path.join(self.tmp_dir, 'classes.txt')
+        with open(classes_path, 'w') as f:
+            f.write('cat\n')
+        with open(txt_path, 'w') as f:
+            f.write('x 0.1 0.1 0.9 0.1 0.9 0.9\n')          # bad class index
+            f.write('0 0.1 zz 0.9 0.1 0.9 0.9\n')           # bad coordinate
+            f.write('0 0.100 0.100 0.900 0.100 0.900 0.900 0.100 0.900\n')  # valid
+
+        reader = YOLOSegReader(txt_path, self.image, classes_path)  # must not raise
+        self.assertEqual(len(reader.get_shapes()), 1)
+
     def test_read_non_axis_aligned_quadrilateral(self):
         """4-point non-axis-aligned shapes remain polygons."""
         txt_path = os.path.join(self.tmp_dir, 'test.txt')

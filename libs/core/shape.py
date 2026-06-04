@@ -301,8 +301,8 @@ class Shape(object):
         self._highlight_index = None
 
     def copy(self):
-        shape = Shape("%s" % self.label, shape_type=self.shape_type)
-        shape.points = [p for p in self.points]
+        shape = Shape(self.label, shape_type=self.shape_type)
+        shape.points = [QPointF(p.x(), p.y()) for p in self.points]
         shape.fill = self.fill
         shape.selected = self.selected
         shape._closed = self._closed

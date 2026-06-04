@@ -78,6 +78,64 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Should not crash, file_path should be unchanged or empty
         self.assertNotEqual(self.win.file_path, fake_path)
 
+    def test_load_file_on_annotation_file_does_not_crash(self):
+        """Opening an annotation file (suffix == LabelFile.suffix) must fail
+        gracefully, not crash.
+
+        Regression: the is_label_file branch in load_file referenced
+        LabelFile.lineColor (which does not exist) and left `image` unbound,
+        raising AttributeError/UnboundLocalError instead of reporting a clean
+        error.
+        """
+        from unittest.mock import patch
+        from libs.formats.labelFile import LabelFile
+        annot_path = os.path.join(self.temp_dir, 'annotation' + LabelFile.suffix)
+        with open(annot_path, 'w') as f:
+            f.write('<annotation><filename>x.jpg</filename></annotation>')
+
+        # error_message shows a modal QMessageBox; stub it so the test does
+        # not block, while still exercising the real load_file branch.
+        with patch.object(self.win, 'error_message') as mock_error:
+            result = self.win.load_file(annot_path)
+
+        self.assertFalse(result)
+        self.assertNotEqual(self.win.file_path, annot_path)
+        mock_error.assert_called_once()
+
+    def test_default_predefined_classes_file_is_packaged(self):
+        """The default class list must ship inside the libs package so it is
+        present in the installed wheel (not just the source checkout)."""
+        import libs
+        packaged = os.path.join(os.path.dirname(libs.__file__),
+                                'data', 'predefined_classes.txt')
+        self.assertTrue(os.path.isfile(packaged))
+
+    def test_apply_label_fix_does_not_crash(self):
+        """_apply_label_fix must use statusBar(), not a missing status_bar attr.
+
+        Regression: it called self.status_bar.showMessage (no such attribute),
+        so the label-consistency fix path always raised AttributeError.
+        """
+        self.win.dir_name = self.temp_dir
+        self.win._apply_label_fix('old', 'new')  # must not raise
+
+    def test_reset_all_relaunches_with_python_interpreter(self):
+        """reset_all must relaunch through sys.executable, not exec the .py.
+
+        Regression: startDetached(os.path.abspath(__file__)) does not restart
+        an installed (entry-point) package.
+        """
+        from unittest.mock import patch
+        with patch.object(self.win, 'close'), \
+                patch.object(self.win.settings, 'reset'), \
+                patch('labelImgPlusPlus.QProcess') as mock_proc:
+            instance = mock_proc.return_value
+            self.win.reset_all()
+
+        instance.startDetached.assert_called_once()
+        args = instance.startDetached.call_args[0]
+        self.assertEqual(args[0], sys.executable)
+
     def test_load_predefined_classes_none_does_not_raise(self):
         """load_predefined_classes(None) must no-op, not raise TypeError.
 
@@ -505,6 +563,41 @@ class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
         self.assertTrue(self.win.undo_stack.can_undo())
         self.win.undo_stack.undo()
         self.assertIsNone(shape.keypoints)
+
+    def test_rectangle_move_pushes_undoable_command(self):
+        """shapeMoveFinished -> pushes MoveShapeCommand, and undo restores the
+        rectangle's original position.
+
+        Regression: MoveShapeCommand was implemented, exported, imported and
+        unit-tested, but never wired into the app. Whole-shape (and rectangle
+        vertex) drags emitted shapeMoved -> set_dirty only, bypassing the undo
+        stack, so Ctrl+Z could not revert a moved box.
+        """
+        from libs.core.commands import MoveShapeCommand
+
+        shape = Shape(label='car')
+        shape.add_point(QPointF(10, 10))
+        shape.add_point(QPointF(50, 50))
+        shape.close()
+        self.win.canvas.shapes.append(shape)
+        self.win.add_label(shape)
+        self.win.canvas.selected_shape = shape
+
+        old = [QPointF(p.x(), p.y()) for p in shape.points]
+
+        # Simulate a completed body drag: the canvas moved the points, then
+        # reports the finished move on mouse release.
+        shape.move_by(QPointF(20, 0))
+        self.win.canvas.shapeMoveFinished.emit(shape, old)
+
+        self.assertTrue(self.win.undo_stack.can_undo())
+        self.assertIsInstance(self.win.undo_stack._undo_stack[-1], MoveShapeCommand)
+        self.assertEqual(shape.points[0].x(), 30)
+
+        self.win.undo_stack.undo()
+
+        self.assertEqual(shape.points[0].x(), 10)
+        self.assertEqual(shape.points[1].x(), 50)
 
 
 if __name__ == '__main__':

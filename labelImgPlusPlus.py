@@ -599,6 +599,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.polygonVerticesEdited.connect(
             self._on_polygon_vertices_edited)
         self.canvas.keypointsEdited.connect(self._on_keypoints_edited)
+        self.canvas.shapeMoveFinished.connect(self._on_shape_move_finished)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -1705,6 +1706,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.undo_stack.push(cmd)
         self.set_dirty()
 
+    def _on_shape_move_finished(self, shape, old_points):
+        """Capture whole-shape moves / rectangle resizes for undo support."""
+        cmd = MoveShapeCommand(self, shape, old_points, list(shape.points))
+        self.undo_stack.push(cmd)
+        self.set_dirty()
+
     def _on_keypoints_edited(self, shape, old_keypoints):
         """Capture keypoint mutations for undo support."""
         cmd = EditKeypointsCommand(
@@ -2537,20 +2544,19 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if unicode_file_path and os.path.exists(unicode_file_path):
             if LabelFile.is_label_file(unicode_file_path):
-                try:
-                    self.label_file = LabelFile(unicode_file_path)
-                except LabelFileError as e:
-                    self.error_message(u'Error opening file',
-                                       (u"<p><b>%s</b></p>"
-                                        u"<p>Make sure <i>%s</i> is a valid label file.")
-                                       % (e, unicode_file_path))
-                    self.status("Error reading %s" % unicode_file_path)
-                    
-                    return False
-                self.image_data = self.label_file.image_data
-                self.line_color = QColor(*self.label_file.lineColor)
-                self.fill_color = QColor(*self.label_file.fillColor)
-                self.canvas.verified = self.label_file.verified
+                # Annotation files cannot be opened directly: in this fork
+                # LabelFile is a write-only dispatcher with no reader and no
+                # embedded image, so there is nothing to display. Report a
+                # clear error rather than crashing. Open the corresponding
+                # image instead; its annotations load automatically.
+                self.error_message(
+                    u'Cannot open annotation file',
+                    (u"<p><b>%s</b> is an annotation file, not an image.</p>"
+                     u"<p>Open the image it describes instead - its "
+                     u"annotations will load automatically.</p>")
+                    % unicode_file_path)
+                self.status("Cannot open annotation file %s" % unicode_file_path)
+                return False
             else:
                 # Load image with memory-efficient downsampling for large images
                 self.label_file = None
@@ -2876,7 +2882,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # and replace old_label with new_label
         # For now, just log - full implementation would update files
         print(f"Label fix requested: '{old_label}' → '{new_label}'")
-        self.status_bar.showMessage(
+        self.statusBar().showMessage(
             f"Label fix: '{old_label}' → '{new_label}' (reload to see changes)",
             5000
         )
@@ -3268,7 +3274,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings.reset()
         self.close()
         process = QProcess()
-        process.startDetached(os.path.abspath(__file__))
+        # Relaunch through the Python interpreter so the restart works for an
+        # installed (entry-point) package, not just a source checkout.
+        process.startDetached(sys.executable, [os.path.abspath(__file__)])
 
     def may_continue(self):
         if not self.dirty:
@@ -3871,11 +3879,19 @@ def get_main_app(argv=None):
     app.setStyleSheet(get_combined_style())  # Apply global stylesheet
     app.setApplicationName(__appname__)
     app.setWindowIcon(new_icon("app"))
-    # Tzutalin 201705+: Accept extra agruments to change predefined class file
+    # Tzutalin 201705+: Accept extra agruments to change predefined class file.
+    # Prefer the copy packaged inside the libs package (shipped in the wheel);
+    # fall back to the top-level data/ dir for source checkouts.
+    _here = os.path.dirname(__file__)
+    default_class_file = os.path.join(_here, "libs", "data",
+                                      "predefined_classes.txt")
+    if not os.path.exists(default_class_file):
+        default_class_file = os.path.join(_here, "data",
+                                          "predefined_classes.txt")
     argparser = argparse.ArgumentParser()
     argparser.add_argument("image_dir", nargs="?")
     argparser.add_argument("class_file",
-                           default=os.path.join(os.path.dirname(__file__), "data", "predefined_classes.txt"),
+                           default=default_class_file,
                            nargs="?")
     argparser.add_argument("save_dir", nargs="?")
     args = argparser.parse_args(argv[1:])

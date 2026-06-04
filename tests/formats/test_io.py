@@ -200,6 +200,44 @@ class TestPascalVocEdgeCases(unittest.TestCase):
         with self.assertRaises((ValueError, AttributeError, Exception)):
             PascalVocReader(xml_path)
 
+    def test_xml_entity_expansion_is_not_resolved(self):
+        """A malicious annotation must not trigger XML entity expansion (billion-laughs DoS).
+
+        The entity is placed in an object's <name>; a hardened parser must not
+        expand it (label stays small/empty rather than ballooning).
+        """
+        xml_path = os.path.join(self.temp_dir, 'bomb.xml')
+        with open(xml_path, 'w') as f:
+            f.write('''<?xml version="1.0"?>
+<!DOCTYPE annotation [
+  <!ENTITY a "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+  <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+  <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+]>
+<annotation>
+    <filename>bomb.jpg</filename>
+    <size><width>100</width><height>100</height><depth>3</depth></size>
+    <object>
+        <name>&d;</name>
+        <bndbox><xmin>1</xmin><ymin>1</ymin><xmax>9</xmax><ymax>9</ymax></bndbox>
+    </object>
+</annotation>''')
+
+        # Either the parser refuses the DTD/entity (raises) or it reads the
+        # file without expanding the entity. Both are acceptable; an expanded
+        # 50k-char label is NOT.
+        try:
+            reader = PascalVocReader(xml_path)
+        except (ValueError, Exception):
+            return  # refusing the malicious DTD is a valid hardened outcome
+
+        for shape in reader.get_shapes():
+            label = shape[0] or ''
+            self.assertLess(
+                len(label), 1000,
+                'XML entity was expanded — parser is vulnerable to entity-expansion DoS')
+
     def test_read_nonexistent_file_raises_error(self):
         """Test reading non-existent XML file raises FileNotFoundError."""
         with self.assertRaises(FileNotFoundError):
@@ -290,6 +328,28 @@ class TestCreateMLEdgeCases(unittest.TestCase):
         """Test reading non-existent JSON file raises FileNotFoundError."""
         with self.assertRaises(FileNotFoundError):
             CreateMLReader('/nonexistent/path/file.json', 'folder/test.jpg')
+
+    def test_non_list_json_raises_value_error(self):
+        """A CreateML file must be a JSON array; a top-level object is a clean
+        ValueError, not an opaque 'string indices must be integers' TypeError."""
+        json_path = os.path.join(self.temp_dir, 'object.json')
+        with open(json_path, 'w') as f:
+            json.dump({'image': 'test.jpg', 'annotations': []}, f)
+
+        with self.assertRaises(ValueError):
+            CreateMLReader(json_path, 'folder/test.jpg')
+
+    def test_annotation_missing_keys_is_skipped(self):
+        """Annotations missing label/coordinates must be skipped, not KeyError."""
+        json_path = os.path.join(self.temp_dir, 'partial.json')
+        with open(json_path, 'w') as f:
+            json.dump([{'image': 'test.jpg', 'annotations': [
+                {'label': 'cat'},                       # no coordinates
+                {'coordinates': {'x': 1, 'y': 2, 'width': 3, 'height': 4}},  # no label
+            ]}], f)
+
+        reader = CreateMLReader(json_path, 'folder/test.jpg')  # must not raise
+        self.assertEqual(reader.get_shapes(), [])
 
     def test_write_with_no_shapes(self):
         """Test writing with empty shapes list."""

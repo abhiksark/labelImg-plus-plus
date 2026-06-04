@@ -64,6 +64,11 @@ def split_dataset(image_list, ratios, seed=42, stratified=False,
     Returns:
         Dict with keys 'train', 'val', 'test', each a list of image paths.
     """
+    total = sum(ratios.get(k, 0) for k in ('train', 'val', 'test'))
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(
+            f"Split ratios must sum to 1.0 (got {total:.3f})")
+
     rng = random.Random(seed)
 
     if stratified:
@@ -100,8 +105,35 @@ def split_dataset(image_list, ratios, seed=42, stratified=False,
     }
 
 
+def _find_classes_file(save_dir, splits):
+    """Locate a classes.txt for YOLO splits (save_dir first, then image dirs)."""
+    candidates = []
+    if save_dir:
+        candidates.append(os.path.join(save_dir, 'classes.txt'))
+    for images in splits.values():
+        for img in images:
+            candidates.append(os.path.join(os.path.dirname(img), 'classes.txt'))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _place_file(src, dest, copy):
+    """Copy or symlink src->dest. Caller guarantees dest does not yet exist."""
+    if copy:
+        shutil.copy2(src, dest)
+    else:
+        os.symlink(os.path.abspath(src), dest)
+
+
 def execute_split(splits, output_dir, save_dir=None, copy=True):
     """Copy or symlink files into train/val/test directories.
+
+    Existing destination files are never overwritten (recorded under
+    ``skipped``), per-file failures are collected (under ``errors``) instead of
+    aborting the whole split, and a YOLO ``classes.txt`` is copied into each
+    split so the integer labels remain decodable.
 
     Args:
         splits: Dict from split_dataset().
@@ -110,38 +142,62 @@ def execute_split(splits, output_dir, save_dir=None, copy=True):
         copy: If True, copy files. If False, create symlinks.
 
     Returns:
-        Path to the generated manifest file.
+        Path to the generated manifest file (always written, even on failures).
     """
     manifest = {
         'created': datetime.now().isoformat(),
         'files': {},
+        'skipped': [],
+        'errors': [],
     }
+    classes_src = _find_classes_file(save_dir, splits)
 
-    for split_name, images in splits.items():
-        split_dir = os.path.join(output_dir, split_name)
-        os.makedirs(split_dir, exist_ok=True)
-        manifest['files'][split_name] = []
+    try:
+        for split_name, images in splits.items():
+            split_dir = os.path.join(output_dir, split_name)
+            os.makedirs(split_dir, exist_ok=True)
+            manifest['files'][split_name] = []
+            wrote_yolo = False
 
-        for img_path in images:
-            basename = os.path.basename(img_path)
-            dest = os.path.join(split_dir, basename)
+            for img_path in images:
+                dest = os.path.join(split_dir, os.path.basename(img_path))
+                if os.path.lexists(dest):
+                    manifest['skipped'].append(dest)  # never clobber
+                    continue
+                try:
+                    _place_file(img_path, dest, copy)
+                except OSError as e:
+                    manifest['errors'].append(
+                        {'file': img_path, 'error': str(e)})
+                    continue
 
-            if copy:
-                shutil.copy2(img_path, dest)
-            else:
-                os.symlink(os.path.abspath(img_path), dest)
+                manifest['files'][split_name].append(os.path.basename(img_path))
 
-            manifest['files'][split_name].append(basename)
+                ann = find_annotation_file(img_path, save_dir)
+                if ann:
+                    ann_dest = os.path.join(split_dir, os.path.basename(ann))
+                    if not os.path.lexists(ann_dest):
+                        try:
+                            _place_file(ann, ann_dest, copy)
+                        except OSError as e:
+                            manifest['errors'].append(
+                                {'file': ann, 'error': str(e)})
+                    if ann.endswith('.txt'):
+                        wrote_yolo = True
 
-            ann = find_annotation_file(img_path, save_dir)
-            if ann:
-                ann_dest = os.path.join(split_dir, os.path.basename(ann))
-                if copy:
-                    shutil.copy2(ann, ann_dest)
-                else:
-                    os.symlink(os.path.abspath(ann), ann_dest)
+            # YOLO labels are useless without their class map.
+            if wrote_yolo and classes_src:
+                classes_dest = os.path.join(split_dir, 'classes.txt')
+                if not os.path.lexists(classes_dest):
+                    try:
+                        shutil.copy2(classes_src, classes_dest)
+                    except OSError as e:
+                        manifest['errors'].append(
+                            {'file': classes_src, 'error': str(e)})
+    finally:
+        manifest_path = os.path.join(output_dir, 'split_manifest.json')
+        os.makedirs(output_dir, exist_ok=True)
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
 
-    manifest_path = os.path.join(output_dir, 'split_manifest.json')
-    with open(manifest_path, 'w') as f:
-        json.dump(manifest, f, indent=2)
     return manifest_path

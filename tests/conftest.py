@@ -26,6 +26,11 @@ def pytest_sessionfinish(session, exitstatus):
 
     for widget in list(app.topLevelWidgets()):
         try:
+            # A dirty MainWindow pops a modal "discard changes?" dialog from
+            # closeEvent, which blocks/segfaults under offscreen teardown.
+            # Tests are not real edit sessions, so suppress the prompt.
+            if hasattr(widget, 'dirty'):
+                widget.dirty = False
             widget.close()
             widget.deleteLater()
         except Exception:

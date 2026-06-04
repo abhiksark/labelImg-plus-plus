@@ -95,16 +95,29 @@ class CreateMLReader:
         with open(self.json_path, "r") as file:
             input_data = file.read()
 
-        # Returns a list
         output_list = json.loads(input_data)
 
-        if output_list:
+        # A CreateML file is a JSON array of image objects; anything else is
+        # malformed. Fail with a clear error instead of an opaque TypeError.
+        if not isinstance(output_list, list):
+            raise ValueError("CreateML annotation file must be a JSON array")
+
+        if output_list and isinstance(output_list[0], dict):
             self.verified = output_list[0].get("verified", False)
 
         for image in output_list:
-            if image["image"] == self.filename:
-                for shape in image["annotations"]:
-                    self.add_shape(shape["label"], shape["coordinates"])
+            if not isinstance(image, dict):
+                continue
+            if image.get("image") == self.filename:
+                for shape in image.get("annotations", []):
+                    label = shape.get("label")
+                    coords = shape.get("coordinates")
+                    if label is None or not isinstance(coords, dict):
+                        continue
+                    if not all(k in coords
+                               for k in ("x", "y", "width", "height")):
+                        continue
+                    self.add_shape(label, coords)
 
     def add_shape(self, label, bnd_box):
         x_min = bnd_box["x"] - (bnd_box["width"] / 2)

@@ -43,22 +43,28 @@ class TestConvertPointsToBndBox(unittest.TestCase):
         self.assertIsInstance(result[2], int)
         self.assertIsInstance(result[3], int)
 
-    def test_zero_coordinate_clamped_to_one(self):
-        """Test that coordinates < 1 are clamped to 1."""
+    def test_subpixel_coordinates_are_rounded(self):
+        """Sub-pixel coordinates must round, not truncate toward zero."""
+        points = [(10.9, 20.4), (30.6, 20.4), (30.6, 40.8), (10.9, 40.8)]
+        result = LabelFile.convert_points_to_bnd_box(points)
+
+        self.assertEqual(result, (11, 20, 31, 41))
+
+    def test_zero_coordinate_preserved(self):
+        """An edge-anchored box at (0, 0) must be preserved, not shifted to 1."""
         points = [(0, 0), (50, 0), (50, 50), (0, 50)]
         result = LabelFile.convert_points_to_bnd_box(points)
 
-        # x_min and y_min should be clamped to 1
-        self.assertEqual(result[0], 1)  # x_min
-        self.assertEqual(result[1], 1)  # y_min
+        self.assertEqual(result[0], 0)  # x_min
+        self.assertEqual(result[1], 0)  # y_min
 
-    def test_negative_coordinate_clamped_to_one(self):
-        """Test that negative coordinates are clamped to 1."""
+    def test_negative_coordinate_clamped_to_zero(self):
+        """Negative coordinates clamp to 0 (off-image), not to 1."""
         points = [(-5, -10), (50, -10), (50, 50), (-5, 50)]
         result = LabelFile.convert_points_to_bnd_box(points)
 
-        self.assertEqual(result[0], 1)  # x_min clamped from -5
-        self.assertEqual(result[1], 1)  # y_min clamped from -10
+        self.assertEqual(result[0], 0)  # x_min clamped from -5
+        self.assertEqual(result[1], 0)  # y_min clamped from -10
 
     def test_single_point_box(self):
         """Test degenerate case of single point repeated."""
