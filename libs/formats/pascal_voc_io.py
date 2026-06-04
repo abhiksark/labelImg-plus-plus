@@ -182,7 +182,16 @@ class PascalVocReader:
 
     def parse_xml(self):
         assert self.file_path.endswith(XML_EXT), "Unsupported file format"
-        parser = etree.XMLParser(encoding=ENCODE_METHOD)
+        # Harden against entity-expansion DoS (billion-laughs) and external
+        # entity / network access (XXE). Annotation files travel with shared
+        # datasets and are untrusted input.
+        parser = etree.XMLParser(
+            encoding=ENCODE_METHOD,
+            resolve_entities=False,
+            no_network=True,
+            load_dtd=False,
+            huge_tree=False,
+        )
         xml_tree = ElementTree.parse(self.file_path, parser=parser).getroot()
         filename = xml_tree.find('filename').text
         try:
