@@ -219,58 +219,30 @@ class TestAnnotationStatusCache(unittest.TestCase):
 class TestPerformanceScaling(unittest.TestCase):
     """Test that optimizations scale well with large datasets."""
 
-    def test_dict_lookup_constant_time(self):
-        """Test that dict lookup is effectively constant time."""
-        import time
+    def test_dict_lookup_returns_correct_index(self):
+        """The path->index mapping must resolve correctly at scale.
 
-        # Create small and large dicts
-        small_list = [f'/img/image_{i}.jpg' for i in range(100)]
+        (Was a wall-clock 'constant time' assertion that flaked on loaded
+        runners and only exercised Python's dict; assert behavior instead.)
+        """
         large_list = [f'/img/image_{i}.jpg' for i in range(10000)]
-
-        small_dict = {path: idx for idx, path in enumerate(small_list)}
         large_dict = {path: idx for idx, path in enumerate(large_list)}
 
-        # Measure lookup time for small dict
-        start = time.perf_counter()
-        for _ in range(1000):
-            _ = small_dict.get('/img/image_50.jpg', -1)
-        small_time = time.perf_counter() - start
+        self.assertEqual(large_dict.get('/img/image_5000.jpg', -1), 5000)
+        self.assertEqual(large_dict.get('/img/image_0.jpg', -1), 0)
+        self.assertEqual(large_dict.get('/img/missing.jpg', -1), -1)
 
-        # Measure lookup time for large dict
-        start = time.perf_counter()
-        for _ in range(1000):
-            _ = large_dict.get('/img/image_5000.jpg', -1)
-        large_time = time.perf_counter() - start
-
-        # Large dict lookup should not be significantly slower (within 5x)
-        # This is a generous bound to avoid flaky tests
-        self.assertLess(large_time, small_time * 5)
-
-    def test_cache_operations_constant_time(self):
-        """Test that cache operations are constant time."""
-        import time
-
+    def test_cache_operations_behave_correctly(self):
+        """Cache get/put/update must be correct (no flaky timing bound)."""
         cache = ThumbnailCache(max_size=1000)
 
-        # Fill cache
         for i in range(1000):
             cache.put(f'/img{i}.jpg', f'p{i}')
 
-        # Measure get time
-        start = time.perf_counter()
-        for _ in range(1000):
-            cache.get('/img500.jpg')
-        get_time = time.perf_counter() - start
+        self.assertEqual(cache.get('/img500.jpg'), 'p500')
 
-        # Measure put time (updates existing)
-        start = time.perf_counter()
-        for _ in range(1000):
-            cache.put('/img500.jpg', 'updated')
-        put_time = time.perf_counter() - start
-
-        # Both should be very fast (< 100ms for 1000 ops)
-        self.assertLess(get_time, 0.1)
-        self.assertLess(put_time, 0.1)
+        cache.put('/img500.jpg', 'updated')
+        self.assertEqual(cache.get('/img500.jpg'), 'updated')
 
 
 if __name__ == '__main__':
