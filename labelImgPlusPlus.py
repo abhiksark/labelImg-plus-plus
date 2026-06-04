@@ -13,7 +13,7 @@ try:
     from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
     from PyQt5.QtCore import (
         Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
-        QVariant, QObject, QRunnable, QThreadPool, pyqtSignal
+        QVariant, QObject, QRunnable, pyqtSignal
     )
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
@@ -39,7 +39,7 @@ except ImportError:
     )
     from PyQt4.QtCore import (
         Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
-        QVariant, QObject, QRunnable, QThreadPool, pyqtSignal
+        QVariant, QObject, QRunnable, pyqtSignal
     )
 
 # Widgets
@@ -57,6 +57,7 @@ from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
 from libs.widgets.stats_controller import StatsController
+from libs.widgets.gallery_status_controller import GalleryStatusController
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -320,8 +321,20 @@ class MainWindow(QMainWindow, WindowMixin):
         self._beginner = True
         self.gallery_mode_enabled = False
         self._gallery_batch_id = 0  # For cancelling pending batch processing
-        self._status_worker_gen = 0  # Generation counter for status worker
-        self._dock_status_worker_gen = 0  # Generation counter for dock status worker
+        # Gallery annotation-status refresh runs through controllers that
+        # share the status cache; the full-screen and dock galleries each get
+        # one. (Replaces the duplicated _status_worker / _dock_status_worker
+        # flows and their generation counters.)
+        self._full_status_controller = GalleryStatusController(
+            widget_getter=lambda: getattr(self, 'full_gallery', None),
+            cache=self._annotation_status_cache,
+            worker_factory=StatusRefreshWorker,
+            label='Status refresh')
+        self._dock_status_controller = GalleryStatusController(
+            widget_getter=lambda: getattr(self, 'gallery_widget', None),
+            cache=self._annotation_status_cache,
+            worker_factory=StatusRefreshWorker,
+            label='Dock status')
         # Statistics orchestration lives in its own controller; the stats
         # widget is read lazily because the gallery panel is created on demand.
         self.stats_controller = StatsController(
@@ -1267,71 +1280,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.gallery_image_activated(image_path)
 
     def _refresh_full_gallery_statuses(self):
-        """Update statuses for full-screen gallery using async worker."""
-        if not (hasattr(self, 'full_gallery') and self.full_gallery):
-            return
-
-        # Apply cached statuses immediately for instant feedback
-        cached_statuses = {p: self._annotation_status_cache[p]
-                          for p in self.m_img_list if p in self._annotation_status_cache}
-        if cached_statuses:
-            self.full_gallery.update_all_statuses(cached_statuses)
-
-        # Get uncached images for async processing
-        uncached = [p for p in self.m_img_list if p not in self._annotation_status_cache]
-        if not uncached:
-            return
-
-        # Cancel existing worker and start new async worker with new generation
-        self._cleanup_status_worker()
-        self._status_worker_gen += 1
-        gen = self._status_worker_gen
-        self._status_worker = StatusRefreshWorker(uncached, self.default_save_dir)
-        self._status_worker.signals.batch_ready.connect(
-            lambda s, g=gen: self._on_status_batch_ready(s, g))
-        self._status_worker.signals.finished.connect(
-            lambda g=gen: self._on_status_refresh_finished(g))
-        self._status_worker.signals.error.connect(
-            lambda e, g=gen: self._on_status_refresh_error(e, g))
-        QThreadPool.globalInstance().start(self._status_worker)
+        """Update statuses for the full-screen gallery via async worker."""
+        self._full_status_controller.refresh(
+            self.m_img_list, self.default_save_dir)
 
     def _cleanup_status_worker(self):
-        """Properly cleanup status worker and disconnect signals."""
-        if hasattr(self, '_status_worker') and self._status_worker:
-            self._status_worker.cancel()
-            try:
-                self._status_worker.signals.batch_ready.disconnect()
-                self._status_worker.signals.finished.disconnect()
-                self._status_worker.signals.error.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            self._status_worker = None
-
-    def _on_status_batch_ready(self, statuses, gen):
-        """Handle status batch from async worker."""
-        # Ignore stale signals from old workers
-        if gen != self._status_worker_gen:
-            return
-        # Early exit if gallery was closed
-        if not (hasattr(self, 'full_gallery') and self.full_gallery):
-            return
-        # Update cache with computed statuses
-        self._annotation_status_cache.update(statuses)
-        # Update gallery UI
-        self.full_gallery.update_all_statuses(statuses)
-
-    def _on_status_refresh_finished(self, gen):
-        """Handle status refresh completion."""
-        if gen != self._status_worker_gen:
-            return
-        self._status_worker = None
-
-    def _on_status_refresh_error(self, error_msg, gen):
-        """Handle status worker errors."""
-        if gen != self._status_worker_gen:
-            return
-        print(f"Status refresh worker error: {error_msg}")
-        self._status_worker = None
+        """Cancel the full-screen gallery status worker."""
+        self._full_status_controller.cleanup()
 
     def populate_mode_actions(self):
         if self.beginner():
@@ -1750,68 +1705,13 @@ class MainWindow(QMainWindow, WindowMixin):
             self._annotation_status_cache.clear()
 
     def _refresh_gallery_statuses(self):
-        """Update all gallery thumbnail statuses using async worker."""
-        if not hasattr(self, 'gallery_widget') or not self.gallery_widget:
-            return
-
-        # Apply cached statuses immediately
-        cached = {p: self._annotation_status_cache[p]
-                  for p in self.m_img_list if p in self._annotation_status_cache}
-        if cached:
-            self.gallery_widget.update_all_statuses(cached)
-
-        # Get uncached images for async processing
-        uncached = [p for p in self.m_img_list if p not in self._annotation_status_cache]
-        if not uncached:
-            return
-
-        # Cancel existing worker and start new async worker with new generation
-        self._cleanup_dock_status_worker()
-        self._dock_status_worker_gen += 1
-        gen = self._dock_status_worker_gen
-        self._dock_status_worker = StatusRefreshWorker(uncached, self.default_save_dir)
-        self._dock_status_worker.signals.batch_ready.connect(
-            lambda s, g=gen: self._on_dock_status_batch_ready(s, g))
-        self._dock_status_worker.signals.finished.connect(
-            lambda g=gen: self._on_dock_status_finished(g))
-        self._dock_status_worker.signals.error.connect(
-            lambda e, g=gen: self._on_dock_status_error(e, g))
-        QThreadPool.globalInstance().start(self._dock_status_worker)
+        """Update all dock gallery thumbnail statuses via async worker."""
+        self._dock_status_controller.refresh(
+            self.m_img_list, self.default_save_dir)
 
     def _cleanup_dock_status_worker(self):
-        """Cleanup dock gallery status worker."""
-        if hasattr(self, '_dock_status_worker') and self._dock_status_worker:
-            self._dock_status_worker.cancel()
-            try:
-                self._dock_status_worker.signals.batch_ready.disconnect()
-                self._dock_status_worker.signals.finished.disconnect()
-                self._dock_status_worker.signals.error.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            self._dock_status_worker = None
-
-    def _on_dock_status_batch_ready(self, statuses, gen):
-        """Handle status batch for dock gallery."""
-        # Ignore stale signals from old workers
-        if gen != self._dock_status_worker_gen:
-            return
-        if not hasattr(self, 'gallery_widget') or not self.gallery_widget:
-            return
-        self._annotation_status_cache.update(statuses)
-        self.gallery_widget.update_all_statuses(statuses)
-
-    def _on_dock_status_finished(self, gen):
-        """Handle dock status refresh completion."""
-        if gen != self._dock_status_worker_gen:
-            return
-        self._dock_status_worker = None
-
-    def _on_dock_status_error(self, error_msg, gen):
-        """Handle dock status worker errors."""
-        if gen != self._dock_status_worker_gen:
-            return
-        print(f"Dock status worker error: {error_msg}")
-        self._dock_status_worker = None
+        """Cancel the dock gallery status worker."""
+        self._dock_status_controller.cleanup()
 
     def _update_current_image_gallery_status(self):
         """Update gallery status for current image after save/verify."""
