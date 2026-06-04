@@ -55,6 +55,7 @@ from libs.widgets.galleryWidget import GalleryWidget, AnnotationStatus
 from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
+from libs.widgets import view_scaling
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -2516,20 +2517,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def scale_fit_window(self):
         """Figure out the size of the pixmap in order to fit the main widget."""
-        e = 2.0  # So that no scrollbars are generated.
-        w1 = self.centralWidget().width() - e
-        h1 = self.centralWidget().height() - e
-        a1 = w1 / h1
-        # Calculate a new scale value based on the pixmap's aspect ratio.
-        w2 = self.canvas.pixmap.width() - 0.0
-        h2 = self.canvas.pixmap.height() - 0.0
-        a2 = w2 / h2
-        return w1 / w2 if a2 >= a1 else h1 / h2
+        return view_scaling.fit_window_scale(
+            self.centralWidget().width(), self.centralWidget().height(),
+            self.canvas.pixmap.width(), self.canvas.pixmap.height())
 
     def scale_fit_width(self):
-        # The epsilon does not seem to work too well here.
-        w = self.centralWidget().width() - 2.0
-        return w / self.canvas.pixmap.width()
+        return view_scaling.fit_width_scale(
+            self.centralWidget().width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
         if not self.may_continue():
