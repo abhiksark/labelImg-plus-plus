@@ -72,6 +72,7 @@ from libs.formats.yolo_io import YoloReader, TXT_EXT
 from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
 from libs.formats.coco_io import COCOReader
 from libs.formats.yolo_seg_io import YOLOSegReader
+from libs.formats.annotation_probe import probe as probe_annotation
 
 # Utils
 from libs.utils.constants import (
@@ -119,6 +120,16 @@ class WindowMixin(object):
             add_actions(toolbar, actions)
         self.addToolBar(Qt.LeftToolBarArea, toolbar)
         return toolbar
+
+
+def _probe_status(image_path, save_dir):
+    """Map the shared annotation probe to an AnnotationStatus enum value."""
+    info = probe_annotation(image_path, save_dir)
+    if info.verified:
+        return AnnotationStatus.VERIFIED
+    if info.has_labels:
+        return AnnotationStatus.HAS_LABELS
+    return AnnotationStatus.NO_LABELS
 
 
 class StatisticsWorkerSignals(QObject):
@@ -191,109 +202,11 @@ class StatisticsWorker(QRunnable):
 
     def _compute_status(self, image_path):
         """Thread-safe annotation status check (no shared state)."""
-        basename = os.path.splitext(os.path.basename(image_path))[0]
-        ann_dir = self.save_dir if self.save_dir else os.path.dirname(image_path)
-
-        xml_path = os.path.join(ann_dir, basename + XML_EXT)
-        txt_path = os.path.join(ann_dir, basename + TXT_EXT)
-
-        # Check labels/ sibling folder (standard YOLO structure)
-        if not os.path.isfile(txt_path):
-            img_dir = os.path.dirname(image_path)
-            parent_dir = os.path.dirname(img_dir)
-            labels_dir = os.path.join(parent_dir, 'labels')
-            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
-            if os.path.isfile(alt_txt_path):
-                txt_path = alt_txt_path
-
-        json_path = os.path.join(ann_dir, 'annotations.json')
-
-        has_labels = False
-        verified = False
-
-        if os.path.isfile(xml_path):
-            has_labels = True
-            try:
-                reader = PascalVocReader(xml_path)
-                verified = reader.verified
-            except Exception:
-                pass
-        elif os.path.isfile(txt_path):
-            has_labels = os.path.getsize(txt_path) > 0
-        elif os.path.isfile(json_path):
-            try:
-                import json
-                with open(json_path, 'r') as f:
-                    data = json.load(f)
-                    for item in data:
-                        if item.get('image') == os.path.basename(image_path):
-                            has_labels = len(item.get('annotations', [])) > 0
-                            verified = item.get('verified', False)
-                            break
-            except Exception:
-                pass
-
-        if verified:
-            return AnnotationStatus.VERIFIED
-        elif has_labels:
-            return AnnotationStatus.HAS_LABELS
-        return AnnotationStatus.NO_LABELS
+        return _probe_status(image_path, self.save_dir)
 
     def _compute_labels(self, img_path):
         """Thread-safe label extraction (no shared state)."""
-        labels = []
-        base_path = os.path.splitext(img_path)[0]
-        basename = os.path.basename(base_path)
-        ann_dir = self.save_dir if self.save_dir else os.path.dirname(img_path)
-
-        xml_path = os.path.join(ann_dir, basename + XML_EXT)
-        if os.path.exists(xml_path):
-            try:
-                reader = PascalVocReader(xml_path)
-                shapes = reader.get_shapes()
-                labels = [shape[0] for shape in shapes]
-            except Exception:
-                pass
-            return labels
-
-        txt_path = base_path + TXT_EXT
-        if not os.path.exists(txt_path):
-            img_dir = os.path.dirname(img_path)
-            parent_dir = os.path.dirname(img_dir)
-            labels_dir = os.path.join(parent_dir, 'labels')
-            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
-            if os.path.exists(alt_txt_path):
-                txt_path = alt_txt_path
-
-        if os.path.exists(txt_path):
-            try:
-                txt_dir = os.path.dirname(txt_path)
-                classes_path = os.path.join(txt_dir, 'classes.txt')
-                if not os.path.exists(classes_path):
-                    parent_dir = os.path.dirname(txt_dir)
-                    classes_path = os.path.join(parent_dir, 'classes.txt')
-                if os.path.exists(classes_path):
-                    from libs.formats.yolo_io import YoloReader
-
-                    class MockImage:
-                        def __init__(self, w, h):
-                            self._width, self._height = w, h
-                        def width(self):
-                            return self._width
-                        def height(self):
-                            return self._height
-
-                    img_reader = QImageReader(img_path)
-                    size = img_reader.size()
-                    if size.isValid():
-                        mock_img = MockImage(size.width(), size.height())
-                        reader = YoloReader(txt_path, mock_img, classes_path)
-                        shapes = reader.get_shapes()
-                        labels = [shape[0] for shape in shapes]
-            except Exception:
-                pass
-
-        return labels
+        return probe_annotation(img_path, self.save_dir, want_labels=True).labels
 
 
 class StatusRefreshWorkerSignals(QObject):
@@ -352,53 +265,7 @@ class StatusRefreshWorker(QRunnable):
 
     def _compute_status(self, image_path):
         """Thread-safe annotation status check (no shared state)."""
-        basename = os.path.splitext(os.path.basename(image_path))[0]
-        ann_dir = self.save_dir if self.save_dir else os.path.dirname(image_path)
-
-        xml_path = os.path.join(ann_dir, basename + XML_EXT)
-        txt_path = os.path.join(ann_dir, basename + TXT_EXT)
-
-        # Check labels/ sibling folder (standard YOLO structure)
-        if not os.path.isfile(txt_path):
-            img_dir = os.path.dirname(image_path)
-            parent_dir = os.path.dirname(img_dir)
-            labels_dir = os.path.join(parent_dir, 'labels')
-            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
-            if os.path.isfile(alt_txt_path):
-                txt_path = alt_txt_path
-
-        json_path = os.path.join(ann_dir, 'annotations.json')
-
-        has_labels = False
-        verified = False
-
-        if os.path.isfile(xml_path):
-            has_labels = True
-            try:
-                reader = PascalVocReader(xml_path)
-                verified = reader.verified
-            except Exception:
-                pass
-        elif os.path.isfile(txt_path):
-            has_labels = os.path.getsize(txt_path) > 0
-        elif os.path.isfile(json_path):
-            try:
-                import json
-                with open(json_path, 'r') as f:
-                    data = json.load(f)
-                    for item in data:
-                        if item.get('image') == os.path.basename(image_path):
-                            has_labels = len(item.get('annotations', [])) > 0
-                            verified = item.get('verified', False)
-                            break
-            except Exception:
-                pass
-
-        if verified:
-            return AnnotationStatus.VERIFIED
-        elif has_labels:
-            return AnnotationStatus.HAS_LABELS
-        return AnnotationStatus.NO_LABELS
+        return _probe_status(image_path, self.save_dir)
 
 
 class MainWindow(QMainWindow, WindowMixin):
@@ -1862,61 +1729,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if use_cache and image_path in self._annotation_status_cache:
             return self._annotation_status_cache[image_path]
 
-        basename = os.path.splitext(os.path.basename(image_path))[0]
-
-        # Determine annotation directory
-        if self.default_save_dir is not None:
-            ann_dir = self.default_save_dir
-        else:
-            ann_dir = os.path.dirname(image_path)
-
-        # Check for annotation files
-        xml_path = os.path.join(ann_dir, basename + XML_EXT)
-        txt_path = os.path.join(ann_dir, basename + TXT_EXT)
-        # Also check labels/ sibling folder (standard YOLO structure)
-        if not os.path.isfile(txt_path):
-            img_dir = os.path.dirname(image_path)
-            parent_dir = os.path.dirname(img_dir)
-            labels_dir = os.path.join(parent_dir, 'labels')
-            alt_txt_path = os.path.join(labels_dir, basename + TXT_EXT)
-            if os.path.isfile(alt_txt_path):
-                txt_path = alt_txt_path
-        json_path = os.path.join(ann_dir, 'annotations.json')
-
-        has_labels = False
-        verified = False
-
-        # Check PASCAL VOC
-        if os.path.isfile(xml_path):
-            has_labels = True
-            try:
-                reader = PascalVocReader(xml_path)
-                verified = reader.verified
-            except Exception:
-                pass
-        # Check YOLO
-        elif os.path.isfile(txt_path):
-            has_labels = os.path.getsize(txt_path) > 0
-        # Check CreateML
-        elif os.path.isfile(json_path):
-            try:
-                import json
-                with open(json_path, 'r') as f:
-                    data = json.load(f)
-                    for item in data:
-                        if item.get('image') == os.path.basename(image_path):
-                            has_labels = len(item.get('annotations', [])) > 0
-                            verified = item.get('verified', False)
-                            break
-            except Exception:
-                pass
-
-        if verified:
-            status = AnnotationStatus.VERIFIED
-        elif has_labels:
-            status = AnnotationStatus.HAS_LABELS
-        else:
-            status = AnnotationStatus.NO_LABELS
+        status = _probe_status(image_path, self.default_save_dir)
 
         # Cache the result
         self._annotation_status_cache[image_path] = status
@@ -3785,78 +3598,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _get_labels_for_image(self, img_path):
         """Get list of labels for an image from its annotation file."""
-        labels = []
-        base_path = os.path.splitext(img_path)[0]
-
-        # Try XML (PASCAL VOC)
-        xml_path = base_path + XML_EXT
-        if os.path.exists(xml_path):
-            try:
-                reader = PascalVocReader(xml_path)
-                shapes = reader.get_shapes()
-                labels = [shape[0] for shape in shapes]
-            except Exception:
-                pass
-            return labels
-
-        # Try TXT (YOLO) - needs classes.txt
-        txt_path = base_path + TXT_EXT
-        if not os.path.exists(txt_path):
-            # Check for labels/ sibling folder (standard YOLO structure)
-            img_dir = os.path.dirname(img_path)
-            parent_dir = os.path.dirname(img_dir)
-            labels_dir = os.path.join(parent_dir, 'labels')
-            txt_filename = os.path.basename(base_path) + TXT_EXT
-            alt_txt_path = os.path.join(labels_dir, txt_filename)
-            if os.path.exists(alt_txt_path):
-                txt_path = alt_txt_path
-
-        if os.path.exists(txt_path):
-            try:
-                # Find classes.txt - check same dir, then parent dirs
-                txt_dir = os.path.dirname(txt_path)
-                classes_path = os.path.join(txt_dir, 'classes.txt')
-                if not os.path.exists(classes_path):
-                    # Check parent directory (standard YOLO structure)
-                    parent_dir = os.path.dirname(txt_dir)
-                    classes_path = os.path.join(parent_dir, 'classes.txt')
-                if not os.path.exists(classes_path):
-                    return labels  # Can't read without classes.txt
-
-                # Use QImageReader to get dimensions without loading full image
-                img_reader = QImageReader(img_path)
-                size = img_reader.size()
-                if size.isValid():
-                    # Create minimal mock image with just dimensions for YoloReader
-                    class MockImage:
-                        def __init__(self, w, h):
-                            self._w, self._h = w, h
-                        def width(self):
-                            return self._w
-                        def height(self):
-                            return self._h
-                        def isGrayscale(self):
-                            return False
-
-                    mock_img = MockImage(size.width(), size.height())
-                    reader = YoloReader(txt_path, mock_img, classes_path)
-                    shapes = reader.get_shapes()
-                    labels = [shape[0] for shape in shapes]
-            except Exception:
-                pass
-            return labels
-
-        # Try JSON (CreateML)
-        json_path = base_path + JSON_EXT
-        if os.path.exists(json_path):
-            try:
-                reader = CreateMLReader(json_path, img_path)
-                shapes = reader.get_shapes()
-                labels = [shape[0] for shape in shapes]
-            except Exception:
-                pass
-
-        return labels
+        return probe_annotation(
+            img_path, self.default_save_dir, want_labels=True).labels
 
 
 def get_main_app(argv=None):
