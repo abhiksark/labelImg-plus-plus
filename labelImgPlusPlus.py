@@ -56,6 +56,7 @@ from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
+from libs.widgets.stats_controller import StatsController
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -320,8 +321,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self.gallery_mode_enabled = False
         self._gallery_batch_id = 0  # For cancelling pending batch processing
         self._status_worker_gen = 0  # Generation counter for status worker
-        self._stats_worker_gen = 0  # Generation counter for stats worker
         self._dock_status_worker_gen = 0  # Generation counter for dock status worker
+        # Statistics orchestration lives in its own controller; the stats
+        # widget is read lazily because the gallery panel is created on demand.
+        self.stats_controller = StatsController(
+            stats_widget_getter=lambda: getattr(self, 'gallery_stats', None),
+            worker_factory=StatisticsWorker)
+        self.stats_controller.current_image_refresh_requested.connect(
+            self._update_current_image_stats)
         self._normal_central_widget = None
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
@@ -3524,62 +3531,11 @@ class MainWindow(QMainWindow, WindowMixin):
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):
         """Start async refresh of all statistics in the gallery stats widget."""
-        if not hasattr(self, 'gallery_stats') or not self.gallery_stats:
-            return
-
-        # Cancel and cleanup existing worker
-        self._cleanup_stats_worker()
-        self._stats_worker_gen += 1
-        gen = self._stats_worker_gen
-
-        # Create worker with snapshot of current state (thread-safe)
-        self._stats_worker = StatisticsWorker(
-            self.m_img_list,
-            self.default_save_dir  # Pass snapshot, not reference
-        )
-        self._stats_worker.signals.progress.connect(
-            lambda t, a, v, l, g=gen: self._on_stats_progress(t, a, v, l, g))
-        self._stats_worker.signals.finished.connect(
-            lambda g=gen: self._on_stats_finished(g))
-        self._stats_worker.signals.error.connect(
-            lambda e, g=gen: self._on_stats_error(e, g))
-
-        QThreadPool.globalInstance().start(self._stats_worker)
+        self.stats_controller.refresh_all(self.m_img_list, self.default_save_dir)
 
     def _cleanup_stats_worker(self):
-        """Properly cleanup worker and disconnect signals."""
-        if hasattr(self, '_stats_worker') and self._stats_worker:
-            self._stats_worker.cancel()
-            try:
-                self._stats_worker.signals.progress.disconnect()
-                self._stats_worker.signals.finished.disconnect()
-                self._stats_worker.signals.error.disconnect()
-            except (TypeError, RuntimeError):
-                pass  # Already disconnected
-            self._stats_worker = None
-
-    def _on_stats_progress(self, total, annotated, verified, label_counts, gen):
-        """Handle statistics progress update from worker."""
-        # Ignore stale signals from old workers
-        if gen != self._stats_worker_gen:
-            return
-        if hasattr(self, 'gallery_stats') and self.gallery_stats:
-            self.gallery_stats.update_dataset_stats(total, annotated, verified)
-            self.gallery_stats.update_label_distribution(label_counts)
-
-    def _on_stats_finished(self, gen):
-        """Handle statistics computation finished."""
-        if gen != self._stats_worker_gen:
-            return
-        self._update_current_image_stats()
-        self._stats_worker = None
-
-    def _on_stats_error(self, error_msg, gen):
-        """Handle worker errors gracefully."""
-        if gen != self._stats_worker_gen:
-            return
-        print(f"Statistics worker error: {error_msg}")
-        self._stats_worker = None
+        """Cancel the in-flight statistics worker and disconnect its signals."""
+        self.stats_controller.cleanup()
 
     def _update_current_image_stats(self):
         """Update statistics for the current image."""
@@ -3588,7 +3544,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         annotations_count = len(self.canvas.shapes)
         labels = [shape.label for shape in self.canvas.shapes]
-        self.gallery_stats.update_current_image_stats(annotations_count, labels)
+        self.stats_controller.update_current_image(annotations_count, labels)
 
     def _get_labels_for_image(self, img_path):
         """Get list of labels for an image from its annotation file."""
