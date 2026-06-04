@@ -27,6 +27,7 @@ LIGHT_COLORS = {
     'warning': '#fbbc04',
     'error': '#ea4335',
     'verified_bg': '#b8ef26',  # Bright green overlay for verified images
+    'canvas_bg': '#e0e0e0',    # Canvas viewport background
     'placeholder': '#dcdcdc',  # Light gray for placeholders
     'item_bg': '#f0f0f0',      # Very light gray for item backgrounds
     'status_saved': '#34a853',   # Green
@@ -60,6 +61,7 @@ DARK_COLORS = {
     'warning': '#ff9800',
     'error': '#f44336',
     'verified_bg': '#4caf50',  # Slightly muted green for dark theme
+    'canvas_bg': '#2d2d2d',    # Canvas viewport background
     'placeholder': '#3d3d3d',  # Dark gray for placeholders
     'item_bg': '#2d2d2d',      # Darker gray for item backgrounds
     'status_saved': '#4caf50',   # Slightly brighter green
@@ -459,7 +461,7 @@ QStatusBar QLabel {{
 
 def get_canvas_background(theme: Theme) -> str:
     """Get canvas background color for the given theme."""
-    return '#2d2d2d' if theme == Theme.DARK else '#e0e0e0'
+    return _get_colors(theme)['canvas_bg']
 
 
 def get_slider_style(theme: Theme) -> str:

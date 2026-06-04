@@ -94,6 +94,10 @@ class Canvas(QWidget):
         self.offsets = QPointF(), QPointF()
         self.scale = 1.0
         self.overlay_color = None
+        # Cache for the overlay-composited pixmap so paintEvent does not copy
+        # and re-composite the full-resolution image on every repaint.
+        self._overlay_cache = None
+        self._overlay_cache_key = None
         self.label_font_size = 8
         self.pixmap = QPixmap()
         self.visible = {}
@@ -286,15 +290,7 @@ class Canvas(QWidget):
 
         # Keypoint hover detection
         if self.mode == self.KEYPOINT_MODE and self._keypoint_shape:
-            self._hovered_keypoint = -1
-            kps = self._keypoint_shape.keypoints
-            if kps:
-                for i, kp in enumerate(kps):
-                    if kp is not None and kp[2] > 0:
-                        dist = distance(QPointF(kp[0], kp[1]) - pos)
-                        if dist < self.epsilon / 2:
-                            self._hovered_keypoint = i
-                            break
+            self._hovered_keypoint = self._keypoint_at(pos)
             self.update()
 
         # Polygon drawing.
@@ -460,6 +456,23 @@ class Canvas(QWidget):
                     self.update()
                 self.h_vertex, self.h_shape = None, None
                 self.override_cursor(CURSOR_DEFAULT)
+
+    def _keypoint_at(self, pos):
+        """Index of the placed keypoint within hover range of image-space pos.
+
+        ``epsilon`` is a screen-pixel radius, so divide it by the current zoom
+        to get an image-space threshold that stays constant on screen.
+        """
+        shape = self._keypoint_shape
+        # NB: `not shape` would call Shape.__len__ (point count), so test None.
+        if shape is None or not shape.keypoints:
+            return -1
+        threshold = (self.epsilon / 2) / max(self.scale, 1e-6)
+        for i, kp in enumerate(shape.keypoints):
+            if kp is not None and kp[2] > 0:
+                if distance(QPointF(kp[0], kp[1]) - pos) < threshold:
+                    return i
+        return -1
 
     def mousePressEvent(self, ev):
         pos = self.transform_pos(ev.pos())
@@ -1050,15 +1063,7 @@ class Canvas(QWidget):
         p.scale(self.scale, self.scale)
         p.translate(self.offset_to_center())
 
-        temp = self.pixmap
-        if self.overlay_color:
-            temp = QPixmap(self.pixmap)
-            painter = QPainter(temp)
-            painter.setCompositionMode(painter.CompositionMode_Overlay)
-            painter.fillRect(temp.rect(), self.overlay_color)
-            painter.end()
-
-        p.drawPixmap(0, 0, temp)
+        p.drawPixmap(0, 0, self._composited_pixmap())
         Shape.scale = self.scale
         Shape.label_font_size = self.label_font_size
         for shape in self.shapes:
@@ -1313,6 +1318,26 @@ class Canvas(QWidget):
         self.current = None
         self.drawingPolygon.emit(False)
         self.update()
+
+    def _composited_pixmap(self):
+        """Return the pixmap with overlay_color composited on top.
+
+        The result is cached and only rebuilt when the pixmap content
+        (``cacheKey``) or the overlay color changes, so a full-resolution
+        copy + composite does not happen on every repaint.
+        """
+        if not self.overlay_color or self.pixmap is None:
+            return self.pixmap
+        key = (self.pixmap.cacheKey(), self.overlay_color.rgba())
+        if self._overlay_cache_key != key:
+            composited = QPixmap(self.pixmap)
+            painter = QPainter(composited)
+            painter.setCompositionMode(QPainter.CompositionMode_Overlay)
+            painter.fillRect(composited.rect(), self.overlay_color)
+            painter.end()
+            self._overlay_cache = composited
+            self._overlay_cache_key = key
+        return self._overlay_cache
 
     def load_pixmap(self, pixmap):
         self.pixmap = pixmap

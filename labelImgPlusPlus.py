@@ -3645,6 +3645,10 @@ class MainWindow(QMainWindow, WindowMixin):
         """Apply the given theme to all components."""
         from libs.utils.styles import get_toolbar_style, get_theme_colors
 
+        # Resolve the palette once up front; several blocks below (including
+        # the save-status refresh) read it regardless of which widgets exist.
+        colors = get_theme_colors(theme)
+
         # Apply main stylesheet
         self.setStyleSheet(get_stylesheet(theme))
 
@@ -3663,7 +3667,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Update scroll area viewport background
         if hasattr(self, 'scroll_area') and self.scroll_area:
-            colors = get_theme_colors(theme)
             self.scroll_area.viewport().setStyleSheet(
                 f"background-color: {colors['background']};"
             )

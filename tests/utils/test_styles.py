@@ -1,8 +1,22 @@
 import sys
 from PyQt5.QtWidgets import QApplication
-from libs.utils.styles import hex_to_qcolor
+from libs.utils.styles import (
+    hex_to_qcolor, get_canvas_background, get_theme_colors,
+    LIGHT_COLORS, DARK_COLORS, Theme,
+)
 
-app = QApplication(sys.argv)
+app = QApplication.instance() or QApplication(sys.argv)
+
+
+def test_canvas_background_comes_from_palette():
+    # The canvas background must be sourced from the palette, not a literal.
+    for theme in (Theme.LIGHT, Theme.DARK):
+        assert get_canvas_background(theme) == get_theme_colors(theme)['canvas_bg']
+
+
+def test_palette_keys_match():
+    # theme-audit invariant: light and dark palettes have identical keys.
+    assert set(LIGHT_COLORS) == set(DARK_COLORS)
 
 def test_hex_to_qcolor():
     # Test with # prefix

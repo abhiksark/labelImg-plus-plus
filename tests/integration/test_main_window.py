@@ -58,6 +58,19 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.assertEqual(self.win.file_path, self.test_image_path)
         self.assertFalse(self.win.image.isNull())
 
+    def test_apply_theme_without_scroll_area_does_not_raise(self):
+        """_apply_theme must not NameError when scroll_area is absent.
+
+        Regression: `colors` was only bound inside the scroll_area block but
+        referenced later in the save-status refresh.
+        """
+        saved = self.win.scroll_area
+        self.win.scroll_area = None
+        try:
+            self.win._apply_theme(self.win._current_theme)  # must not raise
+        finally:
+            self.win.scroll_area = saved
+
     def test_load_file_nonexistent(self):
         """Test loading a non-existent file."""
         fake_path = os.path.join(self.temp_dir, 'nonexistent.png')

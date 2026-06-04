@@ -500,5 +500,49 @@ class TestCanvasEditSignals(unittest.TestCase):
         self.assertIsNone(received[0][1])
 
 
+class TestOverlayPixmapCache(unittest.TestCase):
+    """The overlay composite must be cached, not rebuilt every paint."""
+
+    def test_overlay_pixmap_cached_until_inputs_change(self):
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(50, 50))
+        canvas.overlay_color = QColor(255, 0, 0, 128)
+
+        first = canvas._composited_pixmap()
+        again = canvas._composited_pixmap()
+        self.assertIs(again, first)  # reused, not recomposited
+
+        canvas.overlay_color = QColor(0, 255, 0, 128)
+        self.assertIsNot(canvas._composited_pixmap(), first)  # rebuilt
+
+    def test_no_overlay_returns_base_pixmap(self):
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(10, 10))
+        canvas.overlay_color = None
+        self.assertIs(canvas._composited_pixmap(), canvas.pixmap)
+
+
+class TestKeypointHitTest(unittest.TestCase):
+    """Keypoint hover hit-test must scale with zoom (screen-space radius)."""
+
+    def _canvas_with_keypoint(self):
+        canvas = Canvas()
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        shape.keypoints = [(100.0, 100.0, 2)]
+        canvas._keypoint_shape = shape
+        return canvas
+
+    def test_hit_within_threshold_at_unit_scale(self):
+        canvas = self._canvas_with_keypoint()
+        canvas.scale = 1.0  # threshold = epsilon/2 = 12 image px
+        self.assertEqual(canvas._keypoint_at(QPointF(108, 100)), 0)  # 8 < 12
+
+    def test_threshold_shrinks_when_zoomed_in(self):
+        canvas = self._canvas_with_keypoint()
+        canvas.scale = 4.0  # threshold = 12 / 4 = 3 image px
+        self.assertEqual(canvas._keypoint_at(QPointF(108, 100)), -1)  # 8 > 3
+        self.assertEqual(canvas._keypoint_at(QPointF(101, 100)), 0)   # 1 < 3
+
+
 if __name__ == '__main__':
     unittest.main()
