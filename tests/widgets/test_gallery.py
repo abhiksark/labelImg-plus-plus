@@ -5,10 +5,15 @@ import tempfile
 import shutil
 import unittest
 
+if 'QT_QPA_PLATFORM' not in os.environ:
+    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
 dir_name = os.path.abspath(os.path.dirname(__file__))
 libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
+
+from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.galleryWidget import (
     find_annotation_file,
@@ -16,7 +21,10 @@ from libs.widgets.galleryWidget import (
     parse_voc_annotations,
     ThumbnailCache,
     AnnotationStatus,
+    GalleryWidget,
 )
+
+app = QApplication.instance() or QApplication(sys.argv)
 
 
 class TestFindAnnotationFile(unittest.TestCase):
@@ -417,6 +425,24 @@ class TestAnnotationStatus(unittest.TestCase):
         self.assertEqual(AnnotationStatus.NO_LABELS, 0)
         self.assertEqual(AnnotationStatus.HAS_LABELS, 1)
         self.assertEqual(AnnotationStatus.VERIFIED, 2)
+
+
+class TestGalleryTheme(unittest.TestCase):
+    """The gallery must theme itself regardless of the size slider."""
+
+    def test_list_widget_themed_without_size_slider(self):
+        """Without the size slider, the list widget must still be themed
+        at construction (apply_theme must not be gated on the slider)."""
+        gallery = GalleryWidget(show_size_slider=False)
+        self.assertNotEqual(gallery.list_widget.styleSheet().strip(), '')
+
+    def test_status_colors_match_dark_palette(self):
+        """Status border colors must follow the active theme."""
+        from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
+        gallery = GalleryWidget(show_size_slider=False)
+        gallery.apply_theme(Theme.DARK)
+        expected = hex_to_qcolor(get_theme_colors(Theme.DARK)['status_verified'])
+        self.assertEqual(gallery._status_colors[AnnotationStatus.VERIFIED], expected)
 
 
 if __name__ == '__main__':

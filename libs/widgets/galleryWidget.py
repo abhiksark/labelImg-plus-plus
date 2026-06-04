@@ -397,10 +397,12 @@ class GalleryWidget(QWidget):
 
             layout.addWidget(self._slider_frame)
 
-            # Apply initial theme
-            self.apply_theme(Theme.LIGHT)
-
         layout.addWidget(self.list_widget)
+
+        # Theme the gallery regardless of whether the size slider is shown,
+        # otherwise the list widget and status/placeholder colors keep their
+        # light-mode defaults under the dark theme.
+        self.apply_theme(self._current_theme)
 
     def _apply_icon_size(self):
         """Apply current icon size to list widget."""
