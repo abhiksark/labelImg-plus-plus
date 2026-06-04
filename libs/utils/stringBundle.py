@@ -34,9 +34,10 @@ class StringBundle:
     @classmethod
     def get_bundle(cls, locale_str=None):
         if locale_str is None:
+            # locale.getdefaultlocale() is deprecated and removed in Python
+            # 3.15; use the current locale and fall back to the LANG env var.
             try:
-                locale_str = locale.getdefaultlocale()[0] if locale.getdefaultlocale() and len(
-                    locale.getdefaultlocale()) > 0 else os.getenv('LANG')
+                locale_str = locale.getlocale()[0] or os.getenv('LANG')
             except (ValueError, TypeError, AttributeError):
                 print('Invalid locale, using English')
                 locale_str = 'en'
