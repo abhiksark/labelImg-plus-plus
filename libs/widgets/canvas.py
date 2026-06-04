@@ -684,7 +684,20 @@ class Canvas(QWidget):
             self.selected_shape = shape
             self.repaint()
         else:
+            # Snapshot before committing the dragged points so the
+            # context-menu move is undoable (Issue #68).
+            old_points = [QPointF(p.x(), p.y())
+                          for p in self.selected_shape.points]
             self.selected_shape.points = [p for p in shape.points]
+            new_points = self.selected_shape.points
+            moved = (len(old_points) != len(new_points)
+                     or any((a.x(), a.y()) != (b.x(), b.y())
+                            for a, b in zip(old_points, new_points)))
+            if moved:
+                if self.selected_shape.shape_type == ShapeType.POLYGON:
+                    self._emit_polygon_edit(self.selected_shape, old_points)
+                else:
+                    self.shapeMoveFinished.emit(self.selected_shape, old_points)
         self.selected_shape_copy = None
 
     def hide_background_shapes(self, value):
@@ -1246,10 +1259,14 @@ class Canvas(QWidget):
                 and self._keypoint_shape):
             kps = self._keypoint_shape.keypoints
             if kps:
+                old_kps = list(kps)
                 for i in range(self._keypoint_index - 1, -1, -1):
                     if kps[i] is not None:
                         kps[i] = None
                         self._keypoint_index = i
+                        # Make the in-mode clear undoable (Issue #68).
+                        self._emit_keypoints_edit(
+                            self._keypoint_shape, old_kps)
                         break
             self.shapeMoved.emit()
             self.update()
@@ -1286,8 +1303,15 @@ class Canvas(QWidget):
         }
         step = offsets.get(direction)
         if step and not self.move_out_of_bound(step):
+            # Snapshot before mutating so the nudge is undoable (Issue #68).
+            old_points = [QPointF(p.x(), p.y())
+                          for p in self.selected_shape.points]
             for i in range(len(self.selected_shape.points)):
                 self.selected_shape.points[i] += step
+            if self.selected_shape.shape_type == ShapeType.POLYGON:
+                self._emit_polygon_edit(self.selected_shape, old_points)
+            else:
+                self.shapeMoveFinished.emit(self.selected_shape, old_points)
         self.shapeMoved.emit()
         self.repaint()
 

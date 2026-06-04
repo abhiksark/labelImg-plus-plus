@@ -11,8 +11,8 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
-from PyQt5.QtCore import QPointF, QPoint, Qt
-from PyQt5.QtGui import QPixmap, QColor
+from PyQt5.QtCore import QPointF, QPoint, Qt, QEvent
+from PyQt5.QtGui import QPixmap, QColor, QKeyEvent
 from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.canvas import Canvas
@@ -498,6 +498,175 @@ class TestCanvasEditSignals(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertIs(received[0][0], shape)
         self.assertIsNone(received[0][1])
+
+
+class TestCanvasUndoGaps(unittest.TestCase):
+    """Issue #68: mutation paths that previously bypassed the UndoStack must
+    now emit the matching edit signal so MainWindow can push a command."""
+
+    def _polygon(self, pts):
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        for x, y in pts:
+            shape.add_point(QPointF(x, y))
+        return shape
+
+    def _rectangle(self, pts):
+        shape = Shape(shape_type=ShapeType.RECTANGLE)
+        for x, y in pts:
+            shape.add_point(QPointF(x, y))
+        return shape
+
+    # --- move_one_pixel (arrow-key nudge) ---
+
+    def test_move_one_pixel_polygon_emits_polygon_edit(self):
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(100, 100))
+        shape = self._polygon([(10, 10), (20, 10), (20, 20)])
+        canvas.shapes = [shape]
+        canvas.selected_shape = shape
+
+        received = []
+        canvas.polygonVerticesEdited.connect(
+            lambda s, pts: received.append((s, pts)))
+
+        canvas.move_one_pixel('Right')
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, old_points = received[0]
+        self.assertIs(emitted_shape, shape)
+        # Snapshot must hold the PRE-move positions.
+        self.assertEqual([(p.x(), p.y()) for p in old_points],
+                         [(10, 10), (20, 10), (20, 20)])
+        # And the shape actually moved right by 1px.
+        self.assertEqual(shape.points[0].x(), 11)
+
+    def test_move_one_pixel_rectangle_emits_move_finished(self):
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(100, 100))
+        shape = self._rectangle([(10, 10), (20, 20)])
+        canvas.shapes = [shape]
+        canvas.selected_shape = shape
+
+        received = []
+        canvas.shapeMoveFinished.connect(
+            lambda s, pts: received.append((s, pts)))
+
+        canvas.move_one_pixel('Down')
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, old_points = received[0]
+        self.assertIs(emitted_shape, shape)
+        self.assertEqual([(p.x(), p.y()) for p in old_points],
+                         [(10, 10), (20, 20)])
+        self.assertEqual(shape.points[0].y(), 11)
+
+    def test_move_one_pixel_out_of_bounds_emits_nothing(self):
+        """A nudge that would leave the pixmap is a no-op: no mutation, no
+        signal (otherwise Ctrl-Z would undo the wrong action)."""
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(100, 100))
+        shape = self._polygon([(0, 10), (5, 10), (5, 20)])  # x=0 at left edge
+        canvas.shapes = [shape]
+        canvas.selected_shape = shape
+
+        received = []
+        canvas.polygonVerticesEdited.connect(
+            lambda s, pts: received.append(1))
+
+        canvas.move_one_pixel('Left')  # would push x to -1
+
+        self.assertEqual(received, [])
+        self.assertEqual(shape.points[0].x(), 0)  # unchanged
+
+    # --- end_move (context-menu "Move here") ---
+
+    def test_end_move_polygon_emits_polygon_edit(self):
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(100, 100))
+        shape = self._polygon([(10, 10), (20, 10), (20, 20)])
+        canvas.selected_shape = shape
+        moved_copy = shape.copy()
+        for p in moved_copy.points:
+            p.setX(p.x() + 5)
+        canvas.selected_shape_copy = moved_copy
+
+        received = []
+        canvas.polygonVerticesEdited.connect(
+            lambda s, pts: received.append((s, pts)))
+
+        canvas.end_move(copy=False)
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, old_points = received[0]
+        self.assertIs(emitted_shape, shape)
+        self.assertEqual([(p.x(), p.y()) for p in old_points],
+                         [(10, 10), (20, 10), (20, 20)])
+        # Points were committed from the dragged copy.
+        self.assertEqual(shape.points[0].x(), 15)
+
+    def test_end_move_copy_true_does_not_emit_move_signal(self):
+        """The duplicate ('Move copy here') branch creates a shape; it must
+        not masquerade as a move edit."""
+        canvas = Canvas()
+        canvas.load_pixmap(QPixmap(100, 100))
+        shape = self._polygon([(10, 10), (20, 10), (20, 20)])
+        canvas.shapes = [shape]
+        canvas.selected_shape = shape
+        canvas.selected_shape_copy = shape.copy()
+
+        received = []
+        canvas.polygonVerticesEdited.connect(lambda s, pts: received.append(1))
+        canvas.shapeMoveFinished.connect(lambda s, pts: received.append(1))
+
+        canvas.end_move(copy=True)
+
+        self.assertEqual(received, [])
+
+    # --- in-mode keypoint Ctrl-Z ---
+
+    def test_keypoint_ctrl_z_emits_keypoints_edit(self):
+        canvas = Canvas()
+        # A real keypoint shape carries bounding points (Shape truthiness is
+        # point-count based), so give it some.
+        shape = self._rectangle([(0, 0), (50, 50)])
+        shape.label = 'person'
+        shape.keypoints = [(1.0, 2.0, 2), (3.0, 4.0, 2), None]
+        canvas.mode = canvas.KEYPOINT_MODE
+        canvas._keypoint_shape = shape
+        canvas._keypoint_index = 2  # two placed, third unplaced
+
+        received = []
+        canvas.keypointsEdited.connect(
+            lambda s, kps: received.append((s, kps)))
+
+        ctrl_z = QKeyEvent(QEvent.KeyPress, Qt.Key_Z, Qt.ControlModifier)
+        canvas.keyPressEvent(ctrl_z)
+
+        self.assertEqual(len(received), 1)
+        emitted_shape, old_kps = received[0]
+        self.assertIs(emitted_shape, shape)
+        # Snapshot holds the PRE-clear keypoints.
+        self.assertEqual(old_kps, [(1.0, 2.0, 2), (3.0, 4.0, 2), None])
+        # The last placed keypoint was cleared.
+        self.assertIsNone(shape.keypoints[1])
+        self.assertEqual(canvas._keypoint_index, 1)
+
+    def test_keypoint_ctrl_z_with_no_placed_points_emits_nothing(self):
+        canvas = Canvas()
+        shape = self._rectangle([(0, 0), (50, 50)])
+        shape.label = 'person'
+        shape.keypoints = [None, None]
+        canvas.mode = canvas.KEYPOINT_MODE
+        canvas._keypoint_shape = shape
+        canvas._keypoint_index = 0
+
+        received = []
+        canvas.keypointsEdited.connect(lambda s, kps: received.append(1))
+
+        ctrl_z = QKeyEvent(QEvent.KeyPress, Qt.Key_Z, Qt.ControlModifier)
+        canvas.keyPressEvent(ctrl_z)
+
+        self.assertEqual(received, [])
 
 
 class TestOverlayPixmapCache(unittest.TestCase):
