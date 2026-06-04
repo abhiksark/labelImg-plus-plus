@@ -666,5 +666,53 @@ class TestUndoStateConsistency(unittest.TestCase):
         self.assertIn('cat', self._combo_items())
 
 
+class TestBatchVerify(unittest.TestCase):
+    """Batch verify must report files it could not update, not swallow them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app, cls.win = get_main_app()
+
+    def setUp(self):
+        from libs.formats.pascal_voc_io import PascalVocWriter
+        self.win.reset_state()
+        self.d = tempfile.mkdtemp()
+        self.win.default_save_dir = self.d
+        imgs = []
+        for name in ('a', 'b'):
+            img = os.path.join(self.d, name + '.png')
+            im = QImage(50, 50, QImage.Format_RGB32)
+            im.fill(0xFFFFFF)
+            im.save(img)
+            w = PascalVocWriter('f', name + '.png', (50, 50, 3))
+            w.add_bnd_box(1, 1, 9, 9, 'cat', difficult=0)
+            w.save(os.path.join(self.d, name + '.xml'))
+            imgs.append(img)
+        # An annotated image whose XML is corrupt -> must surface as a failure.
+        cimg = os.path.join(self.d, 'c.png')
+        im = QImage(50, 50, QImage.Format_RGB32)
+        im.fill(0xFFFFFF)
+        im.save(cimg)
+        with open(os.path.join(self.d, 'c.xml'), 'w') as f:
+            f.write('<annotation><object> not closed')
+        imgs.append(cimg)
+        self.win.m_img_list = imgs
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_reports_failures_instead_of_swallowing(self):
+        count, failures = self.win._apply_batch_verify(True)
+        self.assertEqual(count, 2)
+        self.assertEqual(len(failures), 1)
+        self.assertTrue(any('c.png' in f[0] for f in failures))
+
+    def test_actually_writes_verified_flag(self):
+        from libs.formats.pascal_voc_io import PascalVocReader
+        self.win._apply_batch_verify(True)
+        self.assertTrue(
+            PascalVocReader(os.path.join(self.d, 'a.xml')).verified)
+
+
 if __name__ == '__main__':
     unittest.main()

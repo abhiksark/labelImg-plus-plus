@@ -2784,7 +2784,38 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         verify = dialog.verify_mode
+        count, failures = self._apply_batch_verify(verify)
+
+        action_label = 'Verified' if verify else 'Unverified'
+        self.statusBar().showMessage(
+            f'{action_label} {count} images', 3000)
+        if failures:
+            # Surface the files we could not update instead of silently
+            # dropping them from the reported count.
+            sample = '\n'.join(
+                '- %s: %s' % (os.path.basename(p), reason)
+                for p, reason in failures[:10])
+            if len(failures) > 10:
+                sample += '\n... and %d more' % (len(failures) - 10)
+            self.error_message(
+                f'{action_label} with errors',
+                (f'<p>{action_label} {count} image(s); {len(failures)} could '
+                 f'not be updated:</p><pre>{sample}</pre>'))
+        if self.file_path:
+            self.load_file(self.file_path)
+
+    def _apply_batch_verify(self, verify):
+        """Set/clear the PASCAL VOC ``verified`` flag across annotated images.
+
+        Returns:
+            (count, failures) where ``count`` is the number of images updated
+            and ``failures`` is a list of (image_path, reason) for images that
+            could not be updated - corrupt/unreadable XML, or a non-VOC
+            annotation whose format has no verified flag.
+        """
+        import xml.etree.ElementTree as ET
         count = 0
+        failures = []
         for img_path in self.m_img_list:
             if not self._has_annotation(img_path):
                 continue
@@ -2793,26 +2824,21 @@ class MainWindow(QMainWindow, WindowMixin):
             xml_path = os.path.join(save_dir, basename + XML_EXT)
             if not os.path.isfile(xml_path):
                 xml_path = os.path.splitext(img_path)[0] + XML_EXT
-            if os.path.isfile(xml_path):
-                try:
-                    import xml.etree.ElementTree as ET
-                    tree = ET.parse(xml_path)
-                    root = tree.getroot()
-                    if verify:
-                        root.set('verified', 'yes')
-                    else:
-                        if 'verified' in root.attrib:
-                            del root.attrib['verified']
-                    tree.write(xml_path)
-                    count += 1
-                except Exception:
-                    pass
-
-        action_label = 'Verified' if verify else 'Unverified'
-        self.statusBar().showMessage(
-            f'{action_label} {count} images', 3000)
-        if self.file_path:
-            self.load_file(self.file_path)
+            if not os.path.isfile(xml_path):
+                failures.append((img_path, 'not a PASCAL VOC annotation'))
+                continue
+            try:
+                tree = ET.parse(xml_path)
+                root = tree.getroot()
+                if verify:
+                    root.set('verified', 'yes')
+                else:
+                    root.attrib.pop('verified', None)
+                tree.write(xml_path)
+                count += 1
+            except (ET.ParseError, OSError) as e:
+                failures.append((img_path, str(e)))
+        return count, failures
 
     def split_dataset(self):
         """Open dialog to split dataset into train/val/test sets."""
