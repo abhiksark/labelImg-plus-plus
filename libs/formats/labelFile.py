@@ -210,13 +210,14 @@ class LabelFile(object):
             x_max = max(x, x_max)
             y_max = max(y, y_max)
 
-        # Martin Kersner, 2015/11/12
-        # 0-valued coordinates of BB caused an error while
-        # training faster-rcnn object detector.
-        if x_min < 1:
-            x_min = 1
+        # Clamp off-image (negative) origins to 0; edge-anchored boxes at the
+        # top-left pixel are legitimate and must be preserved. round() instead
+        # of int() keeps sub-pixel coordinates from drifting toward the origin
+        # on every save.
+        if x_min < 0:
+            x_min = 0
 
-        if y_min < 1:
-            y_min = 1
+        if y_min < 0:
+            y_min = 0
 
-        return int(x_min), int(y_min), int(x_max), int(y_max)
+        return round(x_min), round(y_min), round(x_max), round(y_max)
