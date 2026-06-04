@@ -134,12 +134,12 @@ def generate_color_by_text(text):
 
 
 def have_qstring():
-    """p3/qt5 get rid of QString wrapper as py3 has native unicode str type"""
-    return not (sys.version_info.major >= 3 or QT_VERSION_STR.startswith('5.'))
+    """py3/qt5 have no QString wrapper; py3 has a native unicode str type."""
+    return False
 
 
 def util_qt_strlistclass():
-    return QStringList if have_qstring() else list
+    return list
 
 
 def natural_sort(list, key=lambda s:s):

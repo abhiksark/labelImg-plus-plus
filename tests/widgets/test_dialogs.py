@@ -229,5 +229,33 @@ class TestLabelDialogCompleter(unittest.TestCase):
         self.assertEqual(model.rowCount(), 0)
 
 
+class TestSplitDialogValidation(unittest.TestCase):
+    """The split dialog must not accept ratios that don't sum to 100%."""
+
+    def test_run_disabled_when_ratios_exceed_100(self):
+        from libs.widgets.splitDialog import SplitDialog
+        dialog = SplitDialog(image_count=10)
+
+        dialog.train_spin.setValue(80)
+        dialog.val_spin.setValue(80)  # train+val = 160 -> invalid
+
+        self.assertFalse(dialog.run_btn.isEnabled())
+
+    def test_run_enabled_when_ratios_sum_to_100(self):
+        from libs.widgets.splitDialog import SplitDialog
+        dialog = SplitDialog(image_count=10)
+
+        dialog.train_spin.setValue(70)
+        dialog.val_spin.setValue(20)  # test auto -> 10, total 100
+
+        self.assertTrue(dialog.run_btn.isEnabled())
+
+    def test_run_disabled_when_no_images(self):
+        from libs.widgets.splitDialog import SplitDialog
+        dialog = SplitDialog(image_count=0)
+
+        self.assertFalse(dialog.run_btn.isEnabled())
+
+
 if __name__ == '__main__':
     unittest.main()

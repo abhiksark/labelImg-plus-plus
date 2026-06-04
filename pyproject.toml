@@ -11,7 +11,7 @@ license = {file = "LICENSE"}
 authors = [
     {name = "Abhik Sarkar", email = "abhiksark@gmail.com"}
 ]
-requires-python = ">=3.6"
+requires-python = ">=3.8"
 keywords = ["labelImg", "labelimgpp", "labelimgplusplus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -19,12 +19,11 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]

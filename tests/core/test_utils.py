@@ -16,7 +16,8 @@ from PyQt5.QtCore import QPointF
 
 from libs.utils.utils import (
     Struct, new_action, new_icon, add_actions, format_shortcut,
-    generate_color_by_text, natural_sort, distance, trimmed
+    generate_color_by_text, natural_sort, distance, trimmed,
+    have_qstring, util_qt_strlistclass
 )
 
 # Create QApplication for tests
@@ -315,6 +316,16 @@ class TestAddActions(unittest.TestCase):
 
         # Menu should be added
         self.assertGreaterEqual(len(menubar.actions()), 1)
+
+
+class TestLegacyQtShims(unittest.TestCase):
+    """The py2/Qt4 compatibility shims must not reference undefined names."""
+
+    def test_have_qstring_is_false_on_py3(self):
+        self.assertIs(have_qstring(), False)
+
+    def test_util_qt_strlistclass_is_list(self):
+        self.assertIs(util_qt_strlistclass(), list)
 
 
 if __name__ == '__main__':

@@ -79,8 +79,14 @@ class YOLOSegReader:
         else:
             self.class_list_path = class_list_path
 
-        with open(self.class_list_path, 'r') as f:
-            self.classes = f.read().strip('\n').split('\n')
+        try:
+            with open(self.class_list_path, 'r') as f:
+                self.classes = f.read().strip('\n').split('\n')
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"classes.txt not found at: {self.class_list_path}\n"
+                "YOLO segmentation format requires a classes.txt file in the "
+                "same directory as annotations.")
 
         self.img_size = [image.height(), image.width(),
                          1 if image.isGrayscale() else 3]
@@ -103,7 +109,10 @@ class YOLOSegReader:
                 if len(parts) < 7:  # class + min 3 points (6 coords)
                     continue
 
-                class_idx = int(parts[0])
+                try:
+                    class_idx = int(parts[0])
+                except ValueError:
+                    continue  # malformed class index token
                 if class_idx < 0 or class_idx >= len(self.classes):
                     continue
 
@@ -112,11 +121,14 @@ class YOLOSegReader:
                 if len(coords) % 2 != 0:
                     continue
 
-                points = []
-                for i in range(0, len(coords), 2):
-                    x = round(float(coords[i]) * w)
-                    y = round(float(coords[i + 1]) * h)
-                    points.append((x, y))
+                try:
+                    points = []
+                    for i in range(0, len(coords), 2):
+                        x = round(float(coords[i]) * w)
+                        y = round(float(coords[i + 1]) * h)
+                        points.append((x, y))
+                except ValueError:
+                    continue  # malformed coordinate token
 
                 # Detect axis-aligned rectangles
                 if len(points) == 4:

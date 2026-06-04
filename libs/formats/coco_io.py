@@ -164,23 +164,29 @@ class COCOReader:
         target_image_id = None
         if target_filename:
             for img in images:
-                if img['file_name'] == target_filename:
-                    target_image_id = img['id']
+                if img.get('file_name') == target_filename:
+                    target_image_id = img.get('id')
                     break
         if target_image_id is None and images:
-            target_image_id = images[0]['id']
+            target_image_id = images[0].get('id')
 
         for ann in data.get('annotations', []):
             if ann.get('image_id') != target_image_id:
                 continue
 
-            label = cat_map.get(ann['category_id'], 'unknown')
+            # Untrusted file: skip annotations missing required fields rather
+            # than raising KeyError/IndexError/ValueError to the caller.
+            cat_id = ann.get('category_id')
+            if cat_id is None:
+                continue
+            label = cat_map.get(cat_id, 'unknown')
             difficult = bool(ann.get('difficult', 0))
 
-            # Parse keypoints if present.
+            # Parse keypoints if present. COCO keypoints are a flat list of
+            # (x, y, v) triples; a length not divisible by 3 is malformed.
             kp_data = None
-            if 'keypoints' in ann and ann['keypoints']:
-                flat = ann['keypoints']
+            flat = ann.get('keypoints')
+            if flat and len(flat) % 3 == 0:
                 kp_data = []
                 for i in range(0, len(flat), 3):
                     x, y, v = flat[i], flat[i + 1], flat[i + 2]
@@ -189,14 +195,18 @@ class COCOReader:
                     else:
                         kp_data.append((x, y, int(v)))
 
-            if 'segmentation' in ann and ann['segmentation']:
-                seg = ann['segmentation'][0]
-                points = [(seg[i], seg[i + 1]) for i in range(0, len(seg), 2)]
+            segmentation = ann.get('segmentation')
+            if segmentation:
+                seg = segmentation[0]
+                points = [(seg[i], seg[i + 1])
+                          for i in range(0, len(seg) - 1, 2)]
                 self.shapes.append(
                     (label, points, None, None, difficult, 'polygon', None))
             else:
-                bbox = ann['bbox']  # [x, y, w, h]
-                x, y, w, h = bbox
+                bbox = ann.get('bbox')  # [x, y, w, h]
+                if not bbox or len(bbox) < 4:
+                    continue
+                x, y, w, h = bbox[0], bbox[1], bbox[2], bbox[3]
                 points = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
                 self.shapes.append(
                     (label, points, None, None, difficult, 'rectangle', kp_data))
