@@ -94,10 +94,15 @@ class ShortcutConfig:
         return dict(self._shortcuts)
 
     def from_dict(self, data):
-        """Loads shortcuts from a dictionary, only updating known keys."""
+        """Load shortcuts from a dictionary, updating only known keys with
+        string values. Non-dict input and non-string values are ignored so a
+        corrupt config can never crash the load."""
+        if not isinstance(data, dict):
+            return
         for key in DEFAULT_SHORTCUTS:
-            if key in data:
-                self._shortcuts[key] = data[key]
+            value = data.get(key)
+            if isinstance(value, str):
+                self._shortcuts[key] = value
 
     def export_json(self, file_path):
         """Exports shortcuts to a JSON file."""
@@ -105,7 +110,17 @@ class ShortcutConfig:
             json.dump(self._shortcuts, f, indent=2)
 
     def import_json(self, file_path):
-        """Imports shortcuts from a JSON file."""
-        with open(file_path, 'r') as f:
-            data = json.load(f)
+        """Import shortcuts from a JSON file.
+
+        Raises:
+            ValueError: if the file cannot be read, is not valid JSON, or is
+                not a JSON object of shortcuts.
+        """
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"Could not read shortcuts file: {e}")
+        if not isinstance(data, dict):
+            raise ValueError("Shortcuts file must be a JSON object")
         self.from_dict(data)

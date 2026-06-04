@@ -134,14 +134,19 @@ class ShortcutsDialog(QDialog):
     def _import(self):
         path, _ = QFileDialog.getOpenFileName(
             self, 'Import Shortcuts', '', 'JSON (*.json)')
-        if path:
+        if not path:
+            return
+        try:
             self.config.import_json(path)
-            self._pending = dict(self.config.get_all())
-            for name, act in self.action_map.items():
-                sc = self.config.get(name)
-                if sc:
-                    act.setShortcut(sc)
-            self._refresh_table()
+        except ValueError as e:
+            QMessageBox.warning(self, 'Import failed', str(e))
+            return
+        self._pending = dict(self.config.get_all())
+        for name, act in self.action_map.items():
+            sc = self.config.get(name)
+            if sc:
+                act.setShortcut(sc)
+        self._refresh_table()
 
     def apply_theme(self, theme):
         from libs.utils.styles import get_stylesheet
