@@ -599,6 +599,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.polygonVerticesEdited.connect(
             self._on_polygon_vertices_edited)
         self.canvas.keypointsEdited.connect(self._on_keypoints_edited)
+        self.canvas.shapeMoveFinished.connect(self._on_shape_move_finished)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -1702,6 +1703,12 @@ class MainWindow(QMainWindow, WindowMixin):
         """Capture polygon vertex edits for undo support."""
         cmd = EditPolygonVerticesCommand(
             self, shape, old_points, list(shape.points))
+        self.undo_stack.push(cmd)
+        self.set_dirty()
+
+    def _on_shape_move_finished(self, shape, old_points):
+        """Capture whole-shape moves / rectangle resizes for undo support."""
+        cmd = MoveShapeCommand(self, shape, old_points, list(shape.points))
         self.undo_stack.push(cmd)
         self.set_dirty()
 

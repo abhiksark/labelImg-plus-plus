@@ -517,6 +517,41 @@ class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
         self.win.undo_stack.undo()
         self.assertIsNone(shape.keypoints)
 
+    def test_rectangle_move_pushes_undoable_command(self):
+        """shapeMoveFinished -> pushes MoveShapeCommand, and undo restores the
+        rectangle's original position.
+
+        Regression: MoveShapeCommand was implemented, exported, imported and
+        unit-tested, but never wired into the app. Whole-shape (and rectangle
+        vertex) drags emitted shapeMoved -> set_dirty only, bypassing the undo
+        stack, so Ctrl+Z could not revert a moved box.
+        """
+        from libs.core.commands import MoveShapeCommand
+
+        shape = Shape(label='car')
+        shape.add_point(QPointF(10, 10))
+        shape.add_point(QPointF(50, 50))
+        shape.close()
+        self.win.canvas.shapes.append(shape)
+        self.win.add_label(shape)
+        self.win.canvas.selected_shape = shape
+
+        old = [QPointF(p.x(), p.y()) for p in shape.points]
+
+        # Simulate a completed body drag: the canvas moved the points, then
+        # reports the finished move on mouse release.
+        shape.move_by(QPointF(20, 0))
+        self.win.canvas.shapeMoveFinished.emit(shape, old)
+
+        self.assertTrue(self.win.undo_stack.can_undo())
+        self.assertIsInstance(self.win.undo_stack._undo_stack[-1], MoveShapeCommand)
+        self.assertEqual(shape.points[0].x(), 30)
+
+        self.win.undo_stack.undo()
+
+        self.assertEqual(shape.points[0].x(), 10)
+        self.assertEqual(shape.points[1].x(), 50)
+
 
 if __name__ == '__main__':
     unittest.main()

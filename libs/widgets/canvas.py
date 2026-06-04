@@ -70,6 +70,10 @@ class Canvas(QWidget):
     # Emitted on keypoint placement / mutation with the pre-mutation
     # keypoints list (may be None) for undo support.
     keypointsEdited = pyqtSignal(object, object)        # (shape, old_keypoints)
+    # Emitted on mouse release after a non-polygon shape (rectangle) was moved
+    # or resized, with the pre-drag points list, so MainWindow can push a
+    # MoveShapeCommand. Polygon edits use polygonVerticesEdited instead.
+    shapeMoveFinished = pyqtSignal(object, object)      # (shape, old_points)
 
     CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE = list(range(4))
 
@@ -138,6 +142,10 @@ class Canvas(QWidget):
         # vertex drag, so we can emit polygonVerticesEdited on release
         # if the drag actually changed any vertex position.
         self._polygon_drag_old_points = None
+
+        # Same idea for non-polygon (rectangle) shapes moved or resized by
+        # drag, emitted as shapeMoveFinished on release for undo support.
+        self._move_shape_old_points = None
 
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
@@ -464,6 +472,16 @@ class Canvas(QWidget):
                 and self.selected_shape.shape_type == ShapeType.POLYGON):
             self._polygon_drag_old_points = list(self.selected_shape.points)
 
+        # Snapshot non-polygon (rectangle) points before a potential body
+        # move or corner resize. Emitted as shapeMoveFinished on release if
+        # the drag actually changed the geometry.
+        self._move_shape_old_points = None
+        if (ev.button() == Qt.LeftButton
+                and self.selected_shape
+                and self.selected_shape.shape_type != ShapeType.POLYGON):
+            self._move_shape_old_points = [
+                QPointF(p.x(), p.y()) for p in self.selected_shape.points]
+
         # Keypoint placement
         if self.mode == self.KEYPOINT_MODE and self._keypoint_shape:
             kp_count = self._keypoint_count()
@@ -562,6 +580,7 @@ class Canvas(QWidget):
                     self.finalise()
             self._freehand_points = []
             self._polygon_drag_old_points = None
+            self._move_shape_old_points = None
             return
 
         # If a polygon was selected on press and any vertex moved during
@@ -580,8 +599,26 @@ class Canvas(QWidget):
             )
             if moved:
                 self._emit_polygon_edit(self.selected_shape, old_pts)
+
+        # Same for a non-polygon (rectangle) shape moved or resized during the
+        # drag: emit shapeMoveFinished so MainWindow can push a MoveShapeCommand.
+        if (ev.button() == Qt.LeftButton
+                and self._move_shape_old_points is not None
+                and self.selected_shape
+                and self.selected_shape.shape_type != ShapeType.POLYGON):
+            new_pts = self.selected_shape.points
+            old_pts = self._move_shape_old_points
+            moved = (
+                len(new_pts) != len(old_pts)
+                or any((a.x(), a.y()) != (b.x(), b.y())
+                       for a, b in zip(old_pts, new_pts))
+            )
+            if moved:
+                self.shapeMoveFinished.emit(self.selected_shape, old_pts)
+
         if ev.button() == Qt.LeftButton:
             self._polygon_drag_old_points = None
+            self._move_shape_old_points = None
 
         if ev.button() == Qt.RightButton:
             # Check if right-clicking a polygon vertex
