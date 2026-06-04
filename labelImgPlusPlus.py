@@ -68,11 +68,10 @@ from libs.core.shortcut_config import ShortcutConfig
 # Formats
 from libs.formats.labelFile import LabelFile, LabelFileError, LabelFileFormat
 from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
-from libs.formats.yolo_io import YoloReader, TXT_EXT
-from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
-from libs.formats.coco_io import COCOReader
-from libs.formats.yolo_seg_io import YOLOSegReader
+from libs.formats.yolo_io import TXT_EXT
+from libs.formats.create_ml_io import JSON_EXT
 from libs.formats.annotation_probe import probe as probe_annotation
+from libs.formats import annotation_loader
 
 # Utils
 from libs.utils.constants import (
@@ -3255,10 +3254,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.set_format(FORMAT_PASCALVOC)
 
-        t_voc_parse_reader = PascalVocReader(xml_path)
-        shapes = t_voc_parse_reader.get_shapes()
-        self.load_labels(shapes)
-        self.canvas.verified = t_voc_parse_reader.verified
+        loaded = annotation_loader.load_pascal_voc(xml_path)
+        self.load_labels(loaded.shapes)
+        self.canvas.verified = loaded.verified
 
     def load_yolo_txt_by_filename(self, txt_path):
         if self.file_path is None:
@@ -3267,28 +3265,14 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         self.set_format(FORMAT_YOLO)
-        # Use original image size for YOLO coordinate conversion (Issue #31)
-        # YOLO stores normalized coords, so we need original dimensions
+        # YOLO stores normalized coords; convert against the original image
+        # size rather than the (possibly scaled) display image (Issue #31).
+        original_size = getattr(self, '_original_image_size', None)
         try:
-            if hasattr(self, '_original_image_size') and self._original_image_size is not None:
-                # Create a mock image object with original dimensions
-                class MockImage:
-                    def __init__(self, size, grayscale=False):
-                        self._size = size
-                        self._grayscale = grayscale
-                    def width(self):
-                        return self._size.width()
-                    def height(self):
-                        return self._size.height()
-                    def isGrayscale(self):
-                        return self._grayscale
-                mock_img = MockImage(self._original_image_size, self.image.isGrayscale())
-                t_yolo_parse_reader = YoloReader(txt_path, mock_img)
-            else:
-                t_yolo_parse_reader = YoloReader(txt_path, self.image)
-            shapes = t_yolo_parse_reader.get_shapes()
-            self.load_labels(shapes)
-            self.canvas.verified = t_yolo_parse_reader.verified
+            loaded = annotation_loader.load_yolo(
+                txt_path, self.image, original_size)
+            self.load_labels(loaded.shapes)
+            self.canvas.verified = loaded.verified
         except Exception as e:
             self.error_message('Annotation Error',
                 f'Error loading YOLO annotations for {os.path.basename(txt_path)}: {e}')
@@ -3300,8 +3284,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         try:
-            create_ml_parse_reader = CreateMLReader(json_path, file_path)
-            shapes = create_ml_parse_reader.get_shapes()
+            loaded = annotation_loader.load_create_ml(json_path, file_path)
         except Exception as e:
             self.error_message(
                 'Annotation Error',
@@ -3310,8 +3293,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         self.set_format(FORMAT_CREATEML)
-        self.load_labels(shapes)
-        self.canvas.verified = create_ml_parse_reader.verified
+        self.load_labels(loaded.shapes)
+        self.canvas.verified = loaded.verified
 
     def load_coco_json_by_filename(self, json_path, file_path):
         """Load annotations from a COCO JSON file for the given image.
@@ -3325,10 +3308,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if not os.path.isfile(json_path):
             return
 
-        image_filename = os.path.basename(file_path)
         try:
-            reader = COCOReader(json_path, image_filename)
-            shapes = reader.get_shapes()
+            loaded = annotation_loader.load_coco(json_path, file_path)
         except Exception as e:
             self.error_message(
                 'Annotation Error',
@@ -3337,8 +3318,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         self.set_format(FORMAT_COCO)
-        self.load_labels(shapes)
-        self.canvas.verified = reader.verified
+        self.load_labels(loaded.shapes)
+        self.canvas.verified = loaded.verified
 
     def load_yolo_seg_by_filename(self, txt_path):
         """Load annotations from a YOLO-seg text file.
@@ -3351,24 +3332,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if not os.path.isfile(txt_path):
             return
 
+        original_size = getattr(self, '_original_image_size', None)
         try:
-            if hasattr(self, '_original_image_size') and self._original_image_size is not None:
-                class MockImage:
-                    def __init__(self, size, grayscale=False):
-                        self._size = size
-                        self._grayscale = grayscale
-                    def width(self):
-                        return self._size.width()
-                    def height(self):
-                        return self._size.height()
-                    def isGrayscale(self):
-                        return self._grayscale
-                mock_img = MockImage(self._original_image_size,
-                                     self.image.isGrayscale())
-                reader = YOLOSegReader(txt_path, mock_img)
-            else:
-                reader = YOLOSegReader(txt_path, self.image)
-            shapes = reader.get_shapes()
+            loaded = annotation_loader.load_yolo_seg(
+                txt_path, self.image, original_size)
         except Exception as e:
             self.error_message(
                 'Annotation Error',
@@ -3377,8 +3344,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         self.set_format(FORMAT_YOLO_SEG)
-        self.load_labels(shapes)
-        self.canvas.verified = reader.verified
+        self.load_labels(loaded.shapes)
+        self.canvas.verified = loaded.verified
 
     def copy_previous_bounding_boxes(self):
         current_index = self._path_to_idx.get(self.file_path, 0)
