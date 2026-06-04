@@ -89,6 +89,32 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.assertNotEqual(self.win.file_path, annot_path)
         mock_error.assert_called_once()
 
+    def test_apply_label_fix_does_not_crash(self):
+        """_apply_label_fix must use statusBar(), not a missing status_bar attr.
+
+        Regression: it called self.status_bar.showMessage (no such attribute),
+        so the label-consistency fix path always raised AttributeError.
+        """
+        self.win.dir_name = self.temp_dir
+        self.win._apply_label_fix('old', 'new')  # must not raise
+
+    def test_reset_all_relaunches_with_python_interpreter(self):
+        """reset_all must relaunch through sys.executable, not exec the .py.
+
+        Regression: startDetached(os.path.abspath(__file__)) does not restart
+        an installed (entry-point) package.
+        """
+        from unittest.mock import patch
+        with patch.object(self.win, 'close'), \
+                patch.object(self.win.settings, 'reset'), \
+                patch('labelImgPlusPlus.QProcess') as mock_proc:
+            instance = mock_proc.return_value
+            self.win.reset_all()
+
+        instance.startDetached.assert_called_once()
+        args = instance.startDetached.call_args[0]
+        self.assertEqual(args[0], sys.executable)
+
     def test_load_predefined_classes_none_does_not_raise(self):
         """load_predefined_classes(None) must no-op, not raise TypeError.
 

@@ -2882,7 +2882,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # and replace old_label with new_label
         # For now, just log - full implementation would update files
         print(f"Label fix requested: '{old_label}' → '{new_label}'")
-        self.status_bar.showMessage(
+        self.statusBar().showMessage(
             f"Label fix: '{old_label}' → '{new_label}' (reload to see changes)",
             5000
         )
@@ -3274,7 +3274,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings.reset()
         self.close()
         process = QProcess()
-        process.startDetached(os.path.abspath(__file__))
+        # Relaunch through the Python interpreter so the restart works for an
+        # installed (entry-point) package, not just a source checkout.
+        process.startDetached(sys.executable, [os.path.abspath(__file__)])
 
     def may_continue(self):
         if not self.dirty:
