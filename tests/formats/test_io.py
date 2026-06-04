@@ -329,6 +329,28 @@ class TestCreateMLEdgeCases(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             CreateMLReader('/nonexistent/path/file.json', 'folder/test.jpg')
 
+    def test_non_list_json_raises_value_error(self):
+        """A CreateML file must be a JSON array; a top-level object is a clean
+        ValueError, not an opaque 'string indices must be integers' TypeError."""
+        json_path = os.path.join(self.temp_dir, 'object.json')
+        with open(json_path, 'w') as f:
+            json.dump({'image': 'test.jpg', 'annotations': []}, f)
+
+        with self.assertRaises(ValueError):
+            CreateMLReader(json_path, 'folder/test.jpg')
+
+    def test_annotation_missing_keys_is_skipped(self):
+        """Annotations missing label/coordinates must be skipped, not KeyError."""
+        json_path = os.path.join(self.temp_dir, 'partial.json')
+        with open(json_path, 'w') as f:
+            json.dump([{'image': 'test.jpg', 'annotations': [
+                {'label': 'cat'},                       # no coordinates
+                {'coordinates': {'x': 1, 'y': 2, 'width': 3, 'height': 4}},  # no label
+            ]}], f)
+
+        reader = CreateMLReader(json_path, 'folder/test.jpg')  # must not raise
+        self.assertEqual(reader.get_shapes(), [])
+
     def test_write_with_no_shapes(self):
         """Test writing with empty shapes list."""
         json_path = os.path.join(self.temp_dir, 'no_shapes.json')

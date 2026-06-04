@@ -91,6 +91,54 @@ class TestCOCOReader(unittest.TestCase):
         self.assertEqual(label, 'cat')
         self.assertEqual(shape_type, 'rectangle')
 
+    def _read(self, data, target='test.jpg'):
+        path = os.path.join(self.tmp_dir, 'annotations.json')
+        with open(path, 'w') as f:
+            json.dump(data, f)
+        return COCOReader(path, target)
+
+    def test_missing_category_id_does_not_crash(self):
+        """An annotation without category_id must be skipped, not KeyError."""
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg'}],
+            'annotations': [{'id': 1, 'image_id': 1, 'bbox': [1, 2, 3, 4]}],
+            'categories': [{'id': 1, 'name': 'cat'}],
+        }
+        reader = self._read(data)  # must not raise
+        self.assertEqual(reader.get_shapes(), [])
+
+    def test_malformed_bbox_does_not_crash(self):
+        """A bbox of the wrong arity must be skipped, not ValueError."""
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg'}],
+            'annotations': [{'id': 1, 'image_id': 1, 'category_id': 1,
+                             'bbox': [10, 20, 30]}],
+            'categories': [{'id': 1, 'name': 'cat'}],
+        }
+        reader = self._read(data)
+        self.assertEqual(reader.get_shapes(), [])
+
+    def test_keypoints_not_multiple_of_three_does_not_crash(self):
+        """A keypoints list whose length isn't a multiple of 3 must not IndexError."""
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg'}],
+            'annotations': [{'id': 1, 'image_id': 1, 'category_id': 1,
+                             'bbox': [10, 20, 30, 40], 'keypoints': [1, 2, 2, 3, 4]}],
+            'categories': [{'id': 1, 'name': 'cat'}],
+        }
+        reader = self._read(data)  # must not raise
+        self.assertEqual(len(reader.get_shapes()), 1)
+
+    def test_missing_file_name_does_not_crash(self):
+        """An image entry without file_name must not KeyError during matching."""
+        data = {
+            'images': [{'id': 1}],
+            'annotations': [],
+            'categories': [],
+        }
+        reader = self._read(data)  # must not raise
+        self.assertEqual(reader.get_shapes(), [])
+
     def test_read_polygon(self):
         data = {
             'images': [{'id': 1, 'file_name': 'test.jpg', 'width': 640, 'height': 480}],
