@@ -3876,11 +3876,19 @@ def get_main_app(argv=None):
     app.setStyleSheet(get_combined_style())  # Apply global stylesheet
     app.setApplicationName(__appname__)
     app.setWindowIcon(new_icon("app"))
-    # Tzutalin 201705+: Accept extra agruments to change predefined class file
+    # Tzutalin 201705+: Accept extra agruments to change predefined class file.
+    # Prefer the copy packaged inside the libs package (shipped in the wheel);
+    # fall back to the top-level data/ dir for source checkouts.
+    _here = os.path.dirname(__file__)
+    default_class_file = os.path.join(_here, "libs", "data",
+                                      "predefined_classes.txt")
+    if not os.path.exists(default_class_file):
+        default_class_file = os.path.join(_here, "data",
+                                          "predefined_classes.txt")
     argparser = argparse.ArgumentParser()
     argparser.add_argument("image_dir", nargs="?")
     argparser.add_argument("class_file",
-                           default=os.path.join(os.path.dirname(__file__), "data", "predefined_classes.txt"),
+                           default=default_class_file,
                            nargs="?")
     argparser.add_argument("save_dir", nargs="?")
     args = argparser.parse_args(argv[1:])

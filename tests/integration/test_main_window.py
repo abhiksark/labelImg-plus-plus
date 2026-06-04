@@ -89,6 +89,14 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.assertNotEqual(self.win.file_path, annot_path)
         mock_error.assert_called_once()
 
+    def test_default_predefined_classes_file_is_packaged(self):
+        """The default class list must ship inside the libs package so it is
+        present in the installed wheel (not just the source checkout)."""
+        import libs
+        packaged = os.path.join(os.path.dirname(libs.__file__),
+                                'data', 'predefined_classes.txt')
+        self.assertTrue(os.path.isfile(packaged))
+
     def test_apply_label_fix_does_not_crash(self):
         """_apply_label_fix must use statusBar(), not a missing status_bar attr.
 
