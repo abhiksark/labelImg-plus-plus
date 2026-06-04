@@ -493,6 +493,43 @@ class TestMainWindowLoaderFormatPreservation(unittest.TestCase):
             self.win.label_file_format, LabelFileFormat.YOLO,
             'format must not be mutated on reader failure')
 
+    def test_load_yolo_txt_does_not_change_format_on_reader_failure(self):
+        """Missing classes.txt makes YoloReader raise; format must not flip
+        and the load must not crash (Issue #69)."""
+        from libs.formats.labelFile import LabelFileFormat
+
+        # Valid YOLO txt but no classes.txt sibling -> reader raises.
+        yolo_dir = tempfile.mkdtemp()
+        try:
+            yolo_txt = os.path.join(yolo_dir, 'x.txt')
+            with open(yolo_txt, 'w') as f:
+                f.write('0 0.5 0.5 0.5 0.5\n')
+
+            # Start from a DIFFERENT format so a wrongful set_format is visible.
+            self.win.label_file_format = LabelFileFormat.PASCAL_VOC
+            self.win.load_yolo_txt_by_filename(yolo_txt)  # must not raise
+            self.assertEqual(
+                self.win.label_file_format, LabelFileFormat.PASCAL_VOC,
+                'format must not be mutated on reader failure')
+        finally:
+            shutil.rmtree(yolo_dir, ignore_errors=True)
+
+    def test_load_pascal_xml_does_not_change_format_on_reader_failure(self):
+        """Malformed XML makes PascalVocReader raise; format must not flip
+        and the load must not crash (Issue #69)."""
+        from libs.formats.labelFile import LabelFileFormat
+
+        bad_xml = os.path.join(self.temp_dir, 'bad.xml')
+        with open(bad_xml, 'w') as f:
+            f.write('<annotation><object><name>cat')  # truncated, invalid XML
+
+        # Start from a DIFFERENT format so a wrongful set_format is visible.
+        self.win.label_file_format = LabelFileFormat.YOLO
+        self.win.load_pascal_xml_by_filename(bad_xml)  # must not raise
+        self.assertEqual(
+            self.win.label_file_format, LabelFileFormat.YOLO,
+            'format must not be mutated on reader failure')
+
 
 class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
     """Integration tests for polygon and keypoint undo support."""
