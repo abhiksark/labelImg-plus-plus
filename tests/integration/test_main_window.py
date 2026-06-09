@@ -806,5 +806,30 @@ class TestBatchVerify(unittest.TestCase):
             PascalVocReader(os.path.join(self.d, 'a.xml')).verified)
 
 
+class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):
+    """MainWindow status-bar label widths scale with DPI (issue #66).
+
+    Dock minimums (200x100) are also wrapped in scale_px, but their effective
+    minimumWidth/Height is content-dominated (the docked widgets impose a
+    larger floor), so they are not asserted here.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # Build the window once, under a pinned 2x factor. Keep app/win as
+        # class attributes so the QApplication is not garbage-collected
+        # mid-suite (a local binding would destroy it and segfault later
+        # tests). This mirrors the other integration test classes.
+        from unittest.mock import patch
+        from libs.utils import dpi
+        with patch.object(dpi, 'get_dpi_scale_factor', return_value=2.0):
+            cls.app, cls.win = get_main_app()
+
+    def test_status_bar_label_minimums_double_at_2x(self):
+        self.assertEqual(self.win.label_image_count.minimumWidth(), 200)
+        self.assertEqual(self.win.label_box_count.minimumWidth(), 140)
+        self.assertEqual(self.win.label_zoom.minimumWidth(), 160)
+
+
 if __name__ == '__main__':
     unittest.main()
