@@ -7,6 +7,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
+from libs.utils.dpi import scale_px
+
 
 class BatchVerifyDialog(QDialog):
     """Dialog for batch verifying or unverifying annotated images.
@@ -28,7 +30,7 @@ class BatchVerifyDialog(QDialog):
         """
         super().__init__(parent)
         self.setWindowTitle('Batch Verify')
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(scale_px(350))
 
         layout = QVBoxLayout()
         layout.addWidget(QLabel(f'Images: {image_count}'))
