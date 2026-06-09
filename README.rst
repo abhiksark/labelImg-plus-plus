@@ -82,6 +82,19 @@ New in labelImg++ v2.0
     - All UI components (canvas, gallery, dialogs) respect the active theme
     - See `Dark Mode Documentation <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/dark-mode.md>`_ for detailed information
 
+**SAM-Assisted Segmentation** (optional)
+    Click once on an object to auto-generate a polygon, traced from a
+    Segment-Anything mask. Install the optional extra and toggle **SAM Segment**:
+
+    .. code:: shell
+
+        pip install labelimgplusplus[sam]
+
+    Uses the lightweight MobileSAM model by default (CPU-friendly); point it at a
+    larger SAM checkpoint via **Tools → SAM Settings…** for GPU setups. Without
+    the extra installed, the action stays disabled (with an install hint) and
+    nothing else changes.
+
 Installation
 ------------
 
