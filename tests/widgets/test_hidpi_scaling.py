@@ -24,6 +24,7 @@ from libs.widgets.splitDialog import SplitDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets.galleryWidget import GalleryWidget
 from libs.widgets.toolBar import ToolBar
+from libs.widgets.canvas import Canvas
 
 
 def _at_2x():
@@ -82,6 +83,20 @@ class TestKeypointPanelIndicatorsScale(unittest.TestCase):
         status = panel._rows[0]['status']
         self.assertEqual(status.minimumWidth(), 32)
         self.assertEqual(status.maximumWidth(), 32)
+
+
+class TestCanvasEpsilonScales(unittest.TestCase):
+    """The hit-test epsilon is a screen-pixel radius, so it scales with DPI."""
+
+    def test_epsilon_doubles_at_2x(self):
+        with _at_2x():
+            canvas = Canvas()
+        self.assertEqual(canvas.epsilon, 48.0)
+
+    def test_epsilon_unchanged_at_1x(self):
+        with patch.object(dpi, 'get_dpi_scale_factor', return_value=1.0):
+            canvas = Canvas()
+        self.assertEqual(canvas.epsilon, 24.0)
 
 
 if __name__ == '__main__':

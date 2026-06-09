@@ -14,6 +14,7 @@ except ImportError:
 import math
 
 from libs.core.shape import Shape, ShapeType
+from libs.utils.dpi import scale_px
 from libs.utils.utils import distance
 from libs.utils.styles import Theme
 
@@ -77,11 +78,14 @@ class Canvas(QWidget):
 
     CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE = list(range(4))
 
-    epsilon = 24.0
-
     def __init__(self, *args, **kwargs):
         super(Canvas, self).__init__(*args, **kwargs)
         # Initialise local state.
+        # Hit-test tolerance as a screen-pixel radius; scaled for HiDPI so
+        # grabbing vertices feels the same on high-density displays. Set per
+        # instance (not a class attribute) so the DPI factor is read after the
+        # QApplication exists.
+        self.epsilon = float(scale_px(24))
         self.mode = self.EDIT
         self.shapes = []
         self.current = None
