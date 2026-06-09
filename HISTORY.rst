@@ -1,6 +1,66 @@
 History
 =======
 
+2.3.3 (2026-06-09)
+------------------
+
+Security, correctness, and reliability release. Hardens settings storage and
+annotation parsing against untrusted input, closes several undo/redo gaps, and
+decomposes the monolithic main window into focused, unit-tested modules. No new
+features and no breaking changes.
+
+Security
+~~~~~~~~
+
+* Store user settings as JSON instead of a Python pickle, removing an
+  arbitrary-code-execution vector (the old ``~/.labelImgSettings.pkl`` is no
+  longer read; settings start fresh on upgrade)
+* Harden the PASCAL VOC XML reader against entity-expansion (billion-laughs)
+  and external-entity / network (XXE) attacks
+
+Bug fixes
+~~~~~~~~~
+
+* Make whole-shape moves, rectangle resizes, arrow-key nudges, the
+  context-menu "Move here", and in-mode keypoint Ctrl-Z all undoable — these
+  mutations previously bypassed the undo stack (#68)
+* Defer the annotation-format switch until the reader succeeds for the YOLO and
+  PASCAL VOC loaders, so a malformed file no longer flips the saved format;
+  PASCAL VOC now reports parse errors gracefully instead of crashing (#69)
+* Stop PASCAL VOC bounding-box coordinate data loss on save (round rather than
+  truncate), and round polygon coordinates likewise
+* Harden the COCO, YOLO-seg, and CreateML readers against malformed input
+* Report a clear error instead of crashing when an annotation file is opened
+  as an image
+* Restore label-list ordering on delete and refresh the label combo on edit so
+  undo/redo stays consistent
+* Surface batch-verify failures instead of silently swallowing them
+* Validate imported shortcut configurations instead of crashing on bad input
+* Deep-copy points in ``Shape.copy()`` and preserve a ``None`` label
+* Correct the label-fix status message and make "Reset All" relaunch through
+  the Python interpreter so installed entry points restart correctly
+* Theme the gallery regardless of the thumbnail-size slider, and source the
+  keypoint-panel and shortcuts-dialog colors from the active palette
+* Zoom-scale the keypoint hit-test and cache the canvas overlay composite
+
+Packaging
+~~~~~~~~~
+
+* Ship the default class list inside the installed wheel
+* Require Python >= 3.8 and drop dead Py2 / Qt4 shims
+
+Internal
+~~~~~~~~
+
+* Decompose the ~3,700-line ``MainWindow``: extract annotation loading,
+  fit-to-window scaling, the statistics controller, the gallery
+  status-refresh controller, and the format-metadata registry into focused,
+  unit-tested modules
+* Unify annotation status / label probing across the gallery and stats views
+* Run the CI test matrix on the ``dev`` branch and cache pip
+* Add a real mouse-event polygon insert/drag/undo integration test (#70);
+  the full suite now runs 592 tests (up from 471)
+
 2.3.2 (2026-05-20)
 ------------------
 
