@@ -1,4 +1,4 @@
-from math import sqrt
+from math import hypot, sqrt
 from libs.utils.ustr import ustr
 import hashlib
 import re
@@ -160,3 +160,35 @@ if QT5:
 else:
     def trimmed(text):
         return text.trimmed()
+
+
+def _perpendicular_distance(point, line_start, line_end):
+    """Calculate perpendicular distance from point to line segment."""
+    dx = line_end.x() - line_start.x()
+    dy = line_end.y() - line_start.y()
+    length_sq = dx * dx + dy * dy
+    if length_sq == 0:
+        return hypot(point.x() - line_start.x(), point.y() - line_start.y())
+    t = max(0, min(1, ((point.x() - line_start.x()) * dx +
+                       (point.y() - line_start.y()) * dy) / length_sq))
+    proj_x = line_start.x() + t * dx
+    proj_y = line_start.y() + t * dy
+    return hypot(point.x() - proj_x, point.y() - proj_y)
+
+
+def douglas_peucker(points, epsilon):
+    """Simplify a polyline using Douglas-Peucker algorithm."""
+    if len(points) <= 2:
+        return points
+    max_dist = 0
+    max_index = 0
+    for i in range(1, len(points) - 1):
+        d = _perpendicular_distance(points[i], points[0], points[-1])
+        if d > max_dist:
+            max_dist = d
+            max_index = i
+    if max_dist > epsilon:
+        left = douglas_peucker(points[:max_index + 1], epsilon)
+        right = douglas_peucker(points[max_index:], epsilon)
+        return left[:-1] + right
+    return [points[0], points[-1]]
