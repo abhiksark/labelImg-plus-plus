@@ -32,10 +32,6 @@ labelImg++
      :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
      :align: center
 
-.. image:: resources/demo/labelimg_screenshot.png
-     :alt: labelImg++ Screenshot
-     :align: center
-
 Features
 --------
 
