@@ -75,6 +75,17 @@ def test_non_bool_mask_is_accepted():
     assert pts is not None and len(pts) >= 3
 
 
+def test_high_vertex_contour_does_not_recurse():
+    # A sawtooth boundary produces a very high-vertex contour; the approxPolyDP
+    # pre-pass must keep the recursive simplifier from hitting the recursion limit.
+    m = np.zeros((400, 1400), dtype=bool)
+    m[100:300, 100:1300] = True
+    for x in range(100, 1300, 2):           # 1-px teeth along the top edge
+        m[90:100, x] = True
+    pts = mask_to_polygon(m)                 # must not raise RecursionError
+    assert pts is not None and len(pts) <= 100
+
+
 def test_thin_line_returns_none():
     # A 1-px-tall line clears the area floor but yields < 3 contour points.
     m = np.zeros((400, 400), dtype=bool)

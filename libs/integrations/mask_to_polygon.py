@@ -39,6 +39,10 @@ def mask_to_polygon(mask, max_points=MAX_POLYGON_POINTS):
     if not contours:
         return None
     contour = max(contours, key=cv2.contourArea)
+    # Pre-reduce with cv2's iterative approximation before the recursive
+    # douglas_peucker: a jagged contour on a large image can otherwise be deep
+    # enough to hit Python's recursion limit.
+    contour = cv2.approxPolyDP(contour, 2.0, True)
     qpoints = [QPointF(float(p[0][0]), float(p[0][1])) for p in contour]
     if len(qpoints) < 3:
         return None

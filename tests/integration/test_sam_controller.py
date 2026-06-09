@@ -65,7 +65,7 @@ def test_stale_generation_is_discarded():
     mw = _FakeMain()
     ctrl = SamController(mw)
     ctrl._gen = 5
-    ctrl._on_finished(2, [(0, 0), (1, 1), (2, 2)])   # stale gen
+    ctrl._on_finished(2, [(0, 0), (1, 1), (2, 2)], None)   # stale gen
     assert mw.canvas.committed == []
 
 
@@ -103,7 +103,7 @@ def test_cancel_invalidates_result_but_keeps_busy_until_completion():
     assert ctrl._gen == 2
     assert ctrl._busy is True
     # The still-running task eventually completes with the old generation:
-    ctrl._on_finished(1, [(0, 0), (1, 1), (2, 2)])
+    ctrl._on_finished(1, [(0, 0), (1, 1), (2, 2)], None)
     assert mw.canvas.committed == []     # stale result discarded
     assert ctrl._busy is False           # completion clears the guard
 
@@ -120,7 +120,7 @@ def test_image_switch_mid_inference_discards_result():
     ctrl.on_image_changed()
     assert ctrl._embedded_key is None
     assert ctrl._gen != 1
-    ctrl._on_finished(1, [(0, 0), (1, 1), (2, 2)])   # image A's late result
+    ctrl._on_finished(1, [(0, 0), (1, 1), (2, 2)], None)   # image A's late result
     assert mw.canvas.committed == []
 
 
@@ -134,3 +134,29 @@ def test_reset_backend_clears_model_and_embedding():
     ctrl.reset_backend()
     assert ctrl.backend is None
     assert ctrl._embedded_key is None
+
+
+def test_first_click_loads_model_in_worker(monkeypatch):
+    # With no backend yet, the first click must load the model INSIDE the worker
+    # (so the UI never blocks), then segment and store the loaded backend.
+    pytest.importorskip("numpy")
+    pytest.importorskip("cv2")
+    from PyQt5.QtGui import QImage
+    from libs.integrations import segmentation
+
+    mw = _FakeMain()
+    mw.image = QImage(64, 64, QImage.Format_RGB888)
+    mw.image.fill(0)
+    fake = _FakeBackend()
+    monkeypatch.setattr(segmentation, "load_backend", lambda settings: (fake, None))
+
+    ctrl = SamController(mw)
+    assert ctrl.backend is None
+    ctrl.segment_at(QPointF(32, 32))
+    QThreadPool.globalInstance().waitForDone(3000)
+    app.processEvents()
+
+    assert ctrl.backend is fake                 # loaded backend stored on main thread
+    assert fake.image_set is True               # embedded inside the worker
+    assert len(mw.canvas.committed) == 1
+    assert "Loading SAM…" in mw.messages
