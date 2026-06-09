@@ -1,6 +1,37 @@
 History
 =======
 
+2.4.0 (2026-06-09)
+------------------
+
+HiDPI scaling release. The interface now scales consistently on high-density
+and fractionally-scaled displays: chrome, dialogs, stylesheets, and the canvas
+grab tolerance all grow by the same factor that already drove icon sizing.
+Backward compatible — every change is a no-op at the standard 96 DPI baseline,
+so non-HiDPI displays are unchanged.
+
+New features
+~~~~~~~~~~~~
+
+* Scale the full UI for HiDPI displays from a single DPI factor (#66) —
+  dialog and dock minimum sizes, status-bar labels, keypoint-panel
+  indicators, gallery preset controls, the collapsible toolbar, every
+  stylesheet padding/margin/border/font-size value, and the canvas
+  hit-test radius
+
+Bug fixes
+~~~~~~~~~
+
+* Fix a ``ModuleNotFoundError`` crash when selecting the "Auto" toolbar icon
+  size — the handler imported from a stale ``libs.toolBar`` path (#93)
+
+Internal
+~~~~~~~~
+
+* Add ``libs/utils/dpi.py`` as the single source of truth for screen scaling
+  (``get_dpi_scale_factor`` + ``scale_px``); chrome and stylesheets now scale
+  through it instead of recomputing DPI per site
+
 2.3.3 (2026-06-09)
 ------------------
 
