@@ -14,6 +14,11 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, 'scripts'))
 
+import pytest
+
+# Pillow is a maintainer-only dependency for the demo-GIF tooling, not a
+# labelImg++ runtime dependency, so it is absent from CI. Skip rather than fail.
+pytest.importorskip("PIL")
 from PIL import Image
 
 import make_demo_gif

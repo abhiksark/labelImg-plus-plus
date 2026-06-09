@@ -9,6 +9,12 @@ import subprocess
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, 'scripts'))
 
+import pytest
+
+# build_workspace renders the demo images with Pillow, a maintainer-only
+# dependency absent from CI. Skip rather than fail when it isn't installed.
+pytest.importorskip("PIL")
+
 import _demo_setup
 
 
