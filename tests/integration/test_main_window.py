@@ -58,6 +58,21 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.assertEqual(self.win.file_path, self.test_image_path)
         self.assertFalse(self.win.image.isNull())
 
+    def test_change_icon_size_auto_mode_does_not_raise(self):
+        """Selecting 'Auto' icon size must not crash.
+
+        Regression: the auto branch imported calculate_icon_size from the
+        non-existent module path `libs.toolBar` (it lives in
+        `libs.widgets.toolBar`), raising ModuleNotFoundError. sender() is
+        patched to a fake Auto action (data() == 0) and the slot is called
+        directly so any exception propagates.
+        """
+        from unittest.mock import MagicMock, patch
+        fake_action = MagicMock()
+        fake_action.data.return_value = 0  # 0 == Auto
+        with patch.object(self.win, 'sender', return_value=fake_action):
+            self.win.change_icon_size()  # must not raise
+
     def test_apply_theme_without_scroll_area_does_not_raise(self):
         """_apply_theme must not NameError when scroll_area is absent.
 
