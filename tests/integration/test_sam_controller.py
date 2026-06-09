@@ -122,3 +122,15 @@ def test_image_switch_mid_inference_discards_result():
     assert ctrl._gen != 1
     ctrl._on_finished(1, [(0, 0), (1, 1), (2, 2)])   # image A's late result
     assert mw.canvas.committed == []
+
+
+def test_reset_backend_clears_model_and_embedding():
+    # After a settings change the backend is dropped; the cached embedding MUST
+    # be dropped too, else the next click skips set_image and predict() crashes.
+    mw = _FakeMain()
+    ctrl = SamController(mw)
+    ctrl.backend = _FakeBackend()
+    ctrl._embedded_key = "/img/a.jpg"
+    ctrl.reset_backend()
+    assert ctrl.backend is None
+    assert ctrl._embedded_key is None

@@ -62,6 +62,15 @@ class SamController:
             self.mw.status(backend.device_warning)
         return True
 
+    def reset_backend(self):
+        """Drop the loaded model and cached embedding so the next click reloads.
+
+        Both must be cleared together: a fresh backend has no embedding, so
+        leaving a stale _embedded_key would skip set_image and crash predict.
+        """
+        self.backend = None
+        self._embedded_key = None
+
     def on_image_changed(self):
         # Invalidate the cached embedding AND discard any in-flight result, so a
         # segmentation started on the previous image can never commit onto the

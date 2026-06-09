@@ -184,14 +184,19 @@ class Canvas(QWidget):
         self.repaint()
 
     def set_sam_mode(self, value=True):
-        """Enter/leave single-click SAM segmentation mode."""
+        """Enter/leave single-click SAM segmentation mode.
+
+        Mirrors set_polygon_drawing: it does NOT emit drawingPolygon, because that
+        signal drives toggle_drawing_sensitive, which in beginner mode would flip
+        the canvas straight back to EDIT and silently cancel SAM mode.
+        """
         self.mode = self.CREATE_SAM if value else self.EDIT
         self.current = None
-        # Clear any in-progress polygon-draw UI state so a half-drawn polygon
-        # left behind when switching into SAM mode doesn't keep the editMode /
-        # create-polygon actions disabled (toggle_drawing_sensitive).
-        self.drawingPolygon.emit(False)
-        self.update()
+        if value:
+            self.un_highlight()
+            self.de_select_shape()
+        self.prev_point = QPointF()
+        self.repaint()
 
     def commit_polygon(self, points):
         """Build a polygon Shape from image-space (x, y) points and finalise it.
