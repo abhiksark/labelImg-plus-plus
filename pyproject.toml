@@ -32,6 +32,16 @@ dependencies = [
     "lxml",
 ]
 
+[project.optional-dependencies]
+sam = [
+    "torch",
+    "torchvision",
+    "timm",
+    "numpy",
+    "opencv-python-headless",
+    "mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git",
+]
+
 [project.urls]
 Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
 Repository = "https://github.com/abhiksark/labelImg-plus-plus"
