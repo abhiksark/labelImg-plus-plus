@@ -28,7 +28,7 @@ labelImg++
 
     **Version 2.0.0** - First stable release! Install with ``pip install labelImgPlusPlus``
 
-.. image:: resources/demo/demo.gif
+.. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
      :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
      :align: center
 
