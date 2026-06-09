@@ -15,8 +15,8 @@ except ImportError:
     from PyQt4.QtCore import Qt, pyqtSignal, QSize
 
 from libs.utils.styles import Theme, get_expand_button_style
-# Re-exported for back-compat: get_dpi_scale_factor now lives in libs.utils.dpi.
-from libs.utils.dpi import get_dpi_scale_factor
+# get_dpi_scale_factor re-exported for back-compat; it now lives in libs.utils.dpi.
+from libs.utils.dpi import get_dpi_scale_factor, scale_px
 
 
 # Base icon size for toolbar buttons (Feather icons are 24x24)
@@ -61,8 +61,8 @@ class ToolBar(QToolBar):
 
         # Expand/collapse state
         self._expanded = False
-        self._collapsed_width = 85
-        self._expanded_width = 140
+        self._collapsed_width = scale_px(85)
+        self._expanded_width = scale_px(140)
         self._expand_btn = None
 
     def addAction(self, action):

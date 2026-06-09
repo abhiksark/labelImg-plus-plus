@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
+from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
 
 
@@ -14,7 +15,7 @@ class ShortcutsDialog(QDialog):
     def __init__(self, shortcut_config, action_map, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Keyboard Shortcuts')
-        self.setMinimumSize(550, 500)
+        self.setMinimumSize(scale_px(550), scale_px(500))
         self.config = shortcut_config
         self.action_map = action_map  # {action_name: QAction}
         self._pending = dict(shortcut_config.get_all())

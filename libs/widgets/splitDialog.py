@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import (
     QProgressBar, QPushButton, QRadioButton, QSpinBox, QVBoxLayout,
 )
 
+from libs.utils.dpi import scale_px
+
 
 class SplitDialog(QDialog):
     """Dialog for configuring dataset train/val/test split parameters."""
@@ -16,7 +18,7 @@ class SplitDialog(QDialog):
     def __init__(self, parent=None, image_count=0, default_dir=''):
         super().__init__(parent)
         self.setWindowTitle('Split Dataset')
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(scale_px(450))
         self._image_count = image_count
 
         layout = QVBoxLayout()

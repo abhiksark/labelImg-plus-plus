@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import pyqtSignal, Qt
 
 from libs.core.keypoint_config import get_keypoint_color, get_template
+from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors
 
 
@@ -54,7 +55,7 @@ class KeypointPanel(QWidget):
             row.setSpacing(4)
 
             status_label = QLabel('\u25cb')
-            status_label.setFixedWidth(16)
+            status_label.setFixedWidth(scale_px(16))
             status_label.setAlignment(Qt.AlignCenter)
 
             name_btn = QPushButton(name.replace('_', ' ').title())
@@ -64,10 +65,10 @@ class KeypointPanel(QWidget):
                 lambda checked, idx=i: self.keypointClicked.emit(idx))
 
             color_indicator = QLabel()
-            color_indicator.setFixedSize(8, 8)
+            color_indicator.setFixedSize(scale_px(8), scale_px(8))
             color_hex = get_keypoint_color(i, template_name)
             color_indicator.setStyleSheet(
-                'background: %s; border-radius: 4px;' % color_hex)
+                'background: %s; border-radius: %dpx;' % (color_hex, scale_px(4)))
 
             row.addWidget(color_indicator)
             row.addWidget(status_label)

@@ -21,6 +21,7 @@ try:
 except ImportError:
     ElementTree = None
 
+from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_slider_style, get_gallery_controls_style, get_gallery_list_style
 
 
@@ -374,7 +375,7 @@ class GalleryWidget(QWidget):
             }
             for label, size in self.size_presets.items():
                 btn = QPushButton(label)
-                btn.setFixedSize(32, 26)
+                btn.setFixedSize(scale_px(32), scale_px(26))
                 btn.setAutoFillBackground(True)  # Required for stylesheet bg
                 btn.clicked.connect(lambda checked, s=size: self._set_preset_size(s))
                 slider_layout.addWidget(btn)
@@ -392,7 +393,7 @@ class GalleryWidget(QWidget):
 
             # Size value display
             self.size_value_label = QLabel(f"{self._icon_size}px")
-            self.size_value_label.setMinimumWidth(50)
+            self.size_value_label.setMinimumWidth(scale_px(50))
             slider_layout.addWidget(self.size_value_label)
 
             layout.addWidget(self._slider_frame)
