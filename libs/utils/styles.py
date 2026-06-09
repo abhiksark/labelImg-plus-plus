@@ -3,6 +3,8 @@
 
 from enum import Enum
 
+from libs.utils.dpi import scale_px
+
 
 class Theme(Enum):
     """Available application themes."""
@@ -108,24 +110,24 @@ def get_toolbar_style(theme: Theme) -> str:
 QToolBar {{
     background: {c['surface']};
     border: none;
-    border-right: 1px solid {c['border']};
-    spacing: 2px;
-    padding: 4px;
+    border-right: {scale_px(1)}px solid {c['border']};
+    spacing: {scale_px(2)}px;
+    padding: {scale_px(4)}px;
 }}
 
 QToolBar::separator {{
     background: {c['border']};
-    width: 1px;
-    height: 20px;
-    margin: 6px 4px;
+    width: {scale_px(1)}px;
+    height: {scale_px(20)}px;
+    margin: {scale_px(6)}px {scale_px(4)}px;
 }}
 
 QToolButton {{
     background: transparent;
     border: none;
-    border-radius: 4px;
-    padding: 4px;
-    margin: 1px;
+    border-radius: {scale_px(4)}px;
+    padding: {scale_px(4)}px;
+    margin: {scale_px(1)}px;
     color: {c['text']};
 }}
 
@@ -167,18 +169,18 @@ QDockWidget {{
 
 QDockWidget::title {{
     background: {c['surface']};
-    padding: 6px;
-    border-bottom: 1px solid {c['border']};
+    padding: {scale_px(6)}px;
+    border-bottom: {scale_px(1)}px solid {c['border']};
 }}
 
 QListWidget {{
     background: {c['background']};
-    border: 1px solid {c['border']};
+    border: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
 }}
 
 QListWidget::item {{
-    padding: 4px;
+    padding: {scale_px(4)}px;
 }}
 
 QListWidget::item:selected {{
@@ -192,15 +194,15 @@ QListWidget::item:hover {{
 
 QScrollBar:vertical {{
     background: {c['surface']};
-    width: 12px;
+    width: {scale_px(12)}px;
     border: none;
 }}
 
 QScrollBar::handle:vertical {{
     background: {c['border']};
-    border-radius: 4px;
-    min-height: 20px;
-    margin: 2px;
+    border-radius: {scale_px(4)}px;
+    min-height: {scale_px(20)}px;
+    margin: {scale_px(2)}px;
 }}
 
 QScrollBar::handle:vertical:hover {{
@@ -208,20 +210,20 @@ QScrollBar::handle:vertical:hover {{
 }}
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0px;
+    height: {scale_px(0)}px;
 }}
 
 QScrollBar:horizontal {{
     background: {c['surface']};
-    height: 12px;
+    height: {scale_px(12)}px;
     border: none;
 }}
 
 QScrollBar::handle:horizontal {{
     background: {c['border']};
-    border-radius: 4px;
-    min-width: 20px;
-    margin: 2px;
+    border-radius: {scale_px(4)}px;
+    min-width: {scale_px(20)}px;
+    margin: {scale_px(2)}px;
 }}
 
 QScrollBar::handle:horizontal:hover {{
@@ -229,19 +231,19 @@ QScrollBar::handle:horizontal:hover {{
 }}
 
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-    width: 0px;
+    width: {scale_px(0)}px;
 }}
 
 QMenu {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
+    border: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
-    padding: 4px;
+    padding: {scale_px(4)}px;
 }}
 
 QMenu::item {{
-    padding: 6px 20px;
-    border-radius: 4px;
+    padding: {scale_px(6)}px {scale_px(20)}px;
+    border-radius: {scale_px(4)}px;
 }}
 
 QMenu::item:selected {{
@@ -250,19 +252,19 @@ QMenu::item:selected {{
 }}
 
 QMenu::separator {{
-    height: 1px;
+    height: {scale_px(1)}px;
     background: {c['border']};
-    margin: 4px 8px;
+    margin: {scale_px(4)}px {scale_px(8)}px;
 }}
 
 QMenuBar {{
     background: {c['surface']};
     color: {c['text']};
-    border-bottom: 1px solid {c['border']};
+    border-bottom: {scale_px(1)}px solid {c['border']};
 }}
 
 QMenuBar::item {{
-    padding: 6px 10px;
+    padding: {scale_px(6)}px {scale_px(10)}px;
 }}
 
 QMenuBar::item:selected {{
@@ -271,9 +273,9 @@ QMenuBar::item:selected {{
 
 QComboBox {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
-    border-radius: 4px;
-    padding: 4px 8px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
+    padding: {scale_px(4)}px {scale_px(8)}px;
     color: {c['text']};
 }}
 
@@ -283,12 +285,12 @@ QComboBox:hover {{
 
 QComboBox::drop-down {{
     border: none;
-    padding-right: 8px;
+    padding-right: {scale_px(8)}px;
 }}
 
 QComboBox QAbstractItemView {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
+    border: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
     selection-background-color: {c['accent_light']};
     selection-color: {c['accent_text']};
@@ -296,9 +298,9 @@ QComboBox QAbstractItemView {{
 
 QLineEdit {{
     background: {c['background']};
-    border: 1px solid {c['border']};
-    border-radius: 4px;
-    padding: 4px 8px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
+    padding: {scale_px(4)}px {scale_px(8)}px;
     color: {c['text']};
 }}
 
@@ -308,9 +310,9 @@ QLineEdit:focus {{
 
 QPushButton {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
-    border-radius: 4px;
-    padding: 6px 16px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
+    padding: {scale_px(6)}px {scale_px(16)}px;
     color: {c['text']};
 }}
 
@@ -331,10 +333,10 @@ QCheckBox {{
 }}
 
 QCheckBox::indicator {{
-    width: 16px;
-    height: 16px;
-    border: 1px solid {c['border']};
-    border-radius: 3px;
+    width: {scale_px(16)}px;
+    height: {scale_px(16)}px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(3)}px;
     background: {c['background']};
 }}
 
@@ -349,27 +351,27 @@ QLabel {{
 
 QGroupBox {{
     color: {c['text']};
-    border: 1px solid {c['border']};
-    border-radius: 4px;
-    margin-top: 8px;
-    padding-top: 8px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
+    margin-top: {scale_px(8)}px;
+    padding-top: {scale_px(8)}px;
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 5px;
+    left: {scale_px(10)}px;
+    padding: 0 {scale_px(5)}px;
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {c['border']};
+    border: {scale_px(1)}px solid {c['border']};
     background: {c['background']};
 }}
 
 QTabBar::tab {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
-    padding: 8px 16px;
+    border: {scale_px(1)}px solid {c['border']};
+    padding: {scale_px(8)}px {scale_px(16)}px;
     color: {c['text']};
 }}
 
@@ -383,8 +385,8 @@ QTabBar::tab:hover:!selected {{
 }}
 
 QProgressBar {{
-    border: 1px solid {c['border']};
-    border-radius: 4px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
     background: {c['surface']};
     text-align: center;
     color: {c['text']};
@@ -392,12 +394,12 @@ QProgressBar {{
 
 QProgressBar::chunk {{
     background: {c['accent']};
-    border-radius: 3px;
+    border-radius: {scale_px(3)}px;
 }}
 
 QTableWidget {{
     background: {c['background']};
-    border: 1px solid {c['border']};
+    border: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
     gridline-color: {c['border']};
 }}
@@ -410,9 +412,9 @@ QTableWidget::item:selected {{
 QHeaderView::section {{
     background: {c['surface']};
     border: none;
-    border-right: 1px solid {c['border']};
-    border-bottom: 1px solid {c['border']};
-    padding: 6px;
+    border-right: {scale_px(1)}px solid {c['border']};
+    border-bottom: {scale_px(1)}px solid {c['border']};
+    padding: {scale_px(6)}px;
     color: {c['text']};
 }}
 
@@ -428,17 +430,17 @@ QMessageBox {{
 
 QSpinBox, QDoubleSpinBox {{
     background: {c['background']};
-    border: 1px solid {c['border']};
-    border-radius: 4px;
-    padding: 4px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
+    padding: {scale_px(4)}px;
     color: {c['text']};
 }}
 
 QToolTip {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
+    border: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
-    padding: 4px;
+    padding: {scale_px(4)}px;
 }}
 """
 
@@ -449,7 +451,7 @@ def get_status_bar_style(theme: Theme) -> str:
     return f"""
 QStatusBar {{
     background: {c['surface']};
-    border-top: 1px solid {c['border']};
+    border-top: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
 }}
 
@@ -469,23 +471,23 @@ def get_slider_style(theme: Theme) -> str:
     c = _get_colors(theme)
     return f"""
 QSlider::groove:horizontal {{
-    height: 6px;
+    height: {scale_px(6)}px;
     background: {c['border']};
-    border-radius: 3px;
+    border-radius: {scale_px(3)}px;
 }}
 QSlider::handle:horizontal {{
     background: {c['accent']};
-    width: 16px;
-    height: 16px;
-    margin: -5px 0;
-    border-radius: 8px;
+    width: {scale_px(16)}px;
+    height: {scale_px(16)}px;
+    margin: -{scale_px(5)}px 0;
+    border-radius: {scale_px(8)}px;
 }}
 QSlider::handle:horizontal:hover {{
     background: {c['accent_text']};
 }}
 QSlider::sub-page:horizontal {{
     background: {c['accent']};
-    border-radius: 3px;
+    border-radius: {scale_px(3)}px;
 }}
 """
 
@@ -494,13 +496,13 @@ def get_gallery_controls_style(theme: Theme) -> str:
     """Generate gallery slider frame and button styles."""
     c = _get_colors(theme)
     return {
-        'frame': f"QFrame {{ background-color: {c['surface']}; border-bottom: 1px solid {c['border']}; }}",
+        'frame': f"QFrame {{ background-color: {c['surface']}; border-bottom: {scale_px(1)}px solid {c['border']}; }}",
         'button': f"""QPushButton {{
             background-color: {c['background']};
-            border: 1px solid {c['border']};
-            border-radius: 4px;
+            border: {scale_px(1)}px solid {c['border']};
+            border-radius: {scale_px(4)}px;
             font-weight: bold;
-            font-size: 11px;
+            font-size: {scale_px(11)}px;
             color: {c['text']};
         }}
         QPushButton:hover {{
@@ -520,11 +522,11 @@ def get_expand_button_style(theme: Theme) -> str:
 QToolButton {{
     border: none;
     background: transparent;
-    padding: 4px;
+    padding: {scale_px(4)}px;
 }}
 QToolButton:hover {{
     background: {c['hover']};
-    border-radius: 4px;
+    border-radius: {scale_px(4)}px;
 }}
 """
 
@@ -534,7 +536,7 @@ def get_label_dialog_style(theme: Theme) -> str:
     c = _get_colors(theme)
     return {
         'filter_label': f"color: {c['text_secondary']};",
-        'count_label': f"color: {c['text_secondary']}; font-size: 11px;",
+        'count_label': f"color: {c['text_secondary']}; font-size: {scale_px(11)}px;",
     }
 
 
@@ -549,7 +551,7 @@ QListWidget {{
 }}
 QListWidget::item {{
     color: {c['text']};
-    padding: 4px;
+    padding: {scale_px(4)}px;
 }}
 QListWidget::item:selected {{
     background: {c['accent_light']};
