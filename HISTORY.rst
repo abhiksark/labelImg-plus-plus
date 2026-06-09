@@ -1,6 +1,20 @@
 History
 =======
 
+2.4.1 (2026-06-09)
+------------------
+
+Documentation and discoverability release. Adds an animated demo to the README
+and improves how the project is found and presented. No functional changes —
+the application behaves identically to 2.4.0.
+
+Documentation
+~~~~~~~~~~~~~
+
+* Add an animated demo GIF to the README showcasing the core workflow —
+  gallery mode, bounding boxes, dark theme, polygons, face keypoints, and save
+* Refresh project metadata for discoverability (description, topics, homepage)
+
 2.4.0 (2026-06-09)
 ------------------
 
