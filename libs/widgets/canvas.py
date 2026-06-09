@@ -43,8 +43,9 @@ class Canvas(QWidget):
     # or resized, with the pre-drag points list, so MainWindow can push a
     # MoveShapeCommand. Polygon edits use polygonVerticesEdited instead.
     shapeMoveFinished = pyqtSignal(object, object)      # (shape, old_points)
+    samClicked = pyqtSignal(QPointF)   # left-click in CREATE_SAM mode (image coords)
 
-    CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE = list(range(4))
+    CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE, CREATE_SAM = list(range(5))
 
     def __init__(self, *args, **kwargs):
         super(Canvas, self).__init__(*args, **kwargs)
@@ -181,6 +182,29 @@ class Canvas(QWidget):
             self.de_select_shape()
         self.prev_point = QPointF()
         self.repaint()
+
+    def set_sam_mode(self, value=True):
+        """Enter/leave single-click SAM segmentation mode."""
+        self.mode = self.CREATE_SAM if value else self.EDIT
+        self.current = None
+        # Clear any in-progress polygon-draw UI state so a half-drawn polygon
+        # left behind when switching into SAM mode doesn't keep the editMode /
+        # create-polygon actions disabled (toggle_drawing_sensitive).
+        self.drawingPolygon.emit(False)
+        self.update()
+
+    def commit_polygon(self, points):
+        """Build a polygon Shape from image-space (x, y) points and finalise it.
+
+        Routes through the same newShape pipeline as hand-drawn polygons, so the
+        label dialog and CreateShapeCommand (undo) apply identically.
+        """
+        if not points or len(points) < 3:
+            return
+        self.current = Shape(shape_type=ShapeType.POLYGON)
+        for x, y in points:
+            self.current.add_point(QPointF(float(x), float(y)))
+        self.finalise()
 
     def set_keypoint_mode(self, shape, template_name='person'):
         """Enter keypoint placement mode for the given shape."""
@@ -510,6 +534,10 @@ class Canvas(QWidget):
             return
 
         if ev.button() == Qt.LeftButton:
+            if self.mode == self.CREATE_SAM:
+                if not self.out_of_pixmap(pos):
+                    self.samClicked.emit(pos)
+                return
             if self.drawing():
                 if self.mode == self.CREATE_POLYGON and ev.modifiers() & Qt.ShiftModifier:
                     # Start freehand drawing
