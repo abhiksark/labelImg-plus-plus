@@ -3257,7 +3257,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
             if size == 0:
                 # Auto mode - recalculate from DPI
-                from libs.toolBar import calculate_icon_size
+                from libs.widgets.toolBar import calculate_icon_size
                 size = calculate_icon_size()
 
             # Update toolbar icon size
