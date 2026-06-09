@@ -95,6 +95,7 @@ from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
     generate_color_by_text, have_qstring, natural_sort
 )
+from libs.utils.dpi import scale_px
 from libs.utils.stringBundle import StringBundle
 from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
@@ -507,10 +508,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
 
         # Set minimum sizes for better resize UX
-        self.dock.setMinimumHeight(100)
-        self.file_dock.setMinimumHeight(100)
-        self.dock.setMinimumWidth(200)
-        self.file_dock.setMinimumWidth(200)
+        self.dock.setMinimumHeight(scale_px(100))
+        self.file_dock.setMinimumHeight(scale_px(100))
+        self.dock.setMinimumWidth(scale_px(200))
+        self.file_dock.setMinimumWidth(scale_px(200))
 
         # Features toggled by advanced mode (closable/floatable for labels dock)
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
@@ -1069,17 +1070,17 @@ class MainWindow(QMainWindow, WindowMixin):
         # Status bar permanent widgets (left to right)
         # Image counter
         self.label_image_count = QLabel('Image: 0 / 0')
-        self.label_image_count.setMinimumWidth(100)
+        self.label_image_count.setMinimumWidth(scale_px(100))
         self.statusBar().addPermanentWidget(self.label_image_count)
 
         # Annotation count
         self.label_box_count = QLabel('Boxes: 0')
-        self.label_box_count.setMinimumWidth(70)
+        self.label_box_count.setMinimumWidth(scale_px(70))
         self.statusBar().addPermanentWidget(self.label_box_count)
 
         # Zoom level
         self.label_zoom = QLabel('Zoom: 100%')
-        self.label_zoom.setMinimumWidth(80)
+        self.label_zoom.setMinimumWidth(scale_px(80))
         self.statusBar().addPermanentWidget(self.label_zoom)
 
         # Save status indicator
@@ -1220,8 +1221,8 @@ class MainWindow(QMainWindow, WindowMixin):
         # Stats panel (side)
         self.gallery_stats = StatsWidget()
         self.gallery_stats.refresh_btn.clicked.connect(self._refresh_all_statistics)
-        self.gallery_stats.setMaximumWidth(300)
-        self.gallery_stats.setMinimumWidth(250)
+        self.gallery_stats.setMaximumWidth(scale_px(300))
+        self.gallery_stats.setMinimumWidth(scale_px(250))
         layout.addWidget(self.gallery_stats, stretch=1)
 
         self.gallery_window.setCentralWidget(central_widget)
