@@ -5,16 +5,18 @@ try:
     from PyQt5.QtCore import Qt, pyqtSignal, QSize
     from PyQt5.QtWidgets import (
         QToolBar, QToolButton, QWidgetAction, QWidget,
-        QMenu, QSizePolicy, QApplication
+        QMenu, QSizePolicy
     )
 except ImportError:
     from PyQt4.QtGui import (
         QToolBar, QToolButton, QWidgetAction, QWidget,
-        QMenu, QSizePolicy, QApplication
+        QMenu, QSizePolicy
     )
     from PyQt4.QtCore import Qt, pyqtSignal, QSize
 
 from libs.utils.styles import Theme, get_expand_button_style
+# Re-exported for back-compat: get_dpi_scale_factor now lives in libs.utils.dpi.
+from libs.utils.dpi import get_dpi_scale_factor
 
 
 # Base icon size for toolbar buttons (Feather icons are 24x24)
@@ -22,31 +24,6 @@ BASE_ICON_SIZE = 22
 # Minimum and maximum icon sizes for scaling
 MIN_ICON_SIZE = 16
 MAX_ICON_SIZE = 48
-
-
-def get_dpi_scale_factor():
-    """Get the DPI scale factor for the primary screen.
-
-    Returns:
-        float: Scale factor (1.0 for standard 96 DPI, higher for HiDPI displays)
-    """
-    app = QApplication.instance()
-    if app is None:
-        return 1.0
-
-    # Try to get the primary screen
-    try:
-        screen = app.primaryScreen()
-        if screen:
-            # Get logical DPI (accounts for user scaling settings)
-            logical_dpi = screen.logicalDotsPerInch()
-            # Standard DPI is 96 on most systems
-            return logical_dpi / 96.0
-    except AttributeError:
-        # Qt4 fallback
-        pass
-
-    return 1.0
 
 
 def calculate_icon_size(base_size=BASE_ICON_SIZE):
