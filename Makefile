@@ -23,6 +23,9 @@ qt4py3:
 qt5py3:
 	pyrcc5 -o libs/resources.py resources.qrc
 
+demo-gif:
+	QT_QPA_PLATFORM=offscreen python3 scripts/make_demo_gif.py
+
 clean:
 	rm -rf ~/.labelImgSettings.json ~/.labelImgSettings.pkl *.pyc dist labelImg.egg-info __pycache__ build
 
@@ -32,4 +35,4 @@ pip_upload:
 long_description:
 	restview --long-description
 
-.PHONY: all
+.PHONY: all demo-gif
