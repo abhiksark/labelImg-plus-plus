@@ -5,7 +5,8 @@ and SHA256-verified.
 
 No new runtime dependency (stdlib urllib + hashlib). SHA256 pinning protects
 the integrity of the downloaded artifacts. (Legacy single-checkpoint helpers
-below are removed once all consumers use resolve_models.)
+below will be removed in a later cleanup once all consumers migrate to
+resolve_models.)
 """
 
 import hashlib
@@ -109,6 +110,8 @@ def default_model_paths():
 
 
 def _resolve_one(url, dest, expected_sha, progress):
+    # An empty pin disables verification (mirrors _download's contract); the
+    # shipped ONNX pins are always filled — see test_onnx_pins_are_filled.
     if os.path.isfile(dest) and (
             not expected_sha or _sha256(dest) == expected_sha):
         return dest
@@ -128,7 +131,8 @@ def resolve_models(settings, progress=None):
     if encoder or decoder:
         if not (encoder and decoder):
             raise ValueError(
-                "both encoder and decoder paths are required for a custom model")
+                "both encoder and decoder paths are required"
+                " for a custom model")
         for path in (encoder, decoder):
             if not os.path.isfile(path):
                 raise ValueError("SAM model file not found: %s" % path)

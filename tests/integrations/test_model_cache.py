@@ -176,3 +176,28 @@ def test_resolve_models_refetches_stale_artifact(tmp_path, monkeypatch):
 def test_onnx_pins_are_filled():
     assert len(model_cache.MOBILE_SAM_ENCODER_SHA256) == 64
     assert len(model_cache.MOBILE_SAM_DECODER_SHA256) == 64
+
+
+def test_resolve_one_empty_pin_reuses_cache_without_download(tmp_path,
+                                                              monkeypatch):
+    dest = tmp_path / "mobile_sam.encoder.onnx"
+    dest.write_bytes(b"cached")
+    called = {"download": False}
+    monkeypatch.setattr(model_cache, "_download",
+                        lambda *a, **k: called.__setitem__("download", True))
+    assert model_cache._resolve_one("http://x", str(dest), "", None) == str(dest)
+    assert called["download"] is False
+
+
+def test_resolve_models_forwards_progress_to_download(tmp_path, monkeypatch):
+    enc = tmp_path / "mobile_sam.encoder.onnx"     # neither file exists yet
+    dec = tmp_path / "mobile_sam.decoder.onnx"
+    monkeypatch.setattr(model_cache, "default_model_paths",
+                        lambda: (str(enc), str(dec)))
+    seen = []
+    monkeypatch.setattr(
+        model_cache, "_download",
+        lambda url, dest, sha, progress: seen.append(progress) or dest)
+    sentinel = object()
+    model_cache.resolve_models(_Settings(), progress=sentinel)
+    assert seen == [sentinel, sentinel]
