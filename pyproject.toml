@@ -34,12 +34,9 @@ dependencies = [
 
 [project.optional-dependencies]
 sam = [
-    "torch",
-    "torchvision",
-    "timm",
+    "onnxruntime",
     "numpy",
     "opencv-python-headless",
-    "mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git",
 ]
 
 [project.urls]
