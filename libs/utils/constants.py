@@ -32,3 +32,6 @@ SETTING_GRID_SIZE = 'gridSize'
 SETTING_EDGE_ALIGNMENT = 'edgeAlignment'
 SETTING_SHORTCUTS = 'shortcuts'
 DEFAULT_ENCODING = 'utf-8'
+# SAM-assisted polygon settings
+SETTING_SAM_ENCODER = 'sam/encoderPath'     # encoder .onnx; '' = bundled default
+SETTING_SAM_DECODER = 'sam/decoderPath'     # decoder .onnx; '' = bundled default

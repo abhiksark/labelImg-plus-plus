@@ -1,6 +1,16 @@
 History
 =======
 
+Unreleased
+----------
+
+SAM-assisted polygon segmentation (optional). Adds a single-click "SAM Segment"
+mode: click an object and a polygon annotation is traced from a Segment-Anything
+mask. Ships as an optional extra (``pip install labelimgplusplus[sam]``) that
+runs MobileSAM on ONNX Runtime — a ~70 MB, CPU-friendly install with no PyTorch
+dependency. The core install is unchanged and the feature degrades to a
+disabled, hinted action when the extra is absent.
+
 2.4.1 (2026-06-09)
 ------------------
 

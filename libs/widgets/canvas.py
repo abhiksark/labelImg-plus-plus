@@ -15,40 +15,8 @@ import math
 
 from libs.core.shape import Shape, ShapeType
 from libs.utils.dpi import scale_px
-from libs.utils.utils import distance
+from libs.utils.utils import distance, douglas_peucker
 from libs.utils.styles import Theme
-
-
-def _perpendicular_distance(point, line_start, line_end):
-    """Calculate perpendicular distance from point to line segment."""
-    dx = line_end.x() - line_start.x()
-    dy = line_end.y() - line_start.y()
-    length_sq = dx * dx + dy * dy
-    if length_sq == 0:
-        return math.hypot(point.x() - line_start.x(), point.y() - line_start.y())
-    t = max(0, min(1, ((point.x() - line_start.x()) * dx +
-                        (point.y() - line_start.y()) * dy) / length_sq))
-    proj_x = line_start.x() + t * dx
-    proj_y = line_start.y() + t * dy
-    return math.hypot(point.x() - proj_x, point.y() - proj_y)
-
-
-def douglas_peucker(points, epsilon):
-    """Simplify a polyline using Douglas-Peucker algorithm."""
-    if len(points) <= 2:
-        return points
-    max_dist = 0
-    max_index = 0
-    for i in range(1, len(points) - 1):
-        d = _perpendicular_distance(points[i], points[0], points[-1])
-        if d > max_dist:
-            max_dist = d
-            max_index = i
-    if max_dist > epsilon:
-        left = douglas_peucker(points[:max_index + 1], epsilon)
-        right = douglas_peucker(points[max_index:], epsilon)
-        return left[:-1] + right
-    return [points[0], points[-1]]
 
 CURSOR_DEFAULT = Qt.ArrowCursor
 CURSOR_POINT = Qt.PointingHandCursor
@@ -75,8 +43,9 @@ class Canvas(QWidget):
     # or resized, with the pre-drag points list, so MainWindow can push a
     # MoveShapeCommand. Polygon edits use polygonVerticesEdited instead.
     shapeMoveFinished = pyqtSignal(object, object)      # (shape, old_points)
+    samClicked = pyqtSignal(QPointF)   # left-click in CREATE_SAM mode (image coords)
 
-    CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE = list(range(4))
+    CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE, CREATE_SAM = list(range(5))
 
     def __init__(self, *args, **kwargs):
         super(Canvas, self).__init__(*args, **kwargs)
@@ -213,6 +182,34 @@ class Canvas(QWidget):
             self.de_select_shape()
         self.prev_point = QPointF()
         self.repaint()
+
+    def set_sam_mode(self, value=True):
+        """Enter/leave single-click SAM segmentation mode.
+
+        Mirrors set_polygon_drawing: it does NOT emit drawingPolygon, because that
+        signal drives toggle_drawing_sensitive, which in beginner mode would flip
+        the canvas straight back to EDIT and silently cancel SAM mode.
+        """
+        self.mode = self.CREATE_SAM if value else self.EDIT
+        self.current = None
+        if value:
+            self.un_highlight()
+            self.de_select_shape()
+        self.prev_point = QPointF()
+        self.repaint()
+
+    def commit_polygon(self, points):
+        """Build a polygon Shape from image-space (x, y) points and finalise it.
+
+        Routes through the same newShape pipeline as hand-drawn polygons, so the
+        label dialog and CreateShapeCommand (undo) apply identically.
+        """
+        if not points or len(points) < 3:
+            return
+        self.current = Shape(shape_type=ShapeType.POLYGON)
+        for x, y in points:
+            self.current.add_point(QPointF(float(x), float(y)))
+        self.finalise()
 
     def set_keypoint_mode(self, shape, template_name='person'):
         """Enter keypoint placement mode for the given shape."""
@@ -542,6 +539,10 @@ class Canvas(QWidget):
             return
 
         if ev.button() == Qt.LeftButton:
+            if self.mode == self.CREATE_SAM:
+                if not self.out_of_pixmap(pos):
+                    self.samClicked.emit(pos)
+                return
             if self.drawing():
                 if self.mode == self.CREATE_POLYGON and ev.modifiers() & Qt.ShiftModifier:
                     # Start freehand drawing

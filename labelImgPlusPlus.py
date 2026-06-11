@@ -67,6 +67,8 @@ from libs.core.commands import (
     EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
 )
 from libs.core.shortcut_config import ShortcutConfig
+from libs.core.sam_controller import SamController
+from libs.integrations import segmentation
 
 # Formats
 from libs.formats.labelFile import LabelFile, LabelFileError, LabelFileFormat
@@ -89,7 +91,8 @@ from libs.utils.constants import (
     SETTING_SINGLE_CLASS,
     SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE, SETTING_WIN_SIZE,
     SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
-    FORMAT_COCO, FORMAT_YOLO_SEG
+    FORMAT_COCO, FORMAT_YOLO_SEG,
+    SETTING_SAM_ENCODER, SETTING_SAM_DECODER,
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -483,6 +486,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.scrollRequest.connect(self.scroll_request)
 
         self.canvas.newShape.connect(self.new_shape)
+        self.sam_controller = SamController(self)
+        self.canvas.samClicked.connect(self.sam_controller.segment_at)
+        self._sam_available = segmentation.sam_available()
         self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.polygonVerticesEdited.connect(
@@ -583,6 +589,17 @@ class MainWindow(QMainWindow, WindowMixin):
             'verify',
             get_str('addKeypointsDetail'),
             enabled=False)
+        sam_mode_action = action(
+            'SAM Segment',
+            self.toggle_sam_mode,
+            self.shortcut_config.get('sam_mode'),
+            'objects',
+            'Click an object to auto-generate a polygon '
+            '(requires: pip install labelimgplusplus[sam])',
+            enabled=False)
+        sam_settings_action = action(
+            'SAM Settings…', self.open_sam_settings, None, 'edit',
+            'Configure the SAM checkpoint, model type, and device')
         delete = action(get_str('delBox'), self.delete_selected_shape,
                         self.shortcut_config.get('delete'), 'delete', get_str('delBoxDetail'), enabled=False)
         copy = action(get_str('dupBox'), self.copy_selected_shape,
@@ -795,6 +812,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, create_polygon=create_polygon,
                               keypoint_mode=keypoint_mode_action,
+                              sam_mode=sam_mode_action,
                               delete=delete, edit=edit, copy=copy,
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
                               copyAllToClipboard=copy_all_to_clipboard,
@@ -955,7 +973,8 @@ class MainWindow(QMainWindow, WindowMixin):
             get_str('splitDataset'), self.split_dataset,
             None, 'file', get_str('splitDatasetDetail'))
         add_actions(self.menus.tools, (
-            check_labels, batch_verify_action, split_dataset_action))
+            check_labels, batch_verify_action, split_dataset_action,
+            None, sam_mode_action, sam_settings_action))
 
         # Custom context menu for the canvas widget:
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
@@ -980,7 +999,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.actions.beginner = (
             file_dropdown, gallery_mode, None, open_next_image, open_prev_image, verify, save, save_format, None,
-            create, create_polygon, keypoint_mode_action, copy, delete, None,
+            create, create_polygon, keypoint_mode_action, sam_mode_action, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
             brightness_dropdown)
 
@@ -1299,6 +1318,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Enable copy all if there are shapes
         if value and self.canvas.shapes:
             self.actions.copyAllToClipboard.setEnabled(True)
+        if hasattr(self, 'actions') and hasattr(self.actions, 'sam_mode'):
+            self.actions.sam_mode.setEnabled(
+                bool(value) and getattr(self, '_sam_available', False))
 
     def queue_event(self, function):
         QTimer.singleShot(0, function)
@@ -1463,6 +1485,40 @@ class MainWindow(QMainWindow, WindowMixin):
         self.keypoint_panel.set_keypoints(shape.keypoints)
         self.keypoint_panel.set_current_index(self.canvas._keypoint_index)
         self.keypoint_panel.show()
+
+    def toggle_sam_mode(self):
+        """Enter/leave single-click SAM segmentation mode."""
+        if not segmentation.sam_available():
+            QMessageBox.warning(
+                self, "SAM unavailable",
+                "Install with: pip install labelimgplusplus[sam]")
+            return
+        if self.canvas.mode == self.canvas.CREATE_SAM:
+            self.canvas.set_editing(True)
+            return
+        self.canvas.set_sam_mode(True)
+        # set_sam_mode does not emit drawingPolygon, so re-enable the mode-switch
+        # actions here (mirroring create_polygon_mode) so the user can leave SAM.
+        self.actions.create.setEnabled(True)
+        self.actions.create_polygon.setEnabled(True)
+        self.actions.editMode.setEnabled(True)
+
+    def open_sam_settings(self):
+        """Open the SAM configuration dialog."""
+        from libs.widgets.sam_settings_dialog import SamSettingsDialog
+        dialog = SamSettingsDialog(
+            encoder_path=self.settings.get(SETTING_SAM_ENCODER, ""),
+            decoder_path=self.settings.get(SETTING_SAM_DECODER, ""),
+            parent=self)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+        if dialog.exec_():
+            values = dialog.values()
+            self.settings[SETTING_SAM_ENCODER] = values["encoder"]
+            self.settings[SETTING_SAM_DECODER] = values["decoder"]
+            self.settings.save()
+            if hasattr(self, 'sam_controller'):
+                self.sam_controller.reset_backend()    # reload model on next use
 
     def _on_keypoint_panel_click(self, index):
         """Handle click on a keypoint row in the panel."""
@@ -2283,6 +2339,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
+            if hasattr(self, 'sam_controller'):
+                self.sam_controller.on_image_changed()
             self.file_path = unicode_file_path
             self.canvas.load_pixmap(QPixmap.fromImage(image))
             if self.label_file:

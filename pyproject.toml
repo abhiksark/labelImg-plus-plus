@@ -32,6 +32,13 @@ dependencies = [
     "lxml",
 ]
 
+[project.optional-dependencies]
+sam = [
+    "onnxruntime",
+    "numpy",
+    "opencv-python-headless",
+]
+
 [project.urls]
 Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
 Repository = "https://github.com/abhiksark/labelImg-plus-plus"
