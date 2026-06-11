@@ -9,18 +9,26 @@ app = QApplication.instance() or QApplication([])
 
 
 def test_values_reflect_initial_settings():
-    dlg = SamSettingsDialog(checkpoint="/m.pt", model_type="vit_h", device="cuda")
-    assert dlg.values() == {
-        "checkpoint": "/m.pt", "model_type": "vit_h", "device": "cuda"}
+    dlg = SamSettingsDialog(encoder_path="/e.onnx", decoder_path="/d.onnx")
+    assert dlg.values() == {"encoder": "/e.onnx", "decoder": "/d.onnx"}
 
 
-def test_unknown_model_type_falls_back_without_crashing():
-    dlg = SamSettingsDialog(model_type="nonsense", device="weird")
-    vals = dlg.values()
-    assert vals["model_type"] in SamSettingsDialog.MODEL_TYPES
-    assert vals["device"] in SamSettingsDialog.DEVICES
+def test_defaults_are_empty():
+    assert SamSettingsDialog().values() == {"encoder": "", "decoder": ""}
+
+
+def test_values_are_stripped():
+    dlg = SamSettingsDialog(encoder_path="  /e.onnx ", decoder_path=" ")
+    assert dlg.values() == {"encoder": "/e.onnx", "decoder": ""}
+
+
+def test_model_type_and_device_fields_are_gone():
+    dlg = SamSettingsDialog()
+    assert not hasattr(dlg, "_model_type")
+    assert not hasattr(dlg, "_device")
+    assert not hasattr(SamSettingsDialog, "MODEL_TYPES")
+    assert not hasattr(SamSettingsDialog, "DEVICES")
 
 
 def test_apply_theme_runs():
-    dlg = SamSettingsDialog()
-    dlg.apply_theme(Theme.DARK)        # must not raise
+    SamSettingsDialog().apply_theme(Theme.DARK)     # must not raise

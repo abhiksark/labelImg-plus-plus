@@ -1,25 +1,32 @@
 # libs/integrations/model_cache.py
-"""Resolve the SAM checkpoint path: explicit settings path wins, otherwise
-download a self-hosted MobileSAM weight on first use and SHA256-verify it.
+"""Resolve the SAM ONNX model pair: explicit settings paths win, otherwise
+self-hosted MobileSAM encoder/decoder artifacts are downloaded on first use
+and SHA256-verified.
 
-No new runtime dependency (stdlib urllib + hashlib). SHA256 pinning is the
-primary code-execution-risk mitigation for the pickle a checkpoint contains.
+No new runtime dependency (stdlib urllib + hashlib). SHA256 pinning protects
+the integrity of the downloaded artifacts.
 """
 
 import hashlib
 import os
 import urllib.request
 
-from libs.utils.constants import SETTING_SAM_CHECKPOINT
+from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
-# Self-hosted GitHub Release asset. Fill MOBILE_SAM_SHA256 after uploading the
-# asset:  sha256sum mobile_sam.pt
-MOBILE_SAM_URL = (
+# ONNX encoder/decoder pair hosted as GitHub Release assets (tag sam-onnx-v1).
+# Exported from the official mobile_sam.pt by scripts/export_sam_onnx.py.
+MOBILE_SAM_ENCODER_URL = (
     "https://github.com/abhiksark/labelImg-plus-plus/releases/download/"
-    "sam-weights-v1/mobile_sam.pt"
+    "sam-onnx-v1/mobile_sam.encoder.onnx"
 )
-# REQUIRED: paste the asset's sha256 here before release (left empty until then)
-MOBILE_SAM_SHA256 = ""
+MOBILE_SAM_ENCODER_SHA256 = (
+    "801d81952ee19217632966f7cfe07a8030c115a7fe5bfbec9294bfaf95e44a45")
+MOBILE_SAM_DECODER_URL = (
+    "https://github.com/abhiksark/labelImg-plus-plus/releases/download/"
+    "sam-onnx-v1/mobile_sam.decoder.onnx"
+)
+MOBILE_SAM_DECODER_SHA256 = (
+    "001f6386a4c6036f6fac6a104d18d7c008c7eb188b2936dab749e34cae33e1c8")
 _CHUNK = 1 << 20
 
 
@@ -29,10 +36,6 @@ def _cache_dir():
     path = os.path.join(base, "labelimgpp")
     os.makedirs(path, exist_ok=True)
     return path
-
-
-def default_checkpoint_path():
-    return os.path.join(_cache_dir(), "mobile_sam.pt")
 
 
 def _sha256(path):
@@ -58,7 +61,7 @@ def _download(url, dest, expected_sha, progress):
                 if progress:
                     progress(read, total)
         if expected_sha and _sha256(tmp) != expected_sha:
-            raise ValueError("SAM checkpoint SHA256 mismatch; download discarded")
+            raise ValueError("SAM model SHA256 mismatch; download discarded")
         os.replace(tmp, dest)
         return dest
     except BaseException:
@@ -67,18 +70,44 @@ def _download(url, dest, expected_sha, progress):
         raise
 
 
-def resolve_checkpoint(settings, progress=None):
-    """Return a local checkpoint path, downloading the default if needed.
+def default_model_paths():
+    cache = _cache_dir()
+    return (os.path.join(cache, "mobile_sam.encoder.onnx"),
+            os.path.join(cache, "mobile_sam.decoder.onnx"))
 
-    An explicit user-set path is trusted as-is. The auto-downloaded default is
-    re-verified against MOBILE_SAM_SHA256 on every use, so a file cached while
-    the pin was still empty gets re-fetched once the real digest is in place.
-    """
-    path = settings.get(SETTING_SAM_CHECKPOINT, "")
-    if path and os.path.isfile(path):
-        return path
-    dest = default_checkpoint_path()
+
+def _resolve_one(url, dest, expected_sha, progress):
+    # An empty pin disables verification (mirrors _download's contract); the
+    # shipped ONNX pins are always filled — see test_onnx_pins_are_filled.
     if os.path.isfile(dest) and (
-            not MOBILE_SAM_SHA256 or _sha256(dest) == MOBILE_SAM_SHA256):
+            not expected_sha or _sha256(dest) == expected_sha):
         return dest
-    return _download(MOBILE_SAM_URL, dest, MOBILE_SAM_SHA256, progress)
+    return _download(url, dest, expected_sha, progress)
+
+
+def resolve_models(settings, progress=None):
+    """Return (encoder_path, decoder_path), downloading defaults if needed.
+
+    Explicit user-set paths are trusted as-is but must come as a pair: a
+    custom encoder produces embeddings the default decoder cannot read, so a
+    half-set pair is an error rather than a silent mismatch. Auto-downloaded
+    defaults are re-verified against their pins on every use.
+    """
+    encoder = settings.get(SETTING_SAM_ENCODER, "")
+    decoder = settings.get(SETTING_SAM_DECODER, "")
+    if encoder or decoder:
+        if not (encoder and decoder):
+            raise ValueError(
+                "both encoder and decoder paths are required"
+                " for a custom model")
+        for path in (encoder, decoder):
+            if not os.path.isfile(path):
+                raise ValueError("SAM model file not found: %s" % path)
+        return encoder, decoder
+    enc_dest, dec_dest = default_model_paths()
+    return (
+        _resolve_one(MOBILE_SAM_ENCODER_URL, enc_dest,
+                     MOBILE_SAM_ENCODER_SHA256, progress),
+        _resolve_one(MOBILE_SAM_DECODER_URL, dec_dest,
+                     MOBILE_SAM_DECODER_SHA256, progress),
+    )

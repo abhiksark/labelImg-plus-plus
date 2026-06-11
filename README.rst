@@ -90,10 +90,11 @@ New in labelImg++ v2.0
 
         pip install labelimgplusplus[sam]
 
-    Uses the lightweight MobileSAM model by default (CPU-friendly); point it at a
-    larger SAM checkpoint via **Tools → SAM Settings…** for GPU setups. Without
-    the extra installed, the action stays disabled (with an install hint) and
-    nothing else changes.
+    Runs the lightweight MobileSAM model on ONNX Runtime — a ~70 MB,
+    CPU-friendly extra with no PyTorch dependency. Point **Tools → SAM
+    Settings…** at your own exported encoder/decoder pair to use a different
+    SAM variant. Without the extra installed, the action stays disabled (with
+    an install hint) and nothing else changes.
 
 Installation
 ------------
