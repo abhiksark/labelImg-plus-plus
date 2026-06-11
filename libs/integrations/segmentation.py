@@ -67,7 +67,10 @@ class OnnxSamBackend(SegmentationBackend):
         import numpy as np
         h, w = rgb.shape[:2]
         scale = self.TARGET_SIDE / max(h, w)
-        new_w, new_h = round(w * scale), round(h * scale)
+        # Clamp so extreme aspect ratios (>1024:1) cannot round a side to 0,
+        # which would crash cv2.resize with an opaque assertion.
+        new_w = max(1, round(w * scale))
+        new_h = max(1, round(h * scale))
         resized = cv2.resize(rgb, (new_w, new_h),
                              interpolation=cv2.INTER_LINEAR)
         self._embeddings = self._encoder.run(
@@ -77,6 +80,8 @@ class OnnxSamBackend(SegmentationBackend):
 
     def predict(self, points, labels):
         import numpy as np
+        if self._embeddings is None:
+            raise RuntimeError("set_image must be called before predict")
         sx, sy = self._scale
         # SAM's ONNX decoder wants a [0,0]/-1 padding point appended when no
         # box prompt is present, and coords in the resized-image frame.
