@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 2.3.0
+Version: 3.0.0a0
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -21,19 +21,22 @@ Classifier: Intended Audience :: Developers
 Classifier: Intended Audience :: Science/Research
 Classifier: Natural Language :: English
 Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: Python :: 3.6
-Classifier: Programming Language :: Python :: 3.7
 Classifier: Programming Language :: Python :: 3.8
 Classifier: Programming Language :: Python :: 3.9
 Classifier: Programming Language :: Python :: 3.10
 Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
 Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
 Classifier: Topic :: Scientific/Engineering :: Image Recognition
-Requires-Python: >=3.6
+Requires-Python: >=3.8
 Description-Content-Type: text/x-rst
 License-File: LICENSE
 Requires-Dist: pyqt5
 Requires-Dist: lxml
+Provides-Extra: sam
+Requires-Dist: onnxruntime; extra == "sam"
+Requires-Dist: numpy; extra == "sam"
+Requires-Dist: opencv-python-headless; extra == "sam"
 
 ============
 labelImg++
@@ -65,8 +68,8 @@ labelImg++
 
     **Version 2.0.0** - First stable release! Install with ``pip install labelImgPlusPlus``
 
-.. image:: resources/demo/labelimg_screenshot.png
-     :alt: labelImg++ Screenshot
+.. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
+     :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
      :align: center
 
 Features
@@ -118,6 +121,20 @@ New in labelImg++ v2.0
     - Theme preference automatically saved
     - All UI components (canvas, gallery, dialogs) respect the active theme
     - See `Dark Mode Documentation <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/dark-mode.md>`_ for detailed information
+
+**SAM-Assisted Segmentation** (optional)
+    Click once on an object to auto-generate a polygon, traced from a
+    Segment-Anything mask. Install the optional extra and toggle **SAM Segment**:
+
+    .. code:: shell
+
+        pip install labelimgplusplus[sam]
+
+    Runs the lightweight MobileSAM model on ONNX Runtime — a ~70 MB,
+    CPU-friendly extra with no PyTorch dependency. Point **Tools → SAM
+    Settings…** at your own exported encoder/decoder pair to use a different
+    SAM variant. Without the extra installed, the action stays disabled (with
+    an install hint) and nothing else changes.
 
 Installation
 ------------
@@ -276,7 +293,7 @@ If you encounter issues, reset the settings:
 
 .. code:: shell
 
-    rm ~/.labelImgSettings.pkl
+    rm ~/.labelImgSettings.json
 
 Or use **Menu > File > Reset All**
 

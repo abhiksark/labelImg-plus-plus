@@ -1,2 +1,7 @@
 pyqt5
 lxml
+
+[sam]
+onnxruntime
+numpy
+opencv-python-headless

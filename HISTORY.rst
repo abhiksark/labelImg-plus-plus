@@ -1,15 +1,33 @@
 History
 =======
 
-Unreleased
-----------
+3.0.0a0 (2026-06-11)
+--------------------
 
-SAM-assisted polygon segmentation (optional). Adds a single-click "SAM Segment"
-mode: click an object and a polygon annotation is traced from a Segment-Anything
-mask. Ships as an optional extra (``pip install labelimgplusplus[sam]``) that
-runs MobileSAM on ONNX Runtime — a ~70 MB, CPU-friendly install with no PyTorch
-dependency. The core install is unchanged and the feature degrades to a
-disabled, hinted action when the extra is absent.
+First alpha of the 3.0 line, introducing the project's first AI-assisted
+labeling feature. This is a pre-release for testing the new ``[sam]`` extra
+across platforms — install it with ``pip install --pre labelimgplusplus``.
+The core tool is unchanged for existing users.
+
+New Features
+~~~~~~~~~~~~
+
+* **SAM-assisted polygons** — toggle **SAM Segment**, click an object, and a
+  polygon annotation is traced from a Segment-Anything mask. Runs MobileSAM on
+  ONNX Runtime (CPU-friendly, ~70 MB optional extra, no PyTorch). The model
+  pair is auto-downloaded on first use and verified against pinned SHA256
+  checksums. Point **Tools → SAM Settings…** at your own exported
+  encoder/decoder ``.onnx`` pair to use a different SAM variant. Without the
+  extra installed, the action stays disabled with an install hint and nothing
+  else changes.
+
+Notes
+~~~~~
+
+* The ``[sam]`` extra pulls ``onnxruntime``, ``numpy``, and
+  ``opencv-python-headless`` from PyPI — no PyTorch, no Git dependencies.
+* ONNX models are protobuf data, not pickled code, so loading one cannot
+  execute arbitrary code on load.
 
 2.4.1 (2026-06-09)
 ------------------
