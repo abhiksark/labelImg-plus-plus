@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget)
 
+from libs.utils.dpi import scale_px
+
 
 class SamSettingsDialog(QDialog):
     """Dialog for configuring the ONNX model pair used by SAM segmentation.
@@ -16,6 +18,7 @@ class SamSettingsDialog(QDialog):
     def __init__(self, encoder_path="", decoder_path="", parent=None):
         super().__init__(parent)
         self.setWindowTitle("SAM Settings")
+        self.setMinimumWidth(scale_px(480))
 
         self._encoder = QLineEdit(encoder_path)
         self._decoder = QLineEdit(decoder_path)
@@ -27,7 +30,8 @@ class SamSettingsDialog(QDialog):
                     self._path_row(self._decoder, "Select SAM decoder model"))
 
         hint = QLabel("Leave both empty to use the bundled MobileSAM "
-                      "(downloaded on first use).")
+                      "(downloaded on first use). Custom models require "
+                      "both an encoder and a decoder.")
         hint.setWordWrap(True)
 
         buttons = QDialogButtonBox(
