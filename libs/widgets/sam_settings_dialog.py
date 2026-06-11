@@ -2,48 +2,33 @@
 """Settings dialog for the SAM-assisted polygon backend."""
 
 from PyQt5.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout, QWidget)
+    QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget)
 
 
 class SamSettingsDialog(QDialog):
-    """Dialog for configuring SAM (Segment Anything Model) settings.
+    """Dialog for configuring the ONNX model pair used by SAM segmentation.
 
-    Provides controls for checkpoint path, model type, and compute device.
-    Unknown model_type/device values are silently normalized to valid defaults.
+    Both paths empty (the default) means the bundled MobileSAM pair is
+    auto-downloaded on first use. Custom models must be set as a pair.
     """
 
-    MODEL_TYPES = ["vit_t", "vit_b", "vit_h"]
-    DEVICES = ["cpu", "cuda"]
-
-    def __init__(self, checkpoint="", model_type="vit_t", device="cpu", parent=None):
+    def __init__(self, encoder_path="", decoder_path="", parent=None):
         super().__init__(parent)
         self.setWindowTitle("SAM Settings")
 
-        self._checkpoint = QLineEdit(checkpoint)
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self._browse)
-        ckpt_row = QHBoxLayout()
-        ckpt_row.setContentsMargins(0, 0, 0, 0)
-        ckpt_row.addWidget(self._checkpoint)
-        ckpt_row.addWidget(browse)
-        ckpt_widget = QWidget()
-        ckpt_widget.setLayout(ckpt_row)
-
-        self._model_type = QComboBox()
-        self._model_type.addItems(self.MODEL_TYPES)
-        if model_type in self.MODEL_TYPES:
-            self._model_type.setCurrentText(model_type)
-
-        self._device = QComboBox()
-        self._device.addItems(self.DEVICES)
-        if device in self.DEVICES:
-            self._device.setCurrentText(device)
+        self._encoder = QLineEdit(encoder_path)
+        self._decoder = QLineEdit(decoder_path)
 
         form = QFormLayout()
-        form.addRow("Checkpoint (blank = auto-download)", ckpt_widget)
-        form.addRow("Model type", self._model_type)
-        form.addRow("Device", self._device)
+        form.addRow("Encoder model (.onnx)",
+                    self._path_row(self._encoder, "Select SAM encoder model"))
+        form.addRow("Decoder model (.onnx)",
+                    self._path_row(self._decoder, "Select SAM decoder model"))
+
+        hint = QLabel("Leave both empty to use the bundled MobileSAM "
+                      "(downloaded on first use).")
+        hint.setWordWrap(True)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -52,23 +37,33 @@ class SamSettingsDialog(QDialog):
 
         layout = QVBoxLayout()
         layout.addLayout(form)
+        layout.addWidget(hint)
         layout.addWidget(buttons)
         self.setLayout(layout)
 
-    def _browse(self):
-        """Open file dialog to select a SAM checkpoint file."""
+    def _path_row(self, line_edit, caption):
+        """Wrap a line edit and its Browse... button into one form-row widget."""
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(lambda: self._browse(line_edit, caption))
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(line_edit)
+        row.addWidget(browse)
+        widget = QWidget()
+        widget.setLayout(row)
+        return widget
+
+    def _browse(self, line_edit, caption):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select SAM checkpoint", "",
-            "Checkpoints (*.pt *.pth);;All files (*)")
+            self, caption, "", "ONNX models (*.onnx);;All files (*)")
         if path:
-            self._checkpoint.setText(path)
+            line_edit.setText(path)
 
     def values(self):
         """Return the current settings as a dict."""
         return {
-            "checkpoint": self._checkpoint.text().strip(),
-            "model_type": self._model_type.currentText(),
-            "device": self._device.currentText(),
+            "encoder": self._encoder.text().strip(),
+            "decoder": self._decoder.text().strip(),
         }
 
     def apply_theme(self, theme):

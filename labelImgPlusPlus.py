@@ -92,7 +92,7 @@ from libs.utils.constants import (
     SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE, SETTING_WIN_SIZE,
     SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
-    SETTING_SAM_CHECKPOINT, SETTING_SAM_MODEL_TYPE, SETTING_SAM_DEVICE,
+    SETTING_SAM_ENCODER, SETTING_SAM_DECODER,
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -1507,17 +1507,15 @@ class MainWindow(QMainWindow, WindowMixin):
         """Open the SAM configuration dialog."""
         from libs.widgets.sam_settings_dialog import SamSettingsDialog
         dialog = SamSettingsDialog(
-            checkpoint=self.settings.get(SETTING_SAM_CHECKPOINT, ""),
-            model_type=self.settings.get(SETTING_SAM_MODEL_TYPE, "vit_t"),
-            device=self.settings.get(SETTING_SAM_DEVICE, "cpu"),
+            encoder_path=self.settings.get(SETTING_SAM_ENCODER, ""),
+            decoder_path=self.settings.get(SETTING_SAM_DECODER, ""),
             parent=self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
         if dialog.exec_():
             values = dialog.values()
-            self.settings[SETTING_SAM_CHECKPOINT] = values["checkpoint"]
-            self.settings[SETTING_SAM_MODEL_TYPE] = values["model_type"]
-            self.settings[SETTING_SAM_DEVICE] = values["device"]
+            self.settings[SETTING_SAM_ENCODER] = values["encoder"]
+            self.settings[SETTING_SAM_DECODER] = values["decoder"]
             self.settings.save()
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.reset_backend()    # reload model on next use
