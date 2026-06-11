@@ -1,18 +1,19 @@
 # libs/integrations/segmentation.py
 """Pluggable segmentation backend for SAM-assisted polygons.
 
-Only SamBackend touches torch, and only inside its methods, so importing this
-module stays cheap. sam_available() probes importability without instantiating.
+Only OnnxSamBackend touches onnxruntime/numpy/cv2, and only inside its
+methods, so importing this module stays cheap. sam_available() probes
+importability without instantiating anything.
 """
 
 import importlib.util
 from abc import ABC, abstractmethod
 
-_REQUIRED_MODULES = ("torch", "numpy", "cv2", "mobile_sam")
+_REQUIRED_MODULES = ("onnxruntime", "numpy", "cv2")
 
 
 class SegmentationBackend(ABC):
-    """Contract the app depends on, hiding all SAM/torch specifics."""
+    """Contract the app depends on, hiding all model-runtime specifics."""
 
     @abstractmethod
     def set_image(self, rgb):
@@ -25,7 +26,7 @@ class SegmentationBackend(ABC):
     @property
     @abstractmethod
     def model_loaded(self):
-        """True once the checkpoint is loaded onto the device."""
+        """True once the model files are loaded into an inference session."""
 
     @property
     @abstractmethod
@@ -41,43 +42,56 @@ def sam_available():
     )
 
 
-class SamBackend(SegmentationBackend):
-    """MobileSAM / SAM image predictor wrapped behind SegmentationBackend.
+class OnnxSamBackend(SegmentationBackend):
+    """MobileSAM ONNX encoder/decoder pair behind SegmentationBackend.
 
-    torch and mobile_sam are imported lazily inside __init__ so importing this
-    module never pulls the ML stack.
+    The encoder graph embeds preprocessing (normalize + pad), so set_image
+    only resizes the longest side to TARGET_SIDE. The decoder was exported
+    with return_single_mask, so predict needs no score argmax.
     """
 
-    def __init__(self, checkpoint, model_type="vit_t", device="cpu"):
-        import torch
-        from mobile_sam import SamPredictor, sam_model_registry
+    TARGET_SIDE = 1024
 
-        self.device_warning = None
-        # Only "cuda" gets a runtime probe; other strings (e.g. "mps") are left
-        # to raise naturally inside .to(device) and surface via load_backend.
-        if device == "cuda" and not torch.cuda.is_available():
-            device = "cpu"
-            self.device_warning = "CUDA not available; falling back to CPU."
-
-        sam = sam_model_registry[model_type](checkpoint=checkpoint)
-        sam.to(device=device)
-        sam.eval()
-        self._predictor = SamPredictor(sam)
+    def __init__(self, encoder_path, decoder_path):
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        self._encoder = ort.InferenceSession(encoder_path, providers=providers)
+        self._decoder = ort.InferenceSession(decoder_path, providers=providers)
+        self._embeddings = None
+        self._orig_size = None      # (h, w) of the original image
+        self._scale = None          # (sx, sy): resized / original
         self._model_loaded = True
-        self._image_set = False
 
     def set_image(self, rgb):
-        self._predictor.set_image(rgb)
-        self._image_set = True
+        import cv2
+        import numpy as np
+        h, w = rgb.shape[:2]
+        scale = self.TARGET_SIDE / max(h, w)
+        new_w, new_h = round(w * scale), round(h * scale)
+        resized = cv2.resize(rgb, (new_w, new_h),
+                             interpolation=cv2.INTER_LINEAR)
+        self._embeddings = self._encoder.run(
+            None, {"input_image": resized.astype(np.float32)})[0]
+        self._orig_size = (h, w)
+        self._scale = (new_w / w, new_h / h)
 
     def predict(self, points, labels):
         import numpy as np
-        coords = np.array(points, dtype=np.float32)
-        marks = np.array(labels, dtype=np.int64)   # SAM's documented label dtype
-        masks, scores, _ = self._predictor.predict(
-            point_coords=coords, point_labels=marks, multimask_output=True)
-        best = int(scores.argmax())
-        return masks[best].astype(bool)
+        sx, sy = self._scale
+        # SAM's ONNX decoder wants a [0,0]/-1 padding point appended when no
+        # box prompt is present, and coords in the resized-image frame.
+        coords = [[x * sx, y * sy] for x, y in points] + [[0.0, 0.0]]
+        marks = list(labels) + [-1]
+        h, w = self._orig_size
+        masks, _, _ = self._decoder.run(None, {
+            "image_embeddings": self._embeddings,
+            "point_coords": np.array([coords], dtype=np.float32),
+            "point_labels": np.array([marks], dtype=np.float32),
+            "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
+            "has_mask_input": np.zeros(1, dtype=np.float32),
+            "orig_im_size": np.array([h, w], dtype=np.float32),
+        })
+        return masks[0, 0] > 0.0
 
     @property
     def model_loaded(self):
@@ -85,24 +99,20 @@ class SamBackend(SegmentationBackend):
 
     @property
     def image_is_set(self):
-        return self._image_set
+        return self._embeddings is not None
 
 
 def load_backend(settings):
     """Return (backend, None) on success or (None, error_message) on failure."""
-    from libs.utils.constants import (
-        SETTING_SAM_DEVICE, SETTING_SAM_MODEL_TYPE)
-    from libs.integrations.model_cache import resolve_checkpoint
+    from libs.integrations.model_cache import resolve_models
 
     try:
-        checkpoint = resolve_checkpoint(settings)
-    except Exception as exc:  # network, SHA mismatch, disk
-        return None, "Could not obtain a SAM checkpoint: %s" % exc
+        encoder_path, decoder_path = resolve_models(settings)
+    except Exception as exc:  # network, SHA mismatch, disk, half-set pair
+        return None, "Could not obtain the SAM model files: %s" % exc
 
-    model_type = settings.get(SETTING_SAM_MODEL_TYPE, "vit_t")
-    device = settings.get(SETTING_SAM_DEVICE, "cpu")
     try:
-        backend = SamBackend(checkpoint, model_type=model_type, device=device)
-    except Exception as exc:  # corrupt file, OOM, bad model_type
+        backend = OnnxSamBackend(encoder_path, decoder_path)
+    except Exception as exc:  # corrupt file, unsupported opset
         return None, "Could not load the SAM model: %s" % exc
     return backend, None
