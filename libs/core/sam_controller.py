@@ -6,7 +6,8 @@ canvas on the main thread. Top-level imports are Qt + stdlib only; numpy and the
 libs.integrations heavy modules are imported lazily inside methods so MainWindow
 can import this controller unconditionally.
 
-The first segmentation also loads the model (download + torch) inside the worker,
+The first segmentation also loads the model (download + session build) inside
+the worker,
 so the UI never blocks: a click on an unloaded backend shows "Loading SAM…" and
 the model is built off the main thread.
 """
@@ -118,8 +119,6 @@ class SamController:
             # The model is image-independent, so keep it even if this result is
             # stale (e.g. the user switched images mid-load) to avoid reloading.
             self.backend = created
-            if getattr(created, "device_warning", None):
-                self.mw.status(created.device_warning)
         if generation != self._gen:
             return
         if not points:
