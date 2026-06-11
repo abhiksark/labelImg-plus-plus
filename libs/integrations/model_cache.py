@@ -4,26 +4,14 @@ self-hosted MobileSAM encoder/decoder artifacts are downloaded on first use
 and SHA256-verified.
 
 No new runtime dependency (stdlib urllib + hashlib). SHA256 pinning protects
-the integrity of the downloaded artifacts. (Legacy single-checkpoint helpers
-below will be removed in a later cleanup once all consumers migrate to
-resolve_models.)
+the integrity of the downloaded artifacts.
 """
 
 import hashlib
 import os
 import urllib.request
 
-from libs.utils.constants import (
-    SETTING_SAM_CHECKPOINT, SETTING_SAM_DECODER, SETTING_SAM_ENCODER)
-
-# Self-hosted GitHub Release asset. Fill MOBILE_SAM_SHA256 after uploading the
-# asset:  sha256sum mobile_sam.pt
-MOBILE_SAM_URL = (
-    "https://github.com/abhiksark/labelImg-plus-plus/releases/download/"
-    "sam-weights-v1/mobile_sam.pt"
-)
-# REQUIRED: paste the asset's sha256 here before release (left empty until then)
-MOBILE_SAM_SHA256 = ""
+from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
 # ONNX encoder/decoder pair hosted as GitHub Release assets (tag sam-onnx-v1).
 # Exported from the official mobile_sam.pt by scripts/export_sam_onnx.py.
@@ -48,10 +36,6 @@ def _cache_dir():
     path = os.path.join(base, "labelimgpp")
     os.makedirs(path, exist_ok=True)
     return path
-
-
-def default_checkpoint_path():
-    return os.path.join(_cache_dir(), "mobile_sam.pt")
 
 
 def _sha256(path):
@@ -84,23 +68,6 @@ def _download(url, dest, expected_sha, progress):
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
-
-
-def resolve_checkpoint(settings, progress=None):
-    """Return a local checkpoint path, downloading the default if needed.
-
-    An explicit user-set path is trusted as-is. The auto-downloaded default is
-    re-verified against MOBILE_SAM_SHA256 on every use, so a file cached while
-    the pin was still empty gets re-fetched once the real digest is in place.
-    """
-    path = settings.get(SETTING_SAM_CHECKPOINT, "")
-    if path and os.path.isfile(path):
-        return path
-    dest = default_checkpoint_path()
-    if os.path.isfile(dest) and (
-            not MOBILE_SAM_SHA256 or _sha256(dest) == MOBILE_SAM_SHA256):
-        return dest
-    return _download(MOBILE_SAM_URL, dest, MOBILE_SAM_SHA256, progress)
 
 
 def default_model_paths():
