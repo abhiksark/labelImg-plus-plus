@@ -353,6 +353,22 @@ class TestYoloReader(unittest.TestCase):
         # Both valid lines should be loaded
         self.assertEqual(len(shapes), 2)
 
+    def test_whitespace_separated_lines_loaded(self):
+        """Tab- or multi-space-separated lines must parse, not be dropped."""
+        txt_path = os.path.join(self.temp_dir, 'whitespace.txt')
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+
+        with open(txt_path, 'w') as f:
+            f.write("0\t0.5\t0.5\t0.2\t0.2\n")   # tab-separated
+            f.write("0  0.7  0.7  0.2  0.2\n")   # double-space-separated
+
+        with open(classes_path, 'w') as f:
+            f.write("person\n")
+
+        mock_image = MockQImage(100, 100)
+        reader = YoloReader(txt_path, mock_image, classes_path)
+        self.assertEqual(len(reader.get_shapes()), 2)
+
     def test_negative_class_index_skipped(self):
         """Test that negative class indices are skipped."""
         txt_path = os.path.join(self.temp_dir, 'negative.txt')

@@ -159,6 +159,25 @@ class TestCOCOReader(unittest.TestCase):
         self.assertEqual(shape_type, 'polygon')
         self.assertEqual(points, [(10, 20), (50, 20), (50, 80)])
 
+    def test_crowd_rle_segmentation_does_not_crash(self):
+        """Crowd annotations store segmentation as an RLE dict, not point
+        lists; the reader must fall through to the bbox instead of KeyError."""
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg',
+                        'width': 640, 'height': 480}],
+            'annotations': [{'id': 1, 'image_id': 1, 'category_id': 1,
+                             'segmentation': {'counts': 'abc',
+                                              'size': [480, 640]},
+                             'bbox': [10, 20, 40, 60], 'iscrowd': 1}],
+            'categories': [{'id': 1, 'name': 'cat'}],
+        }
+        reader = self._read(data)  # must not raise
+        shapes = reader.get_shapes()
+        self.assertEqual(len(shapes), 1)
+        _, points, _, _, _, shape_type, _ = shapes[0]
+        self.assertEqual(shape_type, 'rectangle')
+        self.assertEqual(points, [(10, 20), (50, 20), (50, 80), (10, 80)])
+
 
 class TestCOCOKeypoints(unittest.TestCase):
 
@@ -262,6 +281,62 @@ class TestCOCOKeypoints(unittest.TestCase):
         shape = shapes[0]
         self.assertEqual(len(shape), 7)
         self.assertIsNone(shape[6])
+
+    def test_read_polygon_with_keypoints(self):
+        """A polygon annotation that also carries keypoints must keep them."""
+        flat_kps = [0] * 51
+        flat_kps[0], flat_kps[1], flat_kps[2] = 50, 20, 2
+        data = {
+            'images': [{'id': 1, 'file_name': 'test.jpg',
+                        'width': 640, 'height': 480}],
+            'annotations': [{
+                'id': 1, 'image_id': 1, 'category_id': 1,
+                'segmentation': [[10, 20, 50, 20, 50, 80]],
+                'bbox': [10, 20, 40, 60],
+                'keypoints': flat_kps, 'num_keypoints': 1, 'iscrowd': 0,
+            }],
+            'categories': [{'id': 1, 'name': 'person'}],
+        }
+        path = os.path.join(self.tmp_dir, 'annotations.json')
+        with open(path, 'w') as f:
+            json.dump(data, f)
+
+        shapes = COCOReader(path, 'test.jpg').get_shapes()
+        self.assertEqual(len(shapes), 1)
+        _, _, _, _, _, shape_type, keypoints = shapes[0]
+        self.assertEqual(shape_type, 'polygon')
+        self.assertIsNotNone(keypoints)
+        self.assertEqual(keypoints[0], (50, 20, 2))
+
+    def test_write_polygon_with_keypoints(self):
+        writer = COCOWriter('folder', 'test.jpg', [480, 640, 3])
+        kps = [None] * 17
+        kps[0] = (25.0, 30.0, 2)
+        writer.add_polygon([(10, 10), (40, 10), (25, 40)], 'person', False,
+                           keypoints=kps)
+        writer.save(self.out_path)
+
+        with open(self.out_path) as f:
+            data = json.load(f)
+
+        ann = data['annotations'][0]
+        self.assertIn('segmentation', ann)
+        self.assertIn('keypoints', ann)
+        self.assertEqual(ann['num_keypoints'], 1)
+        self.assertEqual(ann['keypoints'][0], 25.0)
+
+    def test_polygon_keypoints_round_trip(self):
+        writer = COCOWriter('folder', 'test.jpg', [480, 640, 3])
+        kps = [None] * 17
+        kps[0] = (25.0, 30.0, 2)
+        writer.add_polygon([(10, 10), (40, 10), (25, 40)], 'person', False,
+                           keypoints=kps)
+        writer.save(self.out_path)
+
+        shapes = COCOReader(self.out_path, 'test.jpg').get_shapes()
+        _, _, _, _, _, shape_type, keypoints = shapes[0]
+        self.assertEqual(shape_type, 'polygon')
+        self.assertEqual(keypoints[0], (25.0, 30.0, 2))
 
 
 if __name__ == '__main__':
