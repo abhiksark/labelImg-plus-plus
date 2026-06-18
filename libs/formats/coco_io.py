@@ -26,6 +26,23 @@ class COCOWriter:
             self._categories[name] = len(self._categories) + 1
         return self._categories[name]
 
+    @staticmethod
+    def _flatten_keypoints(keypoints):
+        """Flatten keypoints into COCO [x, y, v, ...] triples.
+
+        Absent or invisible (v == 0) keypoints serialize as (0, 0, 0).
+        Returns (flat_list, num_labeled).
+        """
+        flat = []
+        num = 0
+        for kp in keypoints:
+            if kp is not None and kp[2] > 0:
+                flat.extend([kp[0], kp[1], kp[2]])
+                num += 1
+            else:
+                flat.extend([0, 0, 0])
+        return flat, num
+
     def add_bnd_box(self, x_min, y_min, x_max, y_max, name, difficult, keypoints=None):
         """Add a bounding box annotation in COCO [x, y, w, h] format.
 
@@ -48,25 +65,20 @@ class COCOWriter:
             'difficult': int(difficult),
         }
         if keypoints is not None:
-            flat = []
-            num_kp = 0
-            for kp in keypoints:
-                if kp is not None and kp[2] > 0:
-                    flat.extend([kp[0], kp[1], kp[2]])
-                    num_kp += 1
-                else:
-                    flat.extend([0, 0, 0])
-            ann['keypoints'] = flat
-            ann['num_keypoints'] = num_kp
+            ann['keypoints'], ann['num_keypoints'] = self._flatten_keypoints(
+                keypoints)
         self._annotations.append(ann)
 
-    def add_polygon(self, points, name, difficult):
+    def add_polygon(self, points, name, difficult, keypoints=None):
         """Add a polygon annotation.
 
         Args:
             points: List of (x, y) tuples defining the polygon vertices.
             name: Class label string.
             difficult: Boolean indicating whether the annotation is difficult.
+            keypoints: Optional list of 17 elements, each either None or a
+                (x, y, visibility) tuple, for a segmented person carrying
+                keypoints. Same format as add_bnd_box.
         """
         cat_id = self._get_category_id(name)
         flat = []
@@ -79,14 +91,18 @@ class COCOWriter:
             x_max = max(x_max, x)
             y_max = max(y_max, y)
 
-        self._annotations.append({
+        ann = {
             'category_id': cat_id,
             'segmentation': [flat],
             'bbox': [round(x_min), round(y_min),
                      round(x_max - x_min), round(y_max - y_min)],
             'iscrowd': 0,
             'difficult': int(difficult),
-        })
+        }
+        if keypoints is not None:
+            ann['keypoints'], ann['num_keypoints'] = self._flatten_keypoints(
+                keypoints)
+        self._annotations.append(ann)
 
     def save(self, target_file=None):
         """Serialize annotations to a COCO JSON file.
@@ -195,13 +211,20 @@ class COCOReader:
                     else:
                         kp_data.append((x, y, int(v)))
 
+            # segmentation is polygons only when it's a list of point-lists.
+            # Crowd annotations store it as an RLE dict, which we treat as "no
+            # polygon" and fall through to the bbox rather than crashing.
             segmentation = ann.get('segmentation')
-            if segmentation:
-                seg = segmentation[0]
-                points = [(seg[i], seg[i + 1])
-                          for i in range(0, len(seg) - 1, 2)]
+            polygon = (
+                segmentation[0]
+                if isinstance(segmentation, list) and segmentation
+                and isinstance(segmentation[0], (list, tuple))
+                else None)
+            if polygon is not None:
+                points = [(polygon[i], polygon[i + 1])
+                          for i in range(0, len(polygon) - 1, 2)]
                 self.shapes.append(
-                    (label, points, None, None, difficult, 'polygon', None))
+                    (label, points, None, None, difficult, 'polygon', kp_data))
             else:
                 bbox = ann.get('bbox')  # [x, y, w, h]
                 if not bbox or len(bbox) < 4:
