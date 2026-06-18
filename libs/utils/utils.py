@@ -127,9 +127,13 @@ def format_shortcut(text):
 def generate_color_by_text(text):
     s = ustr(text)
     hash_code = int(hashlib.sha256(s.encode('utf-8')).hexdigest(), 16)
-    r = int((hash_code / 255) % 255)
-    g = int((hash_code / 65025) % 255)
-    b = int((hash_code / 16581375) % 255)
+    # Floor-divide, not true-divide: the hash is a 256-bit int, and float
+    # division would collapse it to a ~1e74 float whose 53-bit mantissa drops
+    # the low-order entropy, making colors poorly distributed. These extract
+    # base-255 digits (255, 255**2, 255**3) of the hash.
+    r = (hash_code // 255) % 255
+    g = (hash_code // 65025) % 255
+    b = (hash_code // 16581375) % 255
     return QColor(r, g, b, 100)
 
 

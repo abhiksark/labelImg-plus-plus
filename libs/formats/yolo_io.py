@@ -140,7 +140,7 @@ class YoloReader:
                 line = bnd_box.strip()
                 if not line:
                     continue
-                parts = line.split(' ')
+                parts = line.split()  # any run of whitespace, incl. tabs
                 if len(parts) != 5:
                     print(f"Warning: Skipping invalid annotation in {self.file_path}: "
                           f"line {line_num} has {len(parts)} values (expected 5)")
