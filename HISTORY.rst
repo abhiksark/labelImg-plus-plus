@@ -1,6 +1,24 @@
 History
 =======
 
+3.0.0rc0 (2026-06-18)
+---------------------
+
+Release candidate for the 3.0 line. Annotation-format I/O bug fixes ahead of
+the stable 3.0.0; the ``[sam]`` feature from 3.0.0a0 is unchanged.
+
+Bug Fixes
+~~~~~~~~~
+
+* **COCO** — read crowd/RLE annotations without crashing (they now fall back
+  to the bounding box) and keep keypoints on polygon annotations through a
+  full read/write round-trip.
+* **Label colors** — fix the color hash, which collapsed the 256-bit SHA-256
+  to a lossy float and clustered label colors; the channels are well
+  distributed again.
+* **YOLO** — parse annotation lines separated by tabs or multiple spaces
+  instead of discarding them as malformed.
+
 3.0.0a0 (2026-06-11)
 --------------------
 
