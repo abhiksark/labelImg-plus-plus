@@ -46,6 +46,19 @@ class TestGenerateColorByText(unittest.TestCase):
         self.assertGreaterEqual(res.red(), 0)
         self.assertGreaterEqual(res.blue(), 0)
 
+    def test_channels_are_base255_digits_of_hash(self):
+        """Channels must be exact base-255 digits of the sha256 hash.
+
+        Regression: true division collapses the 256-bit hash to a lossy float,
+        so the channels no longer match the integer-division contract.
+        """
+        import hashlib
+        h = int(hashlib.sha256('person'.encode('utf-8')).hexdigest(), 16)
+        res = generate_color_by_text('person')
+        self.assertEqual(res.red(), (h // 255) % 255)
+        self.assertEqual(res.green(), (h // 65025) % 255)
+        self.assertEqual(res.blue(), (h // 16581375) % 255)
+
     def test_same_text_same_color(self):
         """Test that same text produces same color."""
         color1 = generate_color_by_text('person')
