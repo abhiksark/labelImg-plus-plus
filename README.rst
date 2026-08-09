@@ -13,7 +13,7 @@ labelImg++
 .. image:: https://github.com/abhiksark/labelImg-plus-plus/actions/workflows/ci.yaml/badge.svg
         :target: https://github.com/abhiksark/labelImg-plus-plus/actions
 
-.. image:: https://img.shields.io/badge/python-3.6+-blue.svg
+.. image:: https://img.shields.io/badge/python-3.8%2B-blue.svg
         :target: https://www.python.org/downloads/
 
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
@@ -24,9 +24,13 @@ labelImg++
 
 ----
 
-**labelImg++** is a powerful graphical image annotation tool for creating bounding box labels, designed for machine learning and computer vision projects. Forked from the original LabelImg with significant enhancements.
+**labelImg++** is a graphical image annotation tool for bounding boxes,
+polygons, and keypoints, designed for machine learning and computer vision
+projects. It is forked from the original LabelImg with significant
+enhancements.
 
-    **Version 2.0.0** - First stable release! Install with ``pip install labelImgPlusPlus``
+    **Source version: 3.0.0rc0 (release candidate).** The PyPI badge above
+    reflects the latest version actually published there.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
      :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
@@ -38,23 +42,28 @@ Features
 Core Annotation Features
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-- **Multi-format support**: PASCAL VOC (XML), YOLO (TXT), CreateML (JSON)
-- **Bounding box annotation** with drag-and-drop interface
+- **Five annotation formats**: PASCAL VOC, YOLO bbox, CreateML,
+  COCO, and YOLO-seg
+- **Bounding box and polygon annotation** with interactive editing
+- **Keypoint annotation** with COCO 17-point human pose and 5-point face
+  templates; COCO preserves keypoints on export
 - **Auto-save mode** for uninterrupted workflow
 - **Predefined class labels** with customizable list
 - **Verification system** to mark completed annotations
 
-New in labelImg++ v2.0
+Workflow and Interface
 ~~~~~~~~~~~~~~~~~~~~~~
 
 **Undo/Redo Support**
-    Full undo/redo for all annotation actions. Press **Ctrl+Z** to undo and **Ctrl+Y** to redo. Never lose your work again!
+    Full undo/redo for annotation actions. Press **Ctrl+Z** to undo and
+    **Ctrl+Shift+Z** to redo.
 
 **Gallery Mode with Annotation Preview**
-    Visual thumbnail gallery showing all images with bounding box overlays directly on thumbnails.
+    Visual thumbnail gallery showing all images with bounding box and polygon
+    overlays directly on thumbnails across all five annotation formats.
 
     - Colored borders indicate status: Gray (no labels), Blue (has labels), Green (verified)
-    - Bounding boxes visible on thumbnails with corner markers (less clutter for nested boxes)
+    - Bounding boxes use compact corner markers; polygons use outline previews
     - Quick size presets (S/M/L/XL) plus slider for fine control
     - Smart selection: click on nested boxes selects the inner box
     - Press **Ctrl+G** to toggle gallery mode
@@ -90,14 +99,17 @@ New in labelImg++ v2.0
 
         pip install labelimgplusplus[sam]
 
-    Runs the lightweight MobileSAM model on ONNX Runtime — a ~70 MB,
-    CPU-friendly extra with no PyTorch dependency. Point **Tools → SAM
-    Settings…** at your own exported encoder/decoder pair to use a different
-    SAM variant. Without the extra installed, the action stays disabled (with
-    an install hint) and nothing else changes.
+    Runs the lightweight MobileSAM model on ONNX Runtime as a CPU-friendly
+    extra with no PyTorch dependency. The default model pair is downloaded and
+    checksum-verified on first use. Point **Tools → SAM Settings…** at your own
+    exported encoder/decoder pair to use a different SAM variant. Without the
+    extra installed, the action stays disabled (with an install hint) and
+    nothing else changes.
 
 Installation
 ------------
+
+labelImg++ requires Python 3.8 or newer.
 
 From PyPI (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -162,19 +174,38 @@ Quick Start
 Supported Annotation Formats
 ----------------------------
 
-+---------------+------------+------------------------------------------+
-| Format        | Extension  | Description                              |
-+===============+============+==========================================+
-| PASCAL VOC    | .xml       | ImageNet format, absolute coordinates    |
-+---------------+------------+------------------------------------------+
-| YOLO          | .txt       | Normalized coordinates (0-1), with       |
-|               |            | classes.txt for class names              |
-+---------------+------------+------------------------------------------+
-| CreateML      | .json      | Apple's ML format for iOS/macOS          |
-+---------------+------------+------------------------------------------+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 12 70
+
+   * - Format
+     - Extension
+     - Annotation support
+   * - PASCAL VOC
+     - ``.xml``
+     - Bounding boxes and the labelImg++ polygon extension
+   * - YOLO (bbox)
+     - ``.txt``
+     - Normalized bounding boxes, with ``classes.txt`` for class names
+   * - CreateML
+     - ``.json``
+     - Bounding boxes in Apple's CreateML annotation format
+   * - COCO
+     - ``.json``
+     - Bounding boxes, polygon segmentation, and keypoints
+   * - YOLO-seg
+     - ``.txt``
+     - Normalized polygons; rectangles are written as four-point polygons
+
+Polygon drawing and editing are available in the application. Saving polygons
+as YOLO bounding boxes or CreateML warns before converting each polygon to its
+enclosing box. Keypoints are preserved by COCO; the other formats do not encode
+them.
 
 Keyboard Shortcuts
 ------------------
+
+These are the defaults. They can be changed from **Help → Keyboard Shortcuts**.
 
 **File Operations**
 
@@ -186,6 +217,8 @@ Keyboard Shortcuts
 | Ctrl + R           | Change save directory                      |
 +--------------------+--------------------------------------------+
 | Ctrl + S           | Save current annotation                    |
++--------------------+--------------------------------------------+
+| Ctrl + Y           | Cycle annotation format                    |
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + S   | Save as                                    |
 +--------------------+--------------------------------------------+
@@ -205,9 +238,13 @@ Keyboard Shortcuts
 +--------------------+--------------------------------------------+
 | W                  | Create bounding box                        |
 +--------------------+--------------------------------------------+
+| P                  | Create polygon                             |
++--------------------+--------------------------------------------+
+| K                  | Enter keypoint mode                        |
++--------------------+--------------------------------------------+
 | Ctrl + Z           | Undo                                       |
 +--------------------+--------------------------------------------+
-| Ctrl + Y           | Redo                                       |
+| Ctrl + Shift + Z   | Redo                                       |
 +--------------------+--------------------------------------------+
 | Ctrl + D           | Duplicate selected box                     |
 +--------------------+--------------------------------------------+
@@ -257,46 +294,15 @@ If you encounter issues, reset the settings:
 
 Or use **Menu > File > Reset All**
 
-Roadmap
--------
+Release History
+---------------
 
-**v2.0.0 (Stable)** - *Current*
-    First stable release with bug fixes and UX improvements
-
-    - Silent error handling fixed
-    - YOLO format crash on missing classes.txt fixed
-    - Format change warning dialog added
-    - Save location visibility in title bar
-    - Auto-save menu items clarified
-    - Gallery status color legend added
-    - Progress indicator for large directories
-    - Gallery size presets (S/M/L/XL buttons)
-    - Corner markers on thumbnails for cleaner nested box display
-    - Improved nested bounding box selection (smallest box selected)
-    - Gallery freeze fix for large directories
-
-**v2.1.0** - *Planned*
-    - Dark mode theme (Completed - use Ctrl+Shift+T to toggle)
-    - Annotation review workflow
-    - Dataset splitting tool (train/val/test)
-    - Label consistency checker
-    - Annotation statistics dashboard
-    - Improved label dialog with search/filter
-    - Keyboard shortcuts customization
-
-**v2.2.0** - *Future*
-    - Polygon annotation support
-    - Recent files menu
-    - Snap to grid / alignment guides
-    - Multiple image annotation (batch labeling)
-
-**v3.0.0** - *Vision*
-    - Plugin architecture
-    - COCO format support
-    - Ultralytics/YOLOv8 direct export
-    - FiftyOne dataset integration
-
-See the `GitHub Issues <https://github.com/abhiksark/labelImg-plus-plus/issues>`_ for detailed feature tracking.
+This source tree identifies itself as **3.0.0rc0**, a release candidate for
+the 3.0 line. See the `release history
+<https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`_ for
+version-by-version changes and `GitHub Releases
+<https://github.com/abhiksark/labelImg-plus-plus/releases>`_ for published
+artifacts.
 
 Contributing
 ------------

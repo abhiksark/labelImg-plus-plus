@@ -14,7 +14,7 @@ authors = [
 requires-python = ">=3.8"
 keywords = ["labelImg", "labelimgpp", "labelimgplusplus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Natural Language :: English",

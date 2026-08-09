@@ -26,6 +26,7 @@ libs/core/shortcut_config.py
 libs/data/predefined_classes.txt
 libs/formats/__init__.py
 libs/formats/annotation_loader.py
+libs/formats/annotation_paths.py
 libs/formats/annotation_probe.py
 libs/formats/coco_io.py
 libs/formats/create_ml_io.py

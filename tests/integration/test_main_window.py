@@ -26,6 +26,7 @@ from PyQt5.QtGui import QImage, QMouseEvent
 
 from labelImgPlusPlus import get_main_app
 from libs.core.shape import Shape
+from libs.formats.annotation_paths import annotation_output_base
 
 
 class TestMainWindowFileOperations(unittest.TestCase):
@@ -51,6 +52,13 @@ class TestMainWindowFileOperations(unittest.TestCase):
         """Reset state before each test."""
         self.win.reset_state()
         self.win.default_save_dir = self.temp_dir
+
+    def _create_test_image(self, filename):
+        path = os.path.join(self.temp_dir, filename)
+        image = QImage(100, 100, QImage.Format_RGB32)
+        image.fill(0xFFFFFF)
+        self.assertTrue(image.save(path))
+        return path
 
     def test_load_file_valid_image(self):
         """Test loading a valid image file."""
@@ -125,14 +133,30 @@ class TestMainWindowFileOperations(unittest.TestCase):
                                 'data', 'predefined_classes.txt')
         self.assertTrue(os.path.isfile(packaged))
 
-    def test_apply_label_fix_does_not_crash(self):
-        """_apply_label_fix must use statusBar(), not a missing status_bar attr.
+    def test_apply_label_fix_explicitly_reports_not_applied(self):
+        """The compatibility hook must not imply annotations were changed."""
+        from unittest.mock import patch
 
-        Regression: it called self.status_bar.showMessage (no such attribute),
-        so the label-consistency fix path always raised AttributeError.
-        """
         self.win.dir_name = self.temp_dir
-        self.win._apply_label_fix('old', 'new')  # must not raise
+        with patch.object(self.win.statusBar(), 'showMessage') as show_message, \
+                patch('builtins.print') as print_message:
+            result = self.win._apply_label_fix('old', 'new')
+
+        self.assertFalse(result)
+        show_message.assert_not_called()
+        print_message.assert_not_called()
+
+    def test_label_checker_does_not_wire_unavailable_fix_signal(self):
+        """Opening the checker must not wire its unavailable fix signal."""
+        from unittest.mock import patch
+
+        self.win.dir_name = self.temp_dir
+        with patch('labelImgPlusPlus.LabelCheckerDialog') as dialog_class:
+            dialog = dialog_class.return_value
+            self.win.check_label_consistency()
+
+        dialog.fix_requested.connect.assert_not_called()
+        dialog.exec_.assert_called_once_with()
 
     def test_reset_all_relaunches_with_python_interpreter(self):
         """reset_all must relaunch through sys.executable, not exec the .py.
@@ -141,15 +165,85 @@ class TestMainWindowFileOperations(unittest.TestCase):
         an installed (entry-point) package.
         """
         from unittest.mock import patch
-        with patch.object(self.win, 'close'), \
+        with patch.object(self.win, 'may_continue', return_value=True), \
+                patch.object(self.win, 'close', return_value=True), \
                 patch.object(self.win.settings, 'reset'), \
                 patch('labelImgPlusPlus.QProcess') as mock_proc:
             instance = mock_proc.return_value
-            self.win.reset_all()
+            self.assertTrue(self.win.reset_all())
 
         instance.startDetached.assert_called_once()
         args = instance.startDetached.call_args[0]
         self.assertEqual(args[0], sys.executable)
+
+    def test_cancelled_close_returns_without_persisting_settings(self):
+        """Cancelling an ordinary close must leave settings untouched."""
+        from unittest.mock import MagicMock, patch
+
+        event = MagicMock()
+        settings = MagicMock()
+        with patch.object(self.win, 'settings', settings), \
+                patch.object(self.win, 'may_continue', return_value=False):
+            self.win.closeEvent(event)
+
+        event.ignore.assert_called_once_with()
+        event.accept.assert_not_called()
+        settings.__setitem__.assert_not_called()
+        settings.save.assert_not_called()
+
+    def test_cancelled_reset_keeps_window_and_settings(self):
+        """Cancelling Reset All must not reset, close, or relaunch."""
+        from unittest.mock import patch
+
+        self.win.set_dirty()
+        try:
+            with patch.object(self.win, 'may_continue', return_value=False), \
+                    patch.object(self.win.settings, 'reset') as reset, \
+                    patch.object(self.win.settings, 'save') as save, \
+                    patch.object(self.win, 'close') as close, \
+                    patch('labelImgPlusPlus.QProcess') as process:
+                self.assertFalse(self.win.reset_all())
+
+            reset.assert_not_called()
+            save.assert_not_called()
+            close.assert_not_called()
+            process.assert_not_called()
+        finally:
+            self.win.set_clean()
+
+    def test_successful_reset_closes_without_resaving_settings(self):
+        """An accepted reset clears settings and starts one replacement."""
+        from unittest.mock import MagicMock, patch
+
+        event = MagicMock()
+
+        def close_window():
+            self.win.closeEvent(event)
+            return True
+
+        self.win.set_dirty()
+        try:
+            with patch.object(self.win, 'may_continue', return_value=True) \
+                    as may_continue, \
+                    patch.object(self.win.settings, 'reset') as reset, \
+                    patch.object(self.win.settings, 'save') as save, \
+                    patch.object(self.win, 'close', side_effect=close_window) \
+                    as close, \
+                    patch('labelImgPlusPlus.QProcess') as process:
+                self.assertTrue(self.win.reset_all())
+
+            may_continue.assert_called_once_with()
+            reset.assert_called_once_with()
+            close.assert_called_once_with()
+            event.accept.assert_called_once_with()
+            event.ignore.assert_not_called()
+            save.assert_not_called()
+            process.assert_called_once_with()
+            process.return_value.startDetached.assert_called_once_with(
+                sys.executable, [os.path.abspath(os.path.join(
+                    dir_name, '..', '..', 'labelImgPlusPlus.py'))])
+        finally:
+            self.win.set_clean()
 
     def test_load_predefined_classes_none_does_not_raise(self):
         """load_predefined_classes(None) must no-op, not raise TypeError.
@@ -201,6 +295,196 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         self.assertTrue(self.win.dirty)
 
+    def test_delete_image_decline_keeps_current_image(self):
+        """Declining the safe-default confirmation changes no state."""
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.load_file(self.test_image_path)
+        with patch('labelImgPlusPlus.QMessageBox.warning',
+                   return_value=QMessageBox.No) as confirm, \
+                patch.object(self.win, 'may_continue') as may_continue, \
+                patch('labelImgPlusPlus.os.remove') as remove, \
+                patch.object(self.win, 'import_dir_images') as reload_images:
+            self.assertFalse(self.win.delete_image())
+
+        self.assertTrue(os.path.exists(self.test_image_path))
+        self.assertEqual(self.win.file_path, self.test_image_path)
+        self.assertEqual(confirm.call_args.args[-1], QMessageBox.No)
+        may_continue.assert_not_called()
+        remove.assert_not_called()
+        reload_images.assert_not_called()
+
+    def test_delete_image_dirty_cancel_keeps_current_image(self):
+        """Cancelling dirty-state handling prevents removal and reload."""
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.load_file(self.test_image_path)
+        self.win.set_dirty()
+        with patch('labelImgPlusPlus.QMessageBox.warning',
+                   return_value=QMessageBox.Yes), \
+                patch.object(self.win, 'may_continue',
+                             return_value=False) as may_continue, \
+                patch('labelImgPlusPlus.os.remove') as remove, \
+                patch.object(self.win, 'import_dir_images') as reload_images:
+            self.assertFalse(self.win.delete_image())
+
+        self.assertTrue(os.path.exists(self.test_image_path))
+        self.assertEqual(self.win.file_path, self.test_image_path)
+        self.assertTrue(self.win.dirty)
+        may_continue.assert_called_once_with()
+        remove.assert_not_called()
+        reload_images.assert_not_called()
+
+    def test_delete_image_success_clears_discarded_dirty_state(self):
+        """A deleted dirty image cannot prompt again while reloading."""
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        delete_path = self._create_test_image('delete_success.png')
+        self.win.set_clean()
+        self.win.import_dir_images(self.temp_dir)
+        self.win.cur_img_idx = self.win._path_to_idx[delete_path]
+        self.win.load_file(delete_path)
+        self.win.set_dirty()
+
+        # Confirm deletion, then choose No in the unsaved-changes dialog to
+        # discard edits. No third warning should appear during directory reload.
+        with patch('labelImgPlusPlus.QMessageBox.warning',
+                   side_effect=[QMessageBox.Yes, QMessageBox.No]) as warning:
+            self.assertTrue(self.win.delete_image())
+
+        self.assertFalse(os.path.exists(delete_path))
+        self.assertFalse(self.win.dirty)
+        self.assertNotEqual(self.win.file_path, delete_path)
+        self.assertEqual(warning.call_count, 2)
+
+    def test_delete_image_remove_failure_preserves_state(self):
+        """Filesystem removal errors are reported without reloading state."""
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.load_file(self.test_image_path)
+        self.win.set_dirty()
+        with patch('labelImgPlusPlus.QMessageBox.warning',
+                   return_value=QMessageBox.Yes), \
+                patch.object(self.win, 'may_continue', return_value=True), \
+                patch('labelImgPlusPlus.os.remove',
+                      side_effect=OSError('permission denied')) as remove, \
+                patch.object(self.win, 'error_message') as error_message, \
+                patch.object(self.win, 'import_dir_images') as reload_images:
+            self.assertFalse(self.win.delete_image())
+
+        self.assertTrue(os.path.exists(self.test_image_path))
+        self.assertEqual(self.win.file_path, self.test_image_path)
+        self.assertTrue(self.win.dirty)
+        remove.assert_called_once_with(self.test_image_path)
+        error_message.assert_called_once()
+        reload_images.assert_not_called()
+
+    def test_may_continue_proceeds_after_successful_save(self):
+        """Choosing Save permits navigation only when the save succeeds."""
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.set_dirty()
+        with patch.object(self.win, 'discard_changes_dialog',
+                          return_value=QMessageBox.Yes), \
+                patch.object(self.win, 'save_file', return_value=True) as save:
+            self.assertTrue(self.win.may_continue())
+
+        save.assert_called_once_with()
+
+    def test_may_continue_stays_when_save_fails(self):
+        """Choosing Save must not discard edits when the save fails."""
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.set_dirty()
+        with patch.object(self.win, 'discard_changes_dialog',
+                          return_value=QMessageBox.Yes), \
+                patch.object(self.win, 'save_file', return_value=False) as save:
+            self.assertFalse(self.win.may_continue())
+
+        save.assert_called_once_with()
+
+    def test_save_file_returns_false_when_dialog_is_cancelled(self):
+        """Cancelling the initial Save dialog keeps dirty edits in place."""
+        from unittest.mock import MagicMock, patch
+
+        self.win.default_save_dir = None
+        self.win.load_file(self.test_image_path)
+        self.win.label_file = None
+        self.win.set_dirty()
+        full_gallery = MagicMock()
+
+        with patch.object(self.win, 'save_file_dialog', return_value=''), \
+                patch.object(self.win, 'save_labels') as save_labels, \
+                patch.object(self.win.gallery_widget,
+                             'refresh_thumbnail') as dock_refresh, \
+                patch.object(self.win, 'full_gallery', full_gallery,
+                             create=True):
+            self.assertFalse(self.win.save_file())
+
+        self.assertTrue(self.win.dirty)
+        save_labels.assert_not_called()
+        dock_refresh.assert_not_called()
+        full_gallery.refresh_thumbnail.assert_not_called()
+
+    def test_save_file_propagates_label_save_failure(self):
+        """A writer-reported failure leaves the window dirty."""
+        from unittest.mock import patch
+
+        self.win.load_file(self.test_image_path)
+        self.win.set_dirty()
+
+        with patch.object(self.win, 'save_labels', return_value=False):
+            self.assertFalse(self.win.save_file())
+
+        self.assertTrue(self.win.dirty)
+
+    def test_successful_save_refreshes_every_live_gallery(self):
+        """Persisted annotation changes invalidate both gallery thumbnails."""
+        from unittest.mock import MagicMock, patch
+
+        self.win.file_path = self.test_image_path
+        full_gallery = MagicMock()
+        status = object()
+        with patch.object(self.win, 'save_labels', return_value=True), \
+                patch.object(self.win, '_get_annotation_status',
+                             return_value=status), \
+                patch.object(self.win.gallery_widget,
+                             'update_status') as dock_status, \
+                patch.object(self.win.gallery_widget,
+                             'refresh_thumbnail') as dock_refresh, \
+                patch.object(self.win, 'full_gallery', full_gallery,
+                             create=True):
+            self.assertTrue(self.win._save_file('/labels/test_image'))
+
+        dock_status.assert_called_once_with(self.test_image_path, status)
+        dock_refresh.assert_called_once_with(self.test_image_path)
+        full_gallery.update_status.assert_called_once_with(
+            self.test_image_path, status)
+        full_gallery.refresh_thumbnail.assert_called_once_with(
+            self.test_image_path)
+
+    def test_failed_save_does_not_refresh_any_gallery(self):
+        """Cancelled or failed persistence must leave cached pixels alone."""
+        from unittest.mock import MagicMock, patch
+
+        self.win.file_path = self.test_image_path
+        full_gallery = MagicMock()
+        with patch.object(self.win, 'save_labels', return_value=False), \
+                patch.object(self.win.gallery_widget,
+                             'refresh_thumbnail') as dock_refresh, \
+                patch.object(self.win, 'full_gallery', full_gallery,
+                             create=True):
+            self.assertFalse(self.win._save_file('/labels/test_image'))
+
+        dock_refresh.assert_not_called()
+        full_gallery.refresh_thumbnail.assert_not_called()
+
     def test_save_file_voc_format(self):
         """Test saving in PASCAL VOC format."""
         self.win.load_file(self.test_image_path)
@@ -215,7 +499,9 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Save as VOC
         from libs.formats.labelFile import LabelFileFormat
         self.win.label_file_format = LabelFileFormat.PASCAL_VOC
-        self.win.save_file()
+        self.win.set_dirty()
+        self.assertTrue(self.win.save_file())
+        self.assertFalse(self.win.dirty)
 
         # Check XML file exists
         xml_path = os.path.join(self.temp_dir, 'test_image.xml')
@@ -240,6 +526,197 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Check TXT file exists
         txt_path = os.path.join(self.temp_dir, 'test_image.txt')
         self.assertTrue(os.path.exists(txt_path))
+
+
+class TestRecursiveCentralAnnotationPaths(unittest.TestCase):
+    """Central saves must not flatten recursive image collisions."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app, cls.win = get_main_app()
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.save_dir = os.path.join(self.root, 'annotations')
+        os.makedirs(self.save_dir)
+
+        self.images = []
+        for directory in ('a', 'b'):
+            image_dir = os.path.join(self.root, directory)
+            os.makedirs(image_dir)
+            image_path = os.path.join(image_dir, 'frame.png')
+            image = QImage(100, 100, QImage.Format_RGB32)
+            image.fill(0xFFFFFF)
+            self.assertTrue(image.save(image_path))
+            self.images.append(image_path)
+
+        self.win.reset_state()
+        self.win.default_save_dir = self.save_dir
+        self.win.m_img_list = list(self.images)
+        self.win._path_to_idx = {
+            path: index for index, path in enumerate(self.images)
+        }
+        self.win.img_count = len(self.images)
+
+    def tearDown(self):
+        self.win.reset_state()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _save_voc_label(self, image_path, label):
+        from libs.formats.labelFile import LabelFileFormat
+
+        self.win.cur_img_idx = self.win._path_to_idx[image_path]
+        self.assertTrue(self.win.load_file(image_path))
+        shape = Shape(label=label)
+        shape.add_point(QPointF(10, 10))
+        shape.add_point(QPointF(50, 50))
+        shape.close()
+        self.win.canvas.shapes.append(shape)
+        self.win.add_label(shape)
+        self.win.label_file_format = LabelFileFormat.PASCAL_VOC
+        self.win.set_dirty()
+        self.assertTrue(self.win.save_file())
+
+    def test_colliding_recursive_images_save_and_reload_independently(self):
+        from libs.formats.annotation_paths import annotation_output_base
+        from libs.formats.annotation_probe import probe
+        from libs.formats.pascal_voc_io import (
+            PascalVocReader, PascalVocWriter,
+        )
+
+        expected_labels = {
+            self.images[0]: 'alpha',
+            self.images[1]: 'beta',
+        }
+        for image_path, label in expected_labels.items():
+            self._save_voc_label(image_path, label)
+
+        xml_paths = [
+            annotation_output_base(
+                image_path, self.save_dir, self.images) + '.xml'
+            for image_path in self.images
+        ]
+        self.assertNotEqual(
+            os.path.basename(xml_paths[0]).casefold(),
+            os.path.basename(xml_paths[1]).casefold(),
+        )
+        self.assertNotIn(
+            os.path.join(self.save_dir, 'frame.xml'), xml_paths)
+        self.assertEqual(
+            sorted(name for name in os.listdir(self.save_dir)
+                   if name.endswith('.xml')),
+            sorted(os.path.basename(path) for path in xml_paths),
+        )
+
+        for image_path, xml_path in zip(self.images, xml_paths):
+            expected = expected_labels[image_path]
+            self.assertTrue(os.path.isfile(xml_path))
+            self.assertEqual(
+                [shape[0] for shape in PascalVocReader(xml_path).get_shapes()],
+                [expected],
+            )
+
+        # A stale legacy sidecar must not mask either image-specific file.
+        legacy_writer = PascalVocWriter(
+            'legacy', 'frame.png', (100, 100, 3))
+        legacy_writer.add_bnd_box(
+            1, 1, 20, 20, 'stale-legacy', difficult=0)
+        legacy_writer.save(os.path.join(self.save_dir, 'frame.xml'))
+
+        for image_path, xml_path in zip(self.images, xml_paths):
+            expected = expected_labels[image_path]
+            self.win.cur_img_idx = self.win._path_to_idx[image_path]
+            self.assertTrue(self.win.load_file(image_path))
+            self.assertEqual(
+                [shape.label for shape in self.win.canvas.shapes],
+                [expected],
+            )
+
+            info = probe(
+                image_path, self.save_dir, want_labels=True,
+                image_list=self.images)
+            self.assertEqual(info.path, xml_path)
+            self.assertEqual(info.labels, [expected])
+            self.assertEqual(
+                self.win._get_labels_for_image(image_path), [expected])
+
+    def test_specific_txt_beats_stale_legacy_xml(self):
+        from unittest.mock import patch
+
+        from libs.formats.annotation_paths import annotation_output_base
+        from libs.formats.labelFile import LabelFileFormat
+
+        image_path = self.images[0]
+        specific_txt = annotation_output_base(
+            image_path, self.save_dir, self.images) + '.txt'
+        with open(specific_txt, 'w') as annotation_file:
+            annotation_file.write('')
+        with open(os.path.join(self.save_dir, 'frame.xml'), 'w') \
+                as legacy_file:
+            legacy_file.write('<annotation/>')
+
+        self.win.file_path = image_path
+        for label_format, expected_loader, unexpected_loader in (
+                (LabelFileFormat.YOLO,
+                 'load_yolo_txt_by_filename',
+                 'load_yolo_seg_by_filename'),
+                (LabelFileFormat.YOLO_SEG,
+                 'load_yolo_seg_by_filename',
+                 'load_yolo_txt_by_filename')):
+            with self.subTest(label_format=label_format), \
+                    patch.object(self.win, expected_loader) as load_specific, \
+                    patch.object(self.win, unexpected_loader) as load_other, \
+                    patch.object(self.win,
+                                 'load_pascal_xml_by_filename') as load_legacy:
+                self.win.label_file_format = label_format
+                self.win.show_bounding_box_from_annotation_file(image_path)
+
+                load_specific.assert_called_once_with(specific_txt)
+                load_other.assert_not_called()
+                load_legacy.assert_not_called()
+
+    def test_explicit_format_priority_within_specific_stem(self):
+        from unittest.mock import patch
+
+        from libs.formats.annotation_paths import annotation_output_base
+        from libs.formats.labelFile import LabelFileFormat
+
+        image_path = self.images[0]
+        specific_base = annotation_output_base(
+            image_path, self.save_dir, self.images)
+        specific_xml = specific_base + '.xml'
+        specific_txt = specific_base + '.txt'
+        specific_json = specific_base + '.json'
+        for annotation_path in (specific_xml, specific_txt, specific_json):
+            with open(annotation_path, 'w') as annotation_file:
+                annotation_file.write('')
+
+        self.win.file_path = image_path
+        self.win.label_file_format = LabelFileFormat.COCO
+        with patch.object(self.win, 'load_coco_json_by_filename') \
+                as load_coco, \
+                patch.object(self.win, 'load_pascal_xml_by_filename') \
+                as load_xml, \
+                patch.object(self.win, 'load_yolo_txt_by_filename') \
+                as load_yolo:
+            self.win.show_bounding_box_from_annotation_file(image_path)
+
+        load_coco.assert_called_once_with(specific_json, image_path)
+        load_xml.assert_not_called()
+        load_yolo.assert_not_called()
+
+        self.win.label_file_format = LabelFileFormat.YOLO_SEG
+        with patch.object(self.win, 'load_yolo_seg_by_filename') \
+                as load_yolo_seg, \
+                patch.object(self.win, 'load_pascal_xml_by_filename') \
+                as load_xml, \
+                patch.object(self.win, 'load_create_ml_json_by_filename') \
+                as load_json:
+            self.win.show_bounding_box_from_annotation_file(image_path)
+
+        load_yolo_seg.assert_called_once_with(specific_txt)
+        load_xml.assert_not_called()
+        load_json.assert_not_called()
 
 
 class TestMainWindowNavigation(unittest.TestCase):
@@ -819,6 +1296,72 @@ class TestBatchVerify(unittest.TestCase):
         self.win._apply_batch_verify(True)
         self.assertTrue(
             PascalVocReader(os.path.join(self.d, 'a.xml')).verified)
+
+    def test_status_filter_is_applied_to_dock_and_full_galleries(self):
+        from unittest.mock import MagicMock, patch
+
+        full_gallery = MagicMock()
+        with patch.object(
+            self.win.gallery_widget, 'set_status_filter'
+        ) as dock_filter, patch.object(
+            self.win, 'full_gallery', full_gallery, create=True
+        ):
+            self.win.apply_status_filter(2)
+
+        dock_filter.assert_called_once_with(2)
+        full_gallery.set_status_filter.assert_called_once_with(2)
+
+    def test_collision_safe_status_and_batch_ignore_stale_legacy_xml(self):
+        """Filters and batch verify must target each same-stem annotation."""
+        from libs.formats.pascal_voc_io import (
+            PascalVocReader, PascalVocWriter,
+        )
+
+        image_paths = []
+        for directory in ('camera-a', 'camera-b'):
+            image_dir = os.path.join(self.d, directory)
+            os.makedirs(image_dir)
+            image_path = os.path.join(image_dir, 'frame.png')
+            image = QImage(50, 50, QImage.Format_RGB32)
+            image.fill(0xFFFFFF)
+            self.assertTrue(image.save(image_path))
+            image_paths.append(image_path)
+
+        def write_voc(path, verified):
+            writer = PascalVocWriter('f', 'frame.png', (50, 50, 3))
+            writer.verified = verified
+            writer.add_bnd_box(1, 1, 9, 9, 'cat', difficult=0)
+            writer.save(path)
+
+        first_xml = annotation_output_base(
+            image_paths[0], self.d, image_paths) + '.xml'
+        second_txt = annotation_output_base(
+            image_paths[1], self.d, image_paths) + '.txt'
+        legacy_xml = os.path.join(self.d, 'frame.xml')
+        write_voc(first_xml, verified=True)
+        with open(second_txt, 'w') as f:
+            f.write('0 0.5 0.5 0.2 0.2\n')
+        write_voc(legacy_xml, verified=True)
+
+        self.win.m_img_list = image_paths
+        self.win.file_list_widget.clear()
+        self.win.file_list_widget.addItems(image_paths)
+
+        self.win.apply_status_filter(1)
+        self.assertFalse(self.win.file_list_widget.item(0).isHidden())
+        self.assertFalse(self.win.file_list_widget.item(1).isHidden())
+
+        self.win.apply_status_filter(2)
+        self.assertFalse(self.win.file_list_widget.item(0).isHidden())
+        self.assertTrue(self.win.file_list_widget.item(1).isHidden())
+
+        count, failures = self.win._apply_batch_verify(False)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(failures, [
+            (image_paths[1], 'not a PASCAL VOC annotation')])
+        self.assertFalse(PascalVocReader(first_xml).verified)
+        self.assertTrue(PascalVocReader(legacy_xml).verified)
 
 
 class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):

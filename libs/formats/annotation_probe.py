@@ -24,6 +24,7 @@ from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
 from libs.formats.coco_io import COCOReader
 from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
 from libs.formats.yolo_io import YoloReader
+from libs.formats.annotation_paths import find_existing_annotation
 
 try:
     from PyQt5.QtGui import QImageReader
@@ -80,18 +81,28 @@ def _first_existing(dirs, name):
     return None
 
 
-def _resolve(image_path, save_dir):
+def _resolve(image_path, save_dir, image_list=None):
     """Return (path, fmt) for the first matching annotation, or (None, None)."""
-    basename = os.path.splitext(os.path.basename(image_path))[0]
     dirs = _search_dirs(image_path, save_dir)
 
-    xml = _first_existing(dirs, basename + XML_EXT)
-    if xml:
-        return xml, 'voc'
+    path = find_existing_annotation(
+        image_path,
+        save_dir=save_dir,
+        image_list=image_list,
+        extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+    )
+    if path:
+        extension = os.path.splitext(path)[1].lower()
+        if extension == XML_EXT:
+            return path, 'voc'
+        if extension == TXT_EXT:
+            return path, 'yolo'
+        return path, 'json'
 
-    txt = _first_existing(dirs, basename + TXT_EXT)
+    txt = None
     if not txt:
         # Standard YOLO layout: <parent-of-image-dir>/labels/<base>.txt
+        basename = os.path.splitext(os.path.basename(image_path))[0]
         img_dir = os.path.dirname(image_path)
         sibling = os.path.join(os.path.dirname(img_dir), 'labels',
                                basename + TXT_EXT)
@@ -99,10 +110,6 @@ def _resolve(image_path, save_dir):
             txt = sibling
     if txt:
         return txt, 'yolo'
-
-    base_json = _first_existing(dirs, basename + JSON_EXT)
-    if base_json:
-        return base_json, 'json'
 
     coco_json = _first_existing(dirs, COCO_JSON_NAME)
     if coco_json:
@@ -158,7 +165,7 @@ def _read_json(path, image_path):
     return 'createml', bool(labels), bool(reader.verified), labels
 
 
-def probe(image_path, save_dir=None, want_labels=False):
+def probe(image_path, save_dir=None, want_labels=False, image_list=None):
     """Resolve and read an image's annotation.
 
     Args:
@@ -166,11 +173,13 @@ def probe(image_path, save_dir=None, want_labels=False):
         save_dir: Optional directory annotations are saved to.
         want_labels: When True, read label names (a full read for YOLO);
             when False, labels may be left empty for cheaper status-only scans.
+        image_list: Optional active dataset paths used to disambiguate
+            recursively discovered images with the same basename.
 
     Returns:
         An :class:`AnnotationInfo`.
     """
-    path, fmt = _resolve(image_path, save_dir)
+    path, fmt = _resolve(image_path, save_dir, image_list=image_list)
     info = AnnotationInfo(path=path, fmt=fmt)
     if not path:
         return info

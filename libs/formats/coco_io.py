@@ -177,17 +177,27 @@ class COCOReader:
         cat_map = {c['id']: c['name'] for c in data.get('categories', [])}
 
         images = data.get('images', [])
-        target_image_id = None
-        if target_filename:
-            for img in images:
-                if img.get('file_name') == target_filename:
-                    target_image_id = img.get('id')
-                    break
-        if target_image_id is None and images:
+        if target_filename is None:
+            if not images:
+                return
             target_image_id = images[0].get('id')
+        else:
+            target_image = next(
+                (img for img in images
+                 if img.get('file_name') == target_filename),
+                None,
+            )
+            if target_image is None:
+                return
+            target_image_id = target_image.get('id')
+
+        if target_image_id is None:
+            return
 
         for ann in data.get('annotations', []):
-            if ann.get('image_id') != target_image_id:
+            annotation_image_id = ann.get('image_id')
+            if (annotation_image_id is None
+                    or annotation_image_id != target_image_id):
                 continue
 
             # Untrusted file: skip annotations missing required fields rather

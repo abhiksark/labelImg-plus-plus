@@ -36,15 +36,26 @@ class CreateMLWriter:
             "annotations": []
         }
 
-        for shape in self.shapes:
+        for shape_index, shape in enumerate(self.shapes):
             points = shape["points"]
+            if not isinstance(points, (list, tuple)) or len(points) < 2:
+                raise ValueError(
+                    "CreateML shape at index "
+                    f"{shape_index} requires at least two points"
+                )
 
-            x1 = points[0][0]
-            y1 = points[0][1]
-            x2 = points[1][0]
-            y2 = points[2][1]
-
-            height, width, x, y = self.calculate_coordinates(x1, x2, y1, y2)
+            try:
+                x_values = [point[0] for point in points]
+                y_values = [point[1] for point in points]
+                height, width, x, y = self.calculate_coordinates(
+                    min(x_values), max(x_values),
+                    min(y_values), max(y_values),
+                )
+            except (IndexError, TypeError, ValueError) as error:
+                raise ValueError(
+                    "CreateML shape at index "
+                    f"{shape_index} must contain numeric coordinate pairs"
+                ) from error
 
             shape_dict = {
                 "label": shape["label"],
@@ -102,22 +113,26 @@ class CreateMLReader:
         if not isinstance(output_list, list):
             raise ValueError("CreateML annotation file must be a JSON array")
 
-        if output_list and isinstance(output_list[0], dict):
-            self.verified = output_list[0].get("verified", False)
-
+        # Use the first exact match, mirroring CreateMLWriter's replacement
+        # behavior if a malformed file contains duplicate image entries.
         for image in output_list:
             if not isinstance(image, dict):
                 continue
             if image.get("image") == self.filename:
-                for shape in image.get("annotations", []):
-                    label = shape.get("label")
-                    coords = shape.get("coordinates")
-                    if label is None or not isinstance(coords, dict):
-                        continue
-                    if not all(k in coords
-                               for k in ("x", "y", "width", "height")):
-                        continue
-                    self.add_shape(label, coords)
+                break
+        else:
+            return
+
+        self.verified = image.get("verified", False)
+        for shape in image.get("annotations", []):
+            label = shape.get("label")
+            coords = shape.get("coordinates")
+            if label is None or not isinstance(coords, dict):
+                continue
+            if not all(k in coords
+                       for k in ("x", "y", "width", "height")):
+                continue
+            self.add_shape(label, coords)
 
     def add_shape(self, label, bnd_box):
         x_min = bnd_box["x"] - (bnd_box["width"] / 2)

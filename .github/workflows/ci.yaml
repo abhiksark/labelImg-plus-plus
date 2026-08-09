@@ -43,9 +43,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: |
-          python -m pytest tests/ -v 2>&1 | tee pytest_output.txt
-          grep -q "passed" pytest_output.txt && ! grep -q "FAILED\|ERROR" pytest_output.txt
+        run: python -m pytest tests/ -v
 
   publish:
     needs: test

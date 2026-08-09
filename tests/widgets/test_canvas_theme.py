@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QApplication
 from libs.widgets.canvas import Canvas
 from libs.utils.styles import Theme
 
-app = QApplication(sys.argv)
+app = QApplication.instance() or QApplication(sys.argv)
 
 def test_canvas_theme_colors():
     """Test canvas respects theme for verified background."""

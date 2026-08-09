@@ -76,6 +76,9 @@ from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
 from libs.formats.yolo_io import TXT_EXT
 from libs.formats.create_ml_io import JSON_EXT
 from libs.formats.annotation_probe import probe as probe_annotation
+from libs.formats.annotation_paths import (
+    annotation_output_base, find_existing_annotation,
+)
 from libs.formats import annotation_loader
 from libs.formats import format_metadata
 
@@ -129,9 +132,9 @@ class WindowMixin(object):
         return toolbar
 
 
-def _probe_status(image_path, save_dir):
+def _probe_status(image_path, save_dir, image_list=None):
     """Map the shared annotation probe to an AnnotationStatus enum value."""
-    info = probe_annotation(image_path, save_dir)
+    info = probe_annotation(image_path, save_dir, image_list=image_list)
     if info.verified:
         return AnnotationStatus.VERIFIED
     if info.has_labels:
@@ -209,11 +212,13 @@ class StatisticsWorker(QRunnable):
 
     def _compute_status(self, image_path):
         """Thread-safe annotation status check (no shared state)."""
-        return _probe_status(image_path, self.save_dir)
+        return _probe_status(image_path, self.save_dir, self.image_list)
 
     def _compute_labels(self, img_path):
         """Thread-safe label extraction (no shared state)."""
-        return probe_annotation(img_path, self.save_dir, want_labels=True).labels
+        return probe_annotation(
+            img_path, self.save_dir, want_labels=True,
+            image_list=self.image_list).labels
 
 
 class StatusRefreshWorkerSignals(QObject):
@@ -272,7 +277,7 @@ class StatusRefreshWorker(QRunnable):
 
     def _compute_status(self, image_path):
         """Thread-safe annotation status check (no shared state)."""
-        return _probe_status(image_path, self.save_dir)
+        return _probe_status(image_path, self.save_dir, self.image_list)
 
 
 class MainWindow(QMainWindow, WindowMixin):
@@ -318,6 +323,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Whether we need to save or not.
         self.dirty = False
+        self._reset_all_in_progress = False
 
         # Clipboard for copy/paste annotations across images
         self.clipboard_shapes = []
@@ -1231,6 +1237,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_current_theme'):
             self.full_gallery.apply_theme(self._current_theme)
         self.full_gallery.set_save_dir(self.default_save_dir)
+        self.full_gallery.set_status_filter(
+            self.status_filter_combo.currentIndex())
         self.full_gallery.set_image_list(self.m_img_list)
         self.full_gallery.image_selected.connect(
             lambda path: self.gallery_image_selected(path, source='full'))
@@ -1701,7 +1709,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if use_cache and image_path in self._annotation_status_cache:
             return self._annotation_status_cache[image_path]
 
-        status = _probe_status(image_path, self.default_save_dir)
+        status = _probe_status(
+            image_path, self.default_save_dir, self.m_img_list)
 
         # Cache the result
         self._annotation_status_cache[image_path] = status
@@ -1724,15 +1733,17 @@ class MainWindow(QMainWindow, WindowMixin):
         self._dock_status_controller.cleanup()
 
     def _update_current_image_gallery_status(self):
-        """Update gallery status for current image after save/verify."""
+        """Reload gallery state for the current persisted annotation."""
         if self.file_path:
             # Invalidate cache for this file to get fresh status
             self._invalidate_status_cache(self.file_path)
             status = self._get_annotation_status(self.file_path)
             self.gallery_widget.update_status(self.file_path, status)
+            self.gallery_widget.refresh_thumbnail(self.file_path)
             # Also update full-screen gallery if active
             if hasattr(self, 'full_gallery') and self.full_gallery:
                 self.full_gallery.update_status(self.file_path, status)
+                self.full_gallery.refresh_thumbnail(self.file_path)
 
     # Add chris
     def button_state(self, item=None):
@@ -2387,34 +2398,39 @@ class MainWindow(QMainWindow, WindowMixin):
         return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
 
     def show_bounding_box_from_annotation_file(self, file_path):
-        if self.default_save_dir is not None:
-            basename = os.path.basename(os.path.splitext(file_path)[0])
-            xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
-            txt_path = os.path.join(self.default_save_dir, basename + TXT_EXT)
-            json_path = os.path.join(self.default_save_dir, basename + JSON_EXT)
-        else:
-            xml_path = os.path.splitext(file_path)[0] + XML_EXT
-            txt_path = os.path.splitext(file_path)[0] + TXT_EXT
-            json_path = os.path.splitext(file_path)[0] + JSON_EXT
+        if not file_path:
+            return
 
-        # Dispatch based on current format for unambiguous types
         if self.label_file_format == LabelFileFormat.COCO:
-            if os.path.isfile(json_path):
-                self.load_coco_json_by_filename(json_path, file_path)
-                return
+            extensions = (JSON_EXT, XML_EXT, TXT_EXT)
         elif self.label_file_format == LabelFileFormat.YOLO_SEG:
-            if os.path.isfile(txt_path):
-                self.load_yolo_seg_by_filename(txt_path)
-                return
+            extensions = (TXT_EXT, XML_EXT, JSON_EXT)
+        else:
+            extensions = (XML_EXT, TXT_EXT, JSON_EXT)
 
-        # Fallback: auto-detect by file extension priority
-        # PascalXML > YOLO > CreateML
-        if os.path.isfile(xml_path):
-            self.load_pascal_xml_by_filename(xml_path)
-        elif os.path.isfile(txt_path):
-            self.load_yolo_txt_by_filename(txt_path)
-        elif os.path.isfile(json_path):
-            self.load_create_ml_json_by_filename(json_path, file_path)
+        annotation_path = find_existing_annotation(
+            file_path,
+            save_dir=self.default_save_dir,
+            image_list=self.m_img_list,
+            extensions=extensions,
+        )
+        if not annotation_path:
+            return
+
+        extension = os.path.splitext(annotation_path)[1].lower()
+        if extension == XML_EXT:
+            self.load_pascal_xml_by_filename(annotation_path)
+        elif extension == TXT_EXT:
+            if self.label_file_format == LabelFileFormat.YOLO_SEG:
+                self.load_yolo_seg_by_filename(annotation_path)
+            else:
+                self.load_yolo_txt_by_filename(annotation_path)
+        elif extension == JSON_EXT:
+            if self.label_file_format == LabelFileFormat.COCO:
+                self.load_coco_json_by_filename(annotation_path, file_path)
+            else:
+                self.load_create_ml_json_by_filename(
+                    annotation_path, file_path)
 
     def resizeEvent(self, event):
         if self.canvas and not self.image.isNull()\
@@ -2445,8 +2461,14 @@ class MainWindow(QMainWindow, WindowMixin):
             self.centralWidget().width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
+        if self._reset_all_in_progress:
+            event.accept()
+            return
+
         if not self.may_continue():
             event.ignore()
+            return
+
         settings = self.settings
         # If it loads images from dir, don't load it at the beginning
         if self.dir_name is None:
@@ -2597,27 +2619,19 @@ class MainWindow(QMainWindow, WindowMixin):
         # Apply current theme before showing
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        dialog.fix_requested.connect(self._apply_label_fix)
         dialog.exec_()
 
     def _apply_label_fix(self, old_label, new_label):
-        """Apply a label fix across annotations.
+        """Report that automatic label rewriting is not implemented.
 
         Args:
             old_label: The label to replace
             new_label: The replacement label
-        """
-        if not self.dir_name:
-            return
 
-        # This would need to iterate through all annotation files
-        # and replace old_label with new_label
-        # For now, just log - full implementation would update files
-        print(f"Label fix requested: '{old_label}' → '{new_label}'")
-        self.statusBar().showMessage(
-            f"Label fix: '{old_label}' → '{new_label}' (reload to see changes)",
-            5000
-        )
+        Returns:
+            False: No annotation files were changed.
+        """
+        return False
 
     def apply_status_filter(self, index):
         """Filter file list by annotation status.
@@ -2638,6 +2652,10 @@ class MainWindow(QMainWindow, WindowMixin):
                 show = not self._has_annotation(img_path)
             item.setHidden(not show)
 
+        self.gallery_widget.set_status_filter(index)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_status_filter(index)
+
     def _has_annotation(self, img_path):
         """Check if image has an annotation file.
 
@@ -2647,14 +2665,12 @@ class MainWindow(QMainWindow, WindowMixin):
         Returns:
             True if an annotation file exists for the image.
         """
-        basename = os.path.splitext(os.path.basename(img_path))[0]
-        save_dir = self.default_save_dir or os.path.dirname(img_path)
-        for ext in [XML_EXT, TXT_EXT, JSON_EXT]:
-            if os.path.isfile(os.path.join(save_dir, basename + ext)):
-                return True
-            if os.path.isfile(os.path.splitext(img_path)[0] + ext):
-                return True
-        return False
+        return find_existing_annotation(
+            img_path,
+            save_dir=self.default_save_dir,
+            image_list=self.m_img_list,
+            extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+        ) is not None
 
     def _is_verified(self, img_path):
         """Check if image annotation is verified.
@@ -2665,14 +2681,15 @@ class MainWindow(QMainWindow, WindowMixin):
         Returns:
             True if the annotation is marked as verified.
         """
-        basename = os.path.splitext(os.path.basename(img_path))[0]
-        save_dir = self.default_save_dir or os.path.dirname(img_path)
-        xml_path = os.path.join(save_dir, basename + XML_EXT)
-        if not os.path.isfile(xml_path):
-            xml_path = os.path.splitext(img_path)[0] + XML_EXT
-        if os.path.isfile(xml_path):
+        annotation_path = find_existing_annotation(
+            img_path,
+            save_dir=self.default_save_dir,
+            image_list=self.m_img_list,
+            extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+        )
+        if annotation_path and annotation_path.lower().endswith(XML_EXT):
             try:
-                reader = PascalVocReader(xml_path)
+                reader = PascalVocReader(annotation_path)
                 return reader.verified
             except Exception:
                 pass
@@ -2729,24 +2746,25 @@ class MainWindow(QMainWindow, WindowMixin):
         count = 0
         failures = []
         for img_path in self.m_img_list:
-            if not self._has_annotation(img_path):
+            annotation_path = find_existing_annotation(
+                img_path,
+                save_dir=self.default_save_dir,
+                image_list=self.m_img_list,
+                extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+            )
+            if not annotation_path:
                 continue
-            basename = os.path.splitext(os.path.basename(img_path))[0]
-            save_dir = self.default_save_dir or os.path.dirname(img_path)
-            xml_path = os.path.join(save_dir, basename + XML_EXT)
-            if not os.path.isfile(xml_path):
-                xml_path = os.path.splitext(img_path)[0] + XML_EXT
-            if not os.path.isfile(xml_path):
+            if not annotation_path.lower().endswith(XML_EXT):
                 failures.append((img_path, 'not a PASCAL VOC annotation'))
                 continue
             try:
-                tree = ET.parse(xml_path)
+                tree = ET.parse(annotation_path)
                 root = tree.getroot()
                 if verify:
                     root.set('verified', 'yes')
                 else:
                     root.attrib.pop('verified', None)
-                tree.write(xml_path)
+                tree.write(annotation_path)
                 count += 1
             except (ET.ParseError, OSError) as e:
                 failures.append((img_path, str(e)))
@@ -2887,8 +2905,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas.locked = self.canvas.verified
             self.paint_canvas()
             self.save_file()
-            # Update gallery status after verify
-            self._update_current_image_gallery_status()
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
@@ -2961,23 +2977,24 @@ class MainWindow(QMainWindow, WindowMixin):
             self.load_file(filename)
 
     def save_file(self, _value=False):
+        if not self.file_path:
+            return False
+
         if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            if self.file_path:
-                image_file_name = os.path.basename(self.file_path)
-                saved_file_name = os.path.splitext(image_file_name)[0]
-                saved_path = os.path.join(ustr(self.default_save_dir), saved_file_name)
-                self._save_file(saved_path)
+            saved_path = annotation_output_base(
+                self.file_path, ustr(self.default_save_dir), self.m_img_list)
+            return self._save_file(saved_path)
         else:
             image_file_dir = os.path.dirname(self.file_path)
             image_file_name = os.path.basename(self.file_path)
             saved_file_name = os.path.splitext(image_file_name)[0]
             saved_path = os.path.join(image_file_dir, saved_file_name)
-            self._save_file(saved_path if self.label_file
-                            else self.save_file_dialog(remove_ext=False))
+            return self._save_file(saved_path if self.label_file
+                                   else self.save_file_dialog(remove_ext=False))
 
     def save_file_as(self, _value=False):
         assert not self.image.isNull(), "cannot save empty image"
-        self._save_file(self.save_file_dialog())
+        return self._save_file(self.save_file_dialog())
 
     def save_file_dialog(self, remove_ext=True):
         caption = '%s - Choose File' % __appname__
@@ -2998,12 +3015,15 @@ class MainWindow(QMainWindow, WindowMixin):
         return ''
 
     def _save_file(self, annotation_file_path):
-        if annotation_file_path and self.save_labels(annotation_file_path):
-            self.set_clean()
-            self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
-            self.statusBar().show()
-            # Update gallery status after save
-            self._update_current_image_gallery_status()
+        if not annotation_file_path or not self.save_labels(annotation_file_path):
+            return False
+
+        self.set_clean()
+        self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
+        self.statusBar().show()
+        # Update gallery status after save
+        self._update_current_image_gallery_status()
+        return True
 
     def close_file(self, _value=False):
         if not self.may_continue():
@@ -3016,25 +3036,66 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def delete_image(self):
         delete_path = self.file_path
-        if delete_path is not None:
-            idx = self.cur_img_idx
-            if os.path.exists(delete_path):
-                os.remove(delete_path)
-            self.import_dir_images(self.last_open_dir)
-            if self.img_count > 0:
-                self.cur_img_idx = min(idx, self.img_count - 1)
-                filename = self.m_img_list[self.cur_img_idx]
-                self.load_file(filename)
-            else:
-                self.close_file()
+        if delete_path is None:
+            return False
+
+        confirmation = QMessageBox.warning(
+            self,
+            u'Delete Image',
+            (u'Permanently delete the current image?\n\n%s\n\n'
+             u'This action cannot be undone. Annotation files will be kept.')
+            % delete_path,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirmation != QMessageBox.Yes:
+            return False
+
+        if not self.may_continue():
+            return False
+
+        idx = self.cur_img_idx
+        try:
+            os.remove(delete_path)
+        except OSError as error:
+            self.error_message(
+                u'Error deleting image',
+                u'Could not delete %s:\n%s' % (delete_path, error),
+            )
+            self.status(u'Could not delete %s' % delete_path)
+            return False
+
+        # may_continue() deliberately leaves dirty set when the user chooses
+        # to discard edits. Clear it only after the image is actually deleted
+        # so refreshing the directory cannot prompt for those edits again.
+        self.set_clean()
+        reload_dir = self.last_open_dir or os.path.dirname(delete_path)
+        self.import_dir_images(reload_dir)
+        if self.img_count > 0:
+            self.cur_img_idx = min(idx, self.img_count - 1)
+            filename = self.m_img_list[self.cur_img_idx]
+            self.load_file(filename)
+        else:
+            self.close_file()
+        return True
 
     def reset_all(self):
-        self.settings.reset()
-        self.close()
+        if not self.may_continue():
+            return False
+
+        self._reset_all_in_progress = True
+        try:
+            self.settings.reset()
+            if not self.close():
+                return False
+        finally:
+            self._reset_all_in_progress = False
+
         process = QProcess()
         # Relaunch through the Python interpreter so the restart works for an
         # installed (entry-point) package, not just a source checkout.
         process.startDetached(sys.executable, [os.path.abspath(__file__)])
+        return True
 
     def may_continue(self):
         if not self.dirty:
@@ -3044,8 +3105,7 @@ class MainWindow(QMainWindow, WindowMixin):
             if discard_changes == QMessageBox.No:
                 return True
             elif discard_changes == QMessageBox.Yes:
-                self.save_file()
-                return True
+                return self.save_file()
             else:
                 return False
 
@@ -3354,14 +3414,13 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.file_path:
             return  # No file loaded
 
-        # Determine save path (same logic as save_file)
-        image_file_name = os.path.basename(self.file_path)
-        saved_file_name = os.path.splitext(image_file_name)[0]
-
         if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            save_path = os.path.join(ustr(self.default_save_dir), saved_file_name)
+            save_path = annotation_output_base(
+                self.file_path, ustr(self.default_save_dir), self.m_img_list)
         else:
             image_file_dir = os.path.dirname(self.file_path)
+            image_file_name = os.path.basename(self.file_path)
+            saved_file_name = os.path.splitext(image_file_name)[0]
             save_path = os.path.join(image_file_dir, saved_file_name)
 
         if save_path:
@@ -3472,7 +3531,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def _get_labels_for_image(self, img_path):
         """Get list of labels for an image from its annotation file."""
         return probe_annotation(
-            img_path, self.default_save_dir, want_labels=True).labels
+            img_path, self.default_save_dir, want_labels=True,
+            image_list=self.m_img_list).labels
 
 
 def get_main_app(argv=None):
@@ -3483,14 +3543,15 @@ def get_main_app(argv=None):
     if not argv:
         argv = []
 
-    # Enable high-DPI scaling for better icon rendering on HiDPI displays
-    try:
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-    except AttributeError:
-        pass  # Qt4 doesn't have these attributes
-
-    app = QApplication(argv)
+    app = QApplication.instance()
+    if app is None:
+        # These attributes must be set before constructing QApplication.
+        try:
+            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        except AttributeError:
+            pass  # Qt4 doesn't have these attributes
+        app = QApplication(argv)
     app.setStyle('Fusion')  # Use Fusion style for consistent cross-platform styling
     app.setStyleSheet(get_combined_style())  # Apply global stylesheet
     app.setApplicationName(__appname__)

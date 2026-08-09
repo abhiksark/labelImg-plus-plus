@@ -17,6 +17,8 @@ from libs.tools.label_checker import (
     LabelIssue,
     IssueType
 )
+from libs.formats.annotation_paths import annotation_output_base
+from libs.formats.pascal_voc_io import PascalVocWriter
 
 
 class TestLabelConsistencyChecker(unittest.TestCase):
@@ -240,6 +242,42 @@ class TestScanAnnotations(unittest.TestCase):
         labels = LabelConsistencyChecker.scan_annotations(img_dir, save_dir)
 
         self.assertIn('cat', labels)
+
+    def test_scan_collision_safe_sidecars_before_stale_legacy_decoy(self):
+        """Same-stem YOLO/VOC labels stay paired with their source images."""
+        img_dir = os.path.join(self.temp_dir, 'images')
+        save_dir = os.path.join(self.temp_dir, 'labels')
+        os.makedirs(save_dir)
+        images = []
+        for directory in ('camera-a', 'camera-b'):
+            source_dir = os.path.join(img_dir, directory)
+            os.makedirs(source_dir)
+            image_path = os.path.join(source_dir, 'frame.jpg')
+            open(image_path, 'w').close()
+            images.append(image_path)
+
+        first_txt = annotation_output_base(
+            images[0], save_dir, images) + '.txt'
+        second_xml = annotation_output_base(
+            images[1], save_dir, images) + '.xml'
+        with open(first_txt, 'w') as f:
+            f.write('0 0.5 0.5 0.2 0.2\n')
+        with open(os.path.join(save_dir, 'classes.txt'), 'w') as f:
+            f.write('cat\n')
+
+        writer = PascalVocWriter('f', 'frame.jpg', (50, 50, 3))
+        writer.add_bnd_box(1, 1, 9, 9, 'dog', difficult=0)
+        writer.save(second_xml)
+        stale_xml = os.path.join(save_dir, 'frame.xml')
+        stale_writer = PascalVocWriter('f', 'frame.jpg', (50, 50, 3))
+        stale_writer.add_bnd_box(1, 1, 9, 9, 'stale', difficult=0)
+        stale_writer.save(stale_xml)
+
+        labels = LabelConsistencyChecker.scan_annotations(img_dir, save_dir)
+
+        self.assertEqual(labels['cat'], [first_txt])
+        self.assertEqual(labels['dog'], [second_xml])
+        self.assertNotIn('stale', labels)
 
 
 if __name__ == '__main__':
