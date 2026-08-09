@@ -72,7 +72,7 @@ labelImg++/
 ## Development Setup
 
 ### Prerequisites
-- Python 3.6+
+- Python 3.8+
 - PyQt5
 - lxml
 

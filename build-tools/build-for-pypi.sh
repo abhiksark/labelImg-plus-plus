@@ -14,6 +14,9 @@ make qt5py3
 # Build package
 python -m build
 
+# Validate both distributions before any upload.
+twine check dist/*
+
 echo ""
 echo "Build complete! Files in dist/:"
 ls -la dist/

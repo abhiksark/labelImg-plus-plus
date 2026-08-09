@@ -1,6 +1,84 @@
 History
 =======
 
+3.0.0 (2026-08-09)
+------------------
+
+Stable release of the 3.0 line. It carries the SAM-assisted annotation work
+introduced in the alpha and RC0 format fixes into a production release, while
+hardening annotation paths, save operations, gallery refreshes, dataset tools,
+and packaging. Python 3.8 through 3.13 are supported.
+
+Highlights
+~~~~~~~~~~
+
+* **SAM-assisted polygons** — click an object to trace a polygon with
+  MobileSAM on ONNX Runtime. The optional ``[sam]`` extra remains isolated
+  from core installs, downloads a checksum-verified model pair on first use,
+  and requires neither PyTorch nor Git dependencies.
+* **Five annotation formats** — PASCAL VOC, YOLO bounding boxes, CreateML,
+  COCO, and YOLO-seg are available in one workflow, including polygon
+  previews in both gallery surfaces and COCO keypoint preservation.
+* **Dataset utilities** — the train/validation/test splitter now keeps image
+  and annotation pairs collision-safe and deterministic, and the Vertex AI
+  CSV exporter validates malformed input and reports actionable failures.
+
+Fixes Since RC0
+~~~~~~~~~~~~~~~
+
+* Fix the Gallery Mode status filter (#97). **Annotated** includes verified
+  images, **Verified** includes only verified images, and **Unannotated**
+  includes only images without labels. The filter now applies to the dock and
+  full-screen galleries, survives reloads, waits for asynchronous status
+  results, and re-evaluates thumbnails after save and verification changes.
+* Prevent recursively discovered same-stem images from overwriting one
+  another in a flat annotation directory. Every member of a real collision
+  receives a deterministic image-specific sidecar name; non-colliding images
+  keep the historical basename.
+* Prefer collision-specific annotations over stale legacy sidecars throughout
+  loading, status probing, gallery previews, batch verification, autosave,
+  label checking, and dataset splitting.
+* Render bounding boxes and polygons correctly in gallery thumbnails for all
+  supported formats, select the intended image in shared COCO/CreateML JSON,
+  and prevent stale thumbnail workers from replacing refreshed overlays.
+* Preserve an existing YOLO ``classes.txt`` index map, reject malformed
+  coordinates safely, retain COCO keys and keypoints correctly, and convert
+  polygons to enclosing boxes consistently when a target format requires it.
+* Propagate cancelled or failed saves instead of reporting success, delete the
+  intended image only after explicit confirmation, avoid changing state on a
+  failed delete, and guard Reset All against recursive settings callbacks.
+* Refresh docked and full-screen gallery status and overlays only after a
+  successful persistence operation.
+* Make dataset-split output names deterministic and collision-safe across
+  image and annotation extensions without overwriting existing output.
+* Replace the CSV exporter's implicit pandas behavior with a dependency-free,
+  validated 11-column Vertex AI exporter and honor its requested output path.
+* Package the generated Qt resource module so installed wheels can start and
+  load icons and translated strings without a source checkout.
+* Make the project test commands and CI preserve pytest's real exit status.
+
+Compatibility Notes
+~~~~~~~~~~~~~~~~~~~
+
+* Existing legacy ``<image-stem>.xml``, ``.txt``, and ``.json`` sidecars
+  remain readable. Collision-specific names are created only when recursive
+  same-stem images need distinct files, and remain stable once created.
+* Core installation remains ``pip install labelimgplusplus``. SAM stays
+  opt-in with ``pip install labelimgplusplus[sam]``.
+* The **Label Checker** is intentionally read-only in 3.0.0: it scans,
+  suggests, and exports reports, but its automatic repair action remains
+  disabled because annotation rewriting is not implemented safely yet.
+
+Release Engineering
+~~~~~~~~~~~~~~~~~~~
+
+* Test core behavior on Python 3.8 through 3.13 and the focused ``[sam]``
+  dependency path on Python 3.8 and 3.13.
+* Validate that release tags match the package version and point to a commit on
+  ``master``; build and Twine-check the wheel and sdist once, wait for Linux,
+  macOS, and Windows packaging, then publish those exact artifacts through
+  PyPI Trusted Publishing.
+
 3.0.0rc0 (2026-06-18)
 ---------------------
 

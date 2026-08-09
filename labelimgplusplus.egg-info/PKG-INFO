@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 3.0.0rc0
+Version: 3.0.0
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -16,7 +16,7 @@ License: Copyright (c) <2015-Present> Tzutalin
 Project-URL: Homepage, https://github.com/abhiksark/labelImg-plus-plus
 Project-URL: Repository, https://github.com/abhiksark/labelImg-plus-plus
 Keywords: labelImg,labelimgpp,labelimgplusplus,annotation,deeplearning,image-annotation,bounding-box,gallery
-Classifier: Development Status :: 4 - Beta
+Classifier: Development Status :: 5 - Production/Stable
 Classifier: Intended Audience :: Developers
 Classifier: Intended Audience :: Science/Research
 Classifier: Natural Language :: English
@@ -26,6 +26,7 @@ Classifier: Programming Language :: Python :: 3.9
 Classifier: Programming Language :: Python :: 3.10
 Classifier: Programming Language :: Python :: 3.11
 Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
 Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
 Classifier: Topic :: Scientific/Engineering :: Image Recognition
 Requires-Python: >=3.8
@@ -69,8 +70,8 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Source version: 3.0.0rc0 (release candidate).** The PyPI badge above
-    reflects the latest version actually published there.
+    **Version 3.0.0 (stable).** Install with
+    ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
      :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
@@ -337,11 +338,11 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.0.0rc0**, a release candidate for
-the 3.0 line. See the `release history
-<https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`_ for
+This source tree identifies itself as **3.0.0**, the stable 3.0 release. See
+the `release history
+<https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases
-<https://github.com/abhiksark/labelImg-plus-plus/releases>`_ for published
+<https://github.com/abhiksark/labelImg-plus-plus/releases>`__ for published
 artifacts.
 
 Contributing

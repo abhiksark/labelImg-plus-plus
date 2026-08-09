@@ -29,8 +29,8 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Source version: 3.0.0rc0 (release candidate).** The PyPI badge above
-    reflects the latest version actually published there.
+    **Version 3.0.0 (stable).** Install with
+    ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
      :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
@@ -297,11 +297,11 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.0.0rc0**, a release candidate for
-the 3.0 line. See the `release history
-<https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`_ for
+This source tree identifies itself as **3.0.0**, the stable 3.0 release. See
+the `release history
+<https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases
-<https://github.com/abhiksark/labelImg-plus-plus/releases>`_ for published
+<https://github.com/abhiksark/labelImg-plus-plus/releases>`__ for published
 artifacts.
 
 Contributing

@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
@@ -36,50 +36,120 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyqt5 lxml pytest
 
-      - name: Build Qt resources
+      - name: Build and verify Qt resources
         run: |
           pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
 
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests/ -v
 
-  publish:
-    needs: test
+  sam-test:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      id-token: write
-    environment:
-      name: pypi
-      url: https://pypi.org/project/labelimgplusplus/
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.8', '3.13']
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 x11-utils libegl1-mesa-dev
+
+      - name: Install package with SAM dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install '.[sam]' pytest
+
+      - name: Build and verify Qt resources
+        run: |
+          pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
+
+      - name: Run focused SAM tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pytest \
+            tests/integrations \
+            tests/integration/test_sam_controller.py \
+            tests/integration/test_sam_mainwindow.py \
+            tests/widgets/test_canvas_sam.py \
+            tests/widgets/test_sam_settings_dialog.py \
+            tests/utils/test_sam_constants.py \
+            -v
+
+  build-release:
+    needs: [test, sam-test]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
+
+      - name: Validate release tag and branch ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version=$(python - <<'PY'
+          import pathlib
+          import re
+
+          text = pathlib.Path('pyproject.toml').read_text(encoding='utf-8')
+          match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+          if match is None:
+              raise SystemExit('package version not found')
+          print(match.group(1))
+          PY
+          )
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+          git fetch --no-tags origin master
+          tag_commit=$(git rev-parse "${GITHUB_REF}^{commit}")
+          git merge-base --is-ancestor "${tag_commit}" origin/master
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build pyqt5
+          pip install build twine pyqt5 lxml
 
-      - name: Build Qt resources
+      - name: Build and verify Qt resources
         run: |
           pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
 
-      - name: Build package
-        run: python -m build
+      - name: Build and check distributions
+        run: |
+          python -m build
+          twine check dist/*
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+      - name: Upload tested distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
 
   package-macos:
-    needs: test
+    needs: [test, sam-test]
     runs-on: macos-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -91,18 +161,21 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyqt5 lxml pyinstaller  # No version pin - use wheels for ARM64
-      - name: Build Qt resources
-        run: pyrcc5 -o libs/resources.py resources.qrc
+          pip install pyqt5 lxml pyinstaller
+      - name: Build and verify Qt resources
+        run: |
+          pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
       - name: Package
         run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
       - uses: actions/upload-artifact@v4
         with:
           name: macOS-artifact
           path: dist/labelImgPlusPlus
+          if-no-files-found: error
 
   package-windows:
-    needs: test
+    needs: [test, sam-test]
     runs-on: windows-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -115,17 +188,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyqt5 lxml pyinstaller
-      - name: Build Qt resources
-        run: pyrcc5 -o libs/resources.py resources.qrc
+      - name: Build and verify Qt resources
+        shell: bash
+        run: |
+          pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
       - name: Package
         run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
       - uses: actions/upload-artifact@v4
         with:
           name: Windows-artifact
           path: dist/labelImgPlusPlus.exe
+          if-no-files-found: error
 
   package-linux:
-    needs: test
+    needs: [test, sam-test]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -138,11 +215,36 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyqt5 lxml pyinstaller
-      - name: Build Qt resources
-        run: pyrcc5 -o libs/resources.py resources.qrc
+      - name: Build and verify Qt resources
+        run: |
+          pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
       - name: Package
         run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
       - uses: actions/upload-artifact@v4
         with:
           name: Linux-artifact
           path: dist/labelImgPlusPlus
+          if-no-files-found: error
+
+  publish:
+    needs: [build-release, package-linux, package-macos, package-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/labelimgplusplus/
+
+    steps:
+      - name: Download tested distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish exact tested distributions
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          packages-dir: dist/
