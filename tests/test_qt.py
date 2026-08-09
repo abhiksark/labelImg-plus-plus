@@ -16,7 +16,23 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..'))
 
+from PyQt5.QtWidgets import QApplication
+
 from labelImgPlusPlus import get_main_app
+
+
+class TestApplicationLifecycle(unittest.TestCase):
+    """The process-wide QApplication must be reused across windows."""
+
+    def test_get_main_app_reuses_qapplication(self):
+        first_app, first_win = get_main_app()
+        second_app, second_win = get_main_app()
+        try:
+            self.assertIs(first_app, second_app)
+            self.assertIs(first_app, QApplication.instance())
+        finally:
+            first_win.close()
+            second_win.close()
 
 
 class TestMainWindowSmoke(unittest.TestCase):

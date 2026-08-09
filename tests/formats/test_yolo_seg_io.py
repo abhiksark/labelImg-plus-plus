@@ -50,6 +50,44 @@ class TestYOLOSegWriter(unittest.TestCase):
         parts = line.split()
         self.assertEqual(len(parts), 9)  # class + 4 points * 2 coords
 
+    def test_existing_class_map_is_preserved_for_old_annotations(self):
+        """An existing classes.txt is authoritative for the whole dataset."""
+        classes_path = os.path.join(self.tmp_dir, 'classes.txt')
+        old_txt_path = os.path.join(self.tmp_dir, 'old.txt')
+
+        with open(classes_path, 'w') as f:
+            f.write('zebra\ncat\n')
+        with open(old_txt_path, 'w') as f:
+            f.write('0 0.100000 0.100000 0.900000 0.100000 '
+                    '0.500000 0.900000\n')
+
+        writer = YOLOSegWriter('folder', 'new.jpg', [100, 100, 3])
+        writer.add_polygon([(10, 10), (20, 10), (15, 20)], 'dog', False)
+        writer.add_polygon([(20, 20), (30, 20), (25, 30)], 'zebra', False)
+        writer.add_polygon([(30, 30), (40, 30), (35, 40)], 'dog', False)
+        writer.add_polygon([(40, 40), (50, 40), (45, 50)], 'ant', False)
+
+        # This models MainWindow's label history: it is not the dataset map and
+        # may contain unused labels in a different order.
+        writer.save(
+            target_file=self.out_path,
+            class_list=['dog', 'zebra', 'unused'],
+        )
+
+        with open(classes_path) as f:
+            self.assertEqual(f.read(), 'zebra\ncat\ndog\nant\n')
+        with open(self.out_path) as f:
+            indices = [int(line.split()[0]) for line in f]
+        self.assertEqual(indices, [2, 0, 2, 3])
+
+        image = QImage(100, 100, QImage.Format_RGB32)
+        old_reader = YOLOSegReader(old_txt_path, image, classes_path)
+        new_reader = YOLOSegReader(self.out_path, image, classes_path)
+        self.assertEqual([shape[0] for shape in old_reader.get_shapes()],
+                         ['zebra'])
+        self.assertEqual([shape[0] for shape in new_reader.get_shapes()],
+                         ['dog', 'zebra', 'dog', 'ant'])
+
 
 class TestYOLOSegReader(unittest.TestCase):
 

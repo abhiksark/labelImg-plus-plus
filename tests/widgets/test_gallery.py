@@ -1,9 +1,11 @@
 """Tests for Gallery mode logic (parsing, file lookup, caching)."""
+import json
 import os
 import sys
 import tempfile
 import shutil
 import unittest
+from unittest.mock import MagicMock, patch
 
 if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
@@ -13,16 +15,26 @@ libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
+from PyQt5.QtCore import QSize
+from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.galleryWidget import (
+    OverlayShape,
+    POLYGON,
+    RECTANGLE,
     find_annotation_file,
+    parse_json_overlay_shapes,
     parse_yolo_annotations,
+    parse_yolo_overlay_shapes,
     parse_voc_annotations,
+    parse_voc_overlay_shapes,
     ThumbnailCache,
+    ThumbnailLoaderWorker,
     AnnotationStatus,
     GalleryWidget,
 )
+from libs.formats.annotation_paths import annotation_output_base
 
 app = QApplication.instance() or QApplication(sys.argv)
 
@@ -119,6 +131,59 @@ class TestFindAnnotationFile(unittest.TestCase):
         _, _, found_classes = find_annotation_file(img_path)
 
         self.assertEqual(found_classes, classes_path)
+
+    def test_collision_safe_yolo_precedes_stale_legacy_voc(self):
+        """A target-specific annotation wins over a legacy basename decoy."""
+        first_dir = os.path.join(self.img_dir, 'camera-a')
+        second_dir = os.path.join(self.img_dir, 'camera-b')
+        os.makedirs(first_dir)
+        os.makedirs(second_dir)
+        images = [
+            os.path.join(first_dir, 'frame.jpg'),
+            os.path.join(second_dir, 'frame.jpg'),
+        ]
+        for image_path in images:
+            open(image_path, 'w').close()
+
+        specific_txt = annotation_output_base(
+            images[1], self.save_dir, images) + '.txt'
+        legacy_xml = os.path.join(self.save_dir, 'frame.xml')
+        classes_path = os.path.join(self.save_dir, 'classes.txt')
+        open(specific_txt, 'w').close()
+        open(legacy_xml, 'w').close()
+        open(classes_path, 'w').close()
+
+        result = find_annotation_file(
+            images[1], save_dir=self.save_dir, image_list=images)
+
+        self.assertEqual(result, (specific_txt, 'yolo', classes_path))
+
+    def test_yolo_seg_detection_and_parent_classes_fallback(self):
+        """Segmentation TXT is detected and can use parent classes.txt."""
+        img_path = os.path.join(self.img_dir, 'test.jpg')
+        txt_path = os.path.join(self.save_dir, 'test.txt')
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+        open(img_path, 'w').close()
+        with open(txt_path, 'w') as annotation_file:
+            annotation_file.write('0 0.1 0.1 0.9 0.1 0.5 0.8\n')
+        with open(classes_path, 'w') as classes_file:
+            classes_file.write('triangle\n')
+
+        result = find_annotation_file(img_path, save_dir=self.save_dir)
+
+        self.assertEqual(result, (txt_path, 'yolo_seg', classes_path))
+
+    def test_finds_shared_annotations_json(self):
+        """Shared COCO annotations.json is considered after sidecars."""
+        img_path = os.path.join(self.img_dir, 'test.jpg')
+        shared_path = os.path.join(self.save_dir, 'annotations.json')
+        open(img_path, 'w').close()
+        with open(shared_path, 'w') as annotation_file:
+            json.dump({'images': [], 'annotations': []}, annotation_file)
+
+        result = find_annotation_file(img_path, save_dir=self.save_dir)
+
+        self.assertEqual(result, (shared_path, 'coco', None))
 
 
 class TestParseYoloAnnotations(unittest.TestCase):
@@ -313,6 +378,152 @@ class TestParseVocAnnotations(unittest.TestCase):
         self.assertEqual(annotations, [])
 
 
+class TestOverlayParsers(unittest.TestCase):
+    """Format readers produce one normalized shape representation."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_yolo_seg_geometry_is_not_interpreted_as_a_bbox(self):
+        txt_path = os.path.join(self.temp_dir, 'segmentation.txt')
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+        with open(txt_path, 'w') as annotation_file:
+            annotation_file.write(
+                '0 0.10 0.20 0.80 0.20 0.55 0.90\n'
+                '0 bad 0.2 0.8 0.2 0.5 0.9\n'
+            )
+        with open(classes_path, 'w') as classes_file:
+            classes_file.write('object\n')
+
+        legacy_boxes = parse_yolo_annotations(txt_path, classes_path)
+        shapes = parse_yolo_overlay_shapes(txt_path, classes_path)
+
+        self.assertEqual(legacy_boxes, [])
+        self.assertEqual(shapes, [OverlayShape(
+            'object', POLYGON,
+            ((0.10, 0.20), (0.80, 0.20), (0.55, 0.90)),
+        )])
+
+    def test_voc_five_point_polygon_uses_original_image_dimensions(self):
+        xml_path = os.path.join(self.temp_dir, 'polygon.xml')
+        with open(xml_path, 'w') as annotation_file:
+            annotation_file.write("""<?xml version="1.0"?>
+<annotation>
+  <filename>polygon.jpg</filename>
+  <size><width>50</width><height>50</height><depth>3</depth></size>
+  <object>
+    <name>pentagon</name>
+    <bndbox><xmin>20</xmin><ymin>10</ymin><xmax>120</xmax><ymax>80</ymax></bndbox>
+    <polygon>
+      <pt><x>20</x><y>10</y></pt>
+      <pt><x>100</x><y>10</y></pt>
+      <pt><x>120</x><y>50</y></pt>
+      <pt><x>60</x><y>80</y></pt>
+      <pt><x>20</x><y>50</y></pt>
+    </polygon>
+  </object>
+</annotation>""")
+
+        shapes = parse_voc_overlay_shapes(xml_path, QSize(200, 100))
+
+        self.assertEqual(len(shapes), 1)
+        self.assertEqual(shapes[0].shape_type, POLYGON)
+        self.assertEqual(len(shapes[0].points), 5)
+        self.assertEqual(shapes[0].points[0], (0.1, 0.1))
+        self.assertEqual(shapes[0].points[2], (0.6, 0.5))
+
+    def test_createml_selects_target_box(self):
+        json_path = os.path.join(self.temp_dir, 'dataset.json')
+        image_path = os.path.join(self.temp_dir, 'target.jpg')
+        data = [
+            {
+                'image': 'other.jpg',
+                'annotations': [{
+                    'label': 'decoy',
+                    'coordinates': {
+                        'x': 10, 'y': 10, 'width': 5, 'height': 5,
+                    },
+                }],
+            },
+            {
+                'image': 'target.jpg',
+                'annotations': [{
+                    'label': 'car',
+                    'coordinates': {
+                        'x': 100, 'y': 50, 'width': 40, 'height': 20,
+                    },
+                }],
+            },
+        ]
+        with open(json_path, 'w') as annotation_file:
+            json.dump(data, annotation_file)
+
+        shapes = parse_json_overlay_shapes(
+            json_path, image_path, QSize(200, 100))
+
+        self.assertEqual(shapes, [OverlayShape(
+            'car', RECTANGLE,
+            ((0.4, 0.4), (0.6, 0.4), (0.6, 0.6), (0.4, 0.6)),
+        )])
+
+    def test_coco_selects_target_polygon_and_box_without_fallback(self):
+        json_path = os.path.join(self.temp_dir, 'annotations.json')
+        data = {
+            'images': [
+                {'id': 1, 'file_name': 'other.jpg',
+                 'width': 200, 'height': 100},
+                {'id': 2, 'file_name': 'target.jpg',
+                 'width': 50, 'height': 50},
+            ],
+            'categories': [
+                {'id': 1, 'name': 'region'},
+                {'id': 2, 'name': 'vehicle'},
+            ],
+            'annotations': [
+                {'id': 1, 'image_id': 1, 'category_id': 2,
+                 'bbox': [0, 0, 200, 100]},
+                {'id': 2, 'image_id': 2, 'category_id': 1,
+                 'segmentation': [[20, 10, 100, 10, 60, 80]],
+                 'bbox': [20, 10, 80, 70]},
+                {'id': 3, 'image_id': 2, 'category_id': 2,
+                 'bbox': [100, 20, 40, 30]},
+            ],
+        }
+        with open(json_path, 'w') as annotation_file:
+            json.dump(data, annotation_file)
+
+        shapes = parse_json_overlay_shapes(
+            json_path,
+            os.path.join(self.temp_dir, 'target.jpg'),
+            QSize(200, 100),
+        )
+        missing = parse_json_overlay_shapes(
+            json_path,
+            os.path.join(self.temp_dir, 'missing.jpg'),
+            QSize(200, 100),
+        )
+
+        self.assertEqual([shape.shape_type for shape in shapes],
+                         [POLYGON, RECTANGLE])
+        self.assertEqual(shapes[0].points,
+                         ((0.1, 0.1), (0.5, 0.1), (0.3, 0.8)))
+        self.assertEqual(shapes[1].points,
+                         ((0.5, 0.2), (0.7, 0.2),
+                          (0.7, 0.5), (0.5, 0.5)))
+        self.assertEqual(missing, [])
+
+    def test_malformed_json_returns_no_shapes(self):
+        json_path = os.path.join(self.temp_dir, 'broken.json')
+        with open(json_path, 'w') as annotation_file:
+            annotation_file.write('{not-json')
+
+        self.assertEqual(parse_json_overlay_shapes(
+            json_path, 'target.jpg', QSize(200, 100)), [])
+
+
 class TestThumbnailCache(unittest.TestCase):
     """Test cases for ThumbnailCache LRU cache."""
 
@@ -427,6 +638,185 @@ class TestAnnotationStatus(unittest.TestCase):
         self.assertEqual(AnnotationStatus.VERIFIED, 2)
 
 
+class TestThumbnailImageListPropagation(unittest.TestCase):
+    """Thumbnail lookup must receive the complete gallery image list."""
+
+    def test_worker_passes_image_list_to_annotation_lookup(self):
+        image_list = ['/images/a/frame.jpg', '/images/b/frame.jpg']
+        worker = ThumbnailLoaderWorker(
+            image_list[0], save_dir='/labels', image_list=image_list)
+
+        with patch(
+            'libs.widgets.galleryWidget.find_annotation_file',
+            return_value=(None, None, None),
+        ) as find_annotation:
+            worker._draw_annotations(QImage(10, 10, QImage.Format_RGB32))
+
+        find_annotation.assert_called_once_with(
+            image_list[0], '/labels', image_list)
+
+    def test_gallery_passes_image_list_when_constructing_worker(self):
+        gallery = GalleryWidget(show_size_slider=False)
+        gallery._save_dir = '/labels'
+        gallery._image_list = [
+            '/images/a/frame.jpg', '/images/b/frame.jpg']
+        gallery.thread_pool = MagicMock()
+
+        with patch(
+            'libs.widgets.galleryWidget.ThumbnailLoaderWorker'
+        ) as worker_class:
+            gallery._load_thumbnail_async(gallery._image_list[0])
+
+        worker_class.assert_called_once_with(
+            gallery._image_list[0], gallery._icon_size, '/labels',
+            gallery._image_list)
+        gallery.thread_pool.start.assert_called_once_with(
+            worker_class.return_value)
+
+
+class TestThumbnailRefresh(unittest.TestCase):
+    """A refresh must supersede any older worker for the same image."""
+
+    @staticmethod
+    def _solid_image(rgb):
+        image = QImage(8, 8, QImage.Format_RGB32)
+        image.fill(rgb)
+        return image
+
+    def test_older_result_cannot_overwrite_refreshed_thumbnail(self):
+        gallery = GalleryWidget(show_size_slider=False)
+        image_path = '/images/target.jpg'
+        gallery.thread_pool = MagicMock()
+        old_worker = MagicMock()
+        refreshed_worker = MagicMock()
+
+        with patch(
+            'libs.widgets.galleryWidget.ThumbnailLoaderWorker',
+            side_effect=[old_worker, refreshed_worker],
+        ):
+            gallery._load_thumbnail_async(image_path)
+            gallery.refresh_thumbnail(image_path)
+
+        old_result = old_worker.signals.thumbnail_ready.connect.call_args[0][0]
+        refreshed_result = (
+            refreshed_worker.signals.thumbnail_ready.connect.call_args[0][0])
+        refreshed_result(image_path, self._solid_image(0xFF00FF00))
+        old_result(image_path, self._solid_image(0xFFFF0000))
+
+        cached = gallery.thumbnail_cache.get(image_path).toImage()
+        self.assertEqual(cached.pixel(0, 0) & 0x00FFFFFF, 0x0000FF00)
+
+    def test_older_result_does_not_finish_refreshed_request(self):
+        gallery = GalleryWidget(show_size_slider=False)
+        image_path = '/images/target.jpg'
+        gallery.thread_pool = MagicMock()
+        old_worker = MagicMock()
+        refreshed_worker = MagicMock()
+
+        with patch(
+            'libs.widgets.galleryWidget.ThumbnailLoaderWorker',
+            side_effect=[old_worker, refreshed_worker],
+        ):
+            gallery._load_thumbnail_async(image_path)
+            gallery.refresh_thumbnail(image_path)
+
+        old_result = old_worker.signals.thumbnail_ready.connect.call_args[0][0]
+        old_result(image_path, self._solid_image(0xFFFF0000))
+
+        self.assertIn(image_path, gallery._loading_paths)
+        self.assertIsNone(gallery.thumbnail_cache.get(image_path))
+
+    def test_loaded_callback_without_request_id_remains_supported(self):
+        gallery = GalleryWidget(show_size_slider=False)
+        image_path = '/images/target.jpg'
+
+        gallery._on_thumbnail_loaded(
+            image_path, self._solid_image(0xFF0000FF))
+
+        cached = gallery.thumbnail_cache.get(image_path).toImage()
+        self.assertEqual(cached.pixel(0, 0) & 0x00FFFFFF, 0x000000FF)
+
+
+class TestThumbnailOverlayDrawing(unittest.TestCase):
+    """Thumbnail painting keeps rectangles and polygons distinct."""
+
+    def test_draws_polygon_outline_and_rectangle_corner_markers(self):
+        worker = ThumbnailLoaderWorker('/images/target.jpg')
+        image = QImage(100, 100, QImage.Format_RGB32)
+        shapes = [
+            OverlayShape(
+                'box', RECTANGLE,
+                ((0.1, 0.1), (0.8, 0.1), (0.8, 0.8), (0.1, 0.8)),
+            ),
+            OverlayShape(
+                'region', POLYGON,
+                ((0.2, 0.2), (0.7, 0.3), (0.4, 0.9)),
+            ),
+        ]
+
+        with patch(
+            'libs.widgets.galleryWidget.find_annotation_file',
+            return_value=('/labels/target.txt', 'yolo_seg', None),
+        ), patch(
+            'libs.widgets.galleryWidget.parse_overlay_annotations',
+            return_value=shapes,
+        ) as parse_annotations, patch(
+            'libs.widgets.galleryWidget.QPainter',
+        ) as painter_class:
+            result = worker._draw_annotations(image, QSize(400, 200))
+
+        self.assertIs(result, image)
+        parse_annotations.assert_called_once_with(
+            '/labels/target.txt',
+            'yolo_seg',
+            '/images/target.jpg',
+            original_size=QSize(400, 200),
+            classes_path=None,
+        )
+        painter = painter_class.return_value
+        self.assertEqual(painter.drawLine.call_count, 8)
+        painter.drawRect.assert_not_called()
+        painter.drawPolygon.assert_called_once()
+        painter.end.assert_called_once()
+
+    def test_run_passes_unscaled_source_size_to_drawing(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            image_path = os.path.join(temp_dir, 'source.png')
+            source = QImage(200, 100, QImage.Format_RGB32)
+            self.assertTrue(source.save(image_path))
+            worker = ThumbnailLoaderWorker(image_path, size=50)
+            worker._draw_annotations = MagicMock(
+                side_effect=lambda thumbnail, original_size: thumbnail)
+
+            worker.run()
+
+            thumbnail, original_size = worker._draw_annotations.call_args[0]
+            self.assertEqual((thumbnail.width(), thumbnail.height()), (50, 25))
+            self.assertEqual(
+                (original_size.width(), original_size.height()), (200, 100))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_malformed_annotation_leaves_image_usable(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            image_path = os.path.join(temp_dir, 'target.jpg')
+            json_path = os.path.join(temp_dir, 'target.json')
+            open(image_path, 'w').close()
+            with open(json_path, 'w') as annotation_file:
+                annotation_file.write('[malformed')
+            worker = ThumbnailLoaderWorker(image_path)
+            image = QImage(20, 20, QImage.Format_RGB32)
+
+            result = worker._draw_annotations(image, QSize(200, 100))
+
+            self.assertIs(result, image)
+            self.assertFalse(result.isNull())
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 class TestGalleryTheme(unittest.TestCase):
     """The gallery must theme itself regardless of the size slider."""
 
@@ -443,6 +833,87 @@ class TestGalleryTheme(unittest.TestCase):
         gallery.apply_theme(Theme.DARK)
         expected = hex_to_qcolor(get_theme_colors(Theme.DARK)['status_verified'])
         self.assertEqual(gallery._status_colors[AnnotationStatus.VERIFIED], expected)
+
+
+class TestGalleryStatusFilter(unittest.TestCase):
+    """Gallery filtering follows the status combo's four-index contract."""
+
+    def setUp(self):
+        self.gallery = GalleryWidget(show_size_slider=False)
+        self.paths = [
+            '/images/unannotated.jpg',
+            '/images/annotated.jpg',
+            '/images/verified.jpg',
+            '/images/pending.jpg',
+        ]
+        self.gallery.set_image_list(self.paths)
+        self.gallery.update_all_statuses({
+            self.paths[0]: AnnotationStatus.NO_LABELS,
+            self.paths[1]: AnnotationStatus.HAS_LABELS,
+            self.paths[2]: AnnotationStatus.VERIFIED,
+        })
+
+    def _visible_paths(self):
+        return {
+            path for path, item in self.gallery._path_to_item.items()
+            if not item.isHidden()
+        }
+
+    def test_all_filter_includes_known_and_unknown_statuses(self):
+        self.gallery.set_status_filter(0)
+        self.assertEqual(self._visible_paths(), set(self.paths))
+
+    def test_annotated_filter_includes_verified_and_hides_unknown(self):
+        self.gallery.set_status_filter(1)
+        self.assertEqual(self._visible_paths(), set(self.paths[1:3]))
+
+    def test_verified_filter_only_includes_verified(self):
+        self.gallery.set_status_filter(2)
+        self.assertEqual(self._visible_paths(), {self.paths[2]})
+
+    def test_unannotated_filter_only_includes_no_labels(self):
+        self.gallery.set_status_filter(3)
+        self.assertEqual(self._visible_paths(), {self.paths[0]})
+
+    def test_async_status_arrival_re_evaluates_visibility(self):
+        self.gallery.set_status_filter(1)
+        self.assertNotIn(self.paths[3], self._visible_paths())
+
+        self.gallery.update_status(
+            self.paths[3], AnnotationStatus.HAS_LABELS)
+
+        self.assertIn(self.paths[3], self._visible_paths())
+
+    def test_status_change_after_save_or_verify_re_evaluates_visibility(self):
+        self.gallery.set_status_filter(3)
+        self.assertIn(self.paths[0], self._visible_paths())
+
+        self.gallery.update_status(
+            self.paths[0], AnnotationStatus.HAS_LABELS)
+        self.assertNotIn(self.paths[0], self._visible_paths())
+
+        self.gallery.set_status_filter(2)
+        self.gallery.update_status(
+            self.paths[0], AnnotationStatus.VERIFIED)
+        self.assertIn(self.paths[0], self._visible_paths())
+
+    def test_filter_survives_image_list_reload(self):
+        self.gallery.set_status_filter(2)
+
+        self.gallery.set_image_list(self.paths)
+        self.assertEqual(self.gallery._status_filter, 2)
+        self.assertEqual(self._visible_paths(), set())
+
+        self.gallery.update_all_statuses({
+            self.paths[0]: AnnotationStatus.NO_LABELS,
+            self.paths[1]: AnnotationStatus.HAS_LABELS,
+            self.paths[2]: AnnotationStatus.VERIFIED,
+        })
+        self.assertEqual(self._visible_paths(), {self.paths[2]})
+
+    def test_rejects_unknown_filter_index(self):
+        with self.assertRaises(ValueError):
+            self.gallery.set_status_filter(4)
 
 
 if __name__ == '__main__':

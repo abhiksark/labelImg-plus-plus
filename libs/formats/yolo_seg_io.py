@@ -3,6 +3,7 @@
 
 import os
 
+from libs.formats.yolo_io import _resolve_class_list
 from libs.utils.constants import DEFAULT_ENCODING
 
 TXT_EXT = '.txt'
@@ -41,6 +42,11 @@ class YOLOSegWriter:
         out_path = target_file or (self.filename + TXT_EXT)
         classes_path = os.path.join(
             os.path.dirname(os.path.abspath(out_path)), 'classes.txt')
+        class_list = _resolve_class_list(
+            classes_path,
+            class_list,
+            (entry['name'] for entry in self._entries),
+        )
 
         h, w = self.img_size[0], self.img_size[1]
 

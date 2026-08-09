@@ -8,7 +8,7 @@ testpy2:
 	python -m unittest discover -s tests -t .
 
 testpy3:
-	python3 -m unittest discover -s tests -t .
+	QT_QPA_PLATFORM=offscreen python3 -m pytest tests/ -v
 
 qt4: qt4py2
 
@@ -32,4 +32,4 @@ pip_upload:
 long_description:
 	restview --long-description
 
-.PHONY: all
+.PHONY: all test testpy3

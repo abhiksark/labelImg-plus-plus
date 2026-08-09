@@ -3,9 +3,9 @@
 ## Convert the label files to CSV
 
 ### Introduction
-To train the images on [Google Cloud AutoML](https://cloud.google.com/automl), we should prepare the specific csv files follow [this format](https://cloud.google.com/vision/automl/object-detection/docs/csv-format).
+To train an object-detection model on Google Cloud, prepare a CSV file in the [Vertex AI object-detection import format](https://cloud.google.com/vertex-ai/docs/image-data/object-detection/prepare-data#csv).
 
-`label_to_csv.py` can convert the `txt` or `xml` label files to csv file. The labels files should strictly follow to below structure.
+`label_to_csv.py` converts YOLO `txt` or Pascal VOC `xml` label files to that CSV format. The label files must follow the structure below.
 
 ### Structures
 * Images
@@ -52,36 +52,39 @@ To train the images on [Google Cloud AutoML](https://cloud.google.com/automl), w
 
 ### Usage
 
-To see the argument of `label_to_csv.py`,
+From the repository root, run:
+
 ```commandline
-python label_to_csv.py -h
+python tools/label_to_csv.py -h
 ```
 
 ```commandline
-usage: label_to_csv.py [-h] -p PREFIX -l LOCATION -m MODE [-o OUTPUT]
+usage: label_to_csv.py [-h] -p PREFIX -l LOCATION -m {txt,xml} [-o OUTPUT]
                        [-c CLASSES]
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -p PREFIX, --prefix PREFIX
-                        Bucket of the cloud storage path
+                        Cloud Storage bucket or gs:// path prefix
   -l LOCATION, --location LOCATION
-                        Parent directory of the label files
-  -m MODE, --mode MODE  'xml' for converting from xml and 'txt' for converting
-                        from txt
+                        Parent directory of the split label directories
+  -m {txt,xml}, --mode {txt,xml}
+                        Source annotation format
   -o OUTPUT, --output OUTPUT
-                        Output name of csv file
+                        Output CSV path (default: res.csv)
   -c CLASSES, --classes CLASSES
-                        Label classes path
+                        YOLO class names file (TXT mode only)
 ```
 
-For example, if mine bucket name is **test**, the location of the label directory is **/User/test/labels**, the mode I choose from is **txt**, the output name and the class path is same as default.
+For example, with a bucket named **test**, labels in **/User/test/labels**, and YOLO TXT annotations:
+
 ```commandline
-python label_to_csv.py \
--p test\
--l /User/test/labels \
--m txt
+python tools/label_to_csv.py \
+  -p test \
+  -l /User/test/labels \
+  -m txt
 ```
 
-The output file is `res.csv` by default. Afterwards, upload the csv file to the cloud storage and you can start training!
+The output file is `res.csv` by default; use `--output PATH` to choose another location. TXT mode maps each YOLO class index through `--classes`, whose default is the repository's `data/predefined_classes.txt`. XML mode reads labels directly from each Pascal VOC file and does not use `--classes`.
 
+Malformed annotations, unreadable inputs, and unwritable output paths produce a concise error and a nonzero exit status. After a successful export, upload the CSV file to Cloud Storage and import it into Vertex AI.

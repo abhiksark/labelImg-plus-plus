@@ -9,6 +9,31 @@ from libs.utils.constants import DEFAULT_ENCODING
 TXT_EXT = '.txt'
 ENCODE_METHOD = DEFAULT_ENCODING
 
+
+def _resolve_class_list(classes_file_path, class_list, annotation_labels):
+    """Return the class map that must be used for a YOLO save.
+
+    A sibling classes.txt belongs to the dataset, so its indices take
+    precedence over a caller-provided label history.  When no map exists, keep
+    the historical behavior of using and extending the supplied list.
+    """
+    if os.path.exists(classes_file_path):
+        with open(classes_file_path, 'r',
+                  encoding=ENCODE_METHOD) as classes_file:
+            contents = classes_file.read().strip('\n')
+        effective_class_list = contents.split('\n') if contents else []
+    elif class_list is None:
+        effective_class_list = []
+    else:
+        effective_class_list = class_list
+
+    for label in annotation_labels:
+        if label not in effective_class_list:
+            effective_class_list.append(label)
+
+    return effective_class_list
+
+
 class YOLOWriter:
 
     def __init__(self, folder_name, filename, img_size, database_src='Unknown', local_img_path=None):
@@ -61,6 +86,11 @@ class YOLOWriter:
 
         classes_file_path = os.path.join(
             os.path.dirname(os.path.abspath(out_path)), "classes.txt"
+        )
+        class_list = _resolve_class_list(
+            classes_file_path,
+            class_list,
+            (box['name'] for box in self.box_list),
         )
 
         # Write annotation file

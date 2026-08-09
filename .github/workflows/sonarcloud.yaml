@@ -40,13 +40,7 @@ jobs:
           pyrcc5 -o libs/resources.py resources.qrc
 
       - name: Run tests with coverage
-        # PyQt5 + offscreen + coverage segfaults at interpreter shutdown
-        # (exit 139) even with all 463 tests passing. The .coverage data
-        # file is still written incrementally during the run, so we
-        # tolerate the shutdown SEGV and generate the XML in the next step.
-        continue-on-error: true
-        run: |
-          coverage run --source=libs,labelImgPlusPlus -m pytest tests/ -v
+        run: coverage run --source=libs,labelImgPlusPlus -m pytest tests/ -v
         env:
           QT_QPA_PLATFORM: offscreen
 
@@ -57,7 +51,8 @@ jobs:
           coverage report
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
+        uses: SonarSource/sonarqube-scan-action@v8.2.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io

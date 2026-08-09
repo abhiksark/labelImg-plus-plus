@@ -139,6 +139,68 @@ class TestCOCOReader(unittest.TestCase):
         reader = self._read(data)  # must not raise
         self.assertEqual(reader.get_shapes(), [])
 
+    def test_missing_target_does_not_fall_back_to_first_image(self):
+        data = {
+            'images': [
+                {'id': 1, 'file_name': 'first.jpg'},
+                {'id': 2, 'file_name': 'second.jpg'},
+            ],
+            'annotations': [
+                {'id': 1, 'image_id': 1, 'category_id': 1,
+                 'bbox': [10, 20, 30, 40]},
+                {'id': 2, 'image_id': 2, 'category_id': 2,
+                 'bbox': [50, 60, 70, 80]},
+                {'id': 3, 'category_id': 1, 'bbox': [1, 2, 3, 4]},
+            ],
+            'categories': [
+                {'id': 1, 'name': 'cat'},
+                {'id': 2, 'name': 'dog'},
+            ],
+        }
+
+        reader = self._read(data, target='missing.jpg')
+
+        self.assertEqual(reader.get_shapes(), [])
+
+    def test_no_target_preserves_first_image_fallback(self):
+        data = {
+            'images': [
+                {'id': 1, 'file_name': 'first.jpg'},
+                {'id': 2, 'file_name': 'second.jpg'},
+            ],
+            'annotations': [
+                {'id': 1, 'image_id': 1, 'category_id': 1,
+                 'bbox': [10, 20, 30, 40]},
+                {'id': 2, 'image_id': 2, 'category_id': 2,
+                 'bbox': [50, 60, 70, 80]},
+            ],
+            'categories': [
+                {'id': 1, 'name': 'cat'},
+                {'id': 2, 'name': 'dog'},
+            ],
+        }
+
+        shapes = self._read(data, target=None).get_shapes()
+
+        self.assertEqual(len(shapes), 1)
+        self.assertEqual(shapes[0][0], 'cat')
+
+    def test_null_image_id_is_never_selected(self):
+        data = {
+            'images': [
+                {'file_name': 'missing-id.jpg'},
+                {'id': 2, 'file_name': 'valid.jpg'},
+            ],
+            'annotations': [
+                {'id': 1, 'category_id': 1, 'bbox': [10, 20, 30, 40]},
+            ],
+            'categories': [{'id': 1, 'name': 'cat'}],
+        }
+
+        reader = self._read(data, target='missing-id.jpg')
+
+        self.assertEqual(reader.get_shapes(), [])
+
     def test_read_polygon(self):
         data = {
             'images': [{'id': 1, 'file_name': 'test.jpg', 'width': 640, 'height': 480}],

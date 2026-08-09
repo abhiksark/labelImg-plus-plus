@@ -12,9 +12,11 @@ except ImportError:
                               QListView, QSlider, QLabel, QPolygonF)
     from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPointF
 
-import os
 import hashlib
-from collections import OrderedDict
+import json
+import math
+import os
+from collections import namedtuple, OrderedDict
 from enum import IntEnum
 try:
     from xml.etree import ElementTree
@@ -23,6 +25,16 @@ except ImportError:
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_slider_style, get_gallery_controls_style, get_gallery_list_style
+from libs.formats.annotation_paths import find_existing_annotation
+from libs.formats.coco_io import COCOReader
+from libs.formats.create_ml_io import CreateMLReader
+from libs.formats.pascal_voc_io import PascalVocReader
+
+
+OverlayShape = namedtuple('OverlayShape', ['label', 'shape_type', 'points'])
+
+RECTANGLE = 'rectangle'
+POLYGON = 'polygon'
 
 
 def generate_color_by_text(text):
@@ -38,6 +50,119 @@ def generate_color_by_text(text):
     return QColor(r, g, b)
 
 
+def _read_classes(classes_path):
+    """Return class names from ``classes.txt`` without surfacing I/O errors."""
+    if not classes_path or not os.path.isfile(classes_path):
+        return []
+    try:
+        with open(classes_path, 'r') as classes_file:
+            return [line.strip() for line in classes_file if line.strip()]
+    except (OSError, UnicodeError):
+        return []
+
+
+def _class_label(classes, class_token):
+    """Resolve a non-negative YOLO class index, with the legacy fallback."""
+    try:
+        class_index = int(class_token)
+    except (TypeError, ValueError):
+        return None
+    if class_index < 0:
+        return None
+    if class_index < len(classes):
+        return classes[class_index]
+    return 'class_{}'.format(class_index)
+
+
+def _finite_floats(values):
+    try:
+        numbers = tuple(float(value) for value in values)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in numbers):
+        return None
+    return numbers
+
+
+def _image_dimensions(image_size):
+    """Return a valid ``(width, height)`` pair from QSize or a tuple."""
+    if image_size is None:
+        return None
+    try:
+        if hasattr(image_size, 'width'):
+            width = float(image_size.width())
+            height = float(image_size.height())
+        else:
+            width = float(image_size[0])
+            height = float(image_size[1])
+    except (IndexError, TypeError, ValueError):
+        return None
+    if not math.isfinite(width) or not math.isfinite(height):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _normalized_overlay_shape(label, shape_type, points):
+    """Validate an already-normalized overlay shape."""
+    normalized = []
+    for point in points:
+        values = _finite_floats(point)
+        if values is None or len(values) != 2:
+            return None
+        x, y = values
+        if not 0.0 <= x <= 1.0 or not 0.0 <= y <= 1.0:
+            return None
+        normalized.append((x, y))
+
+    expected_points = 4 if shape_type == RECTANGLE else 3
+    if len(normalized) < expected_points:
+        return None
+    return OverlayShape(str(label), shape_type, tuple(normalized))
+
+
+def _pixel_overlay_shape(label, shape_type, points, image_size):
+    """Normalize pixel coordinates against the source image dimensions."""
+    dimensions = _image_dimensions(image_size)
+    if dimensions is None:
+        return None
+    width, height = dimensions
+    normalized = []
+    for point in points:
+        values = _finite_floats(point)
+        if values is None or len(values) != 2:
+            return None
+        normalized.append((values[0] / width, values[1] / height))
+    return _normalized_overlay_shape(label, shape_type, normalized)
+
+
+def _rectangle_points(x_min, y_min, x_max, y_max):
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    return (
+        (x_min, y_min),
+        (x_max, y_min),
+        (x_max, y_max),
+        (x_min, y_max),
+    )
+
+
+def _parse_yolo_bbox(parts, classes):
+    """Parse one exact five-field YOLO bounding-box line."""
+    if len(parts) != 5:
+        return None
+    label = _class_label(classes, parts[0])
+    values = _finite_floats(parts[1:])
+    if label is None or values is None:
+        return None
+    x_center, y_center, width, height = values
+    if not (0.0 <= x_center <= 1.0 and 0.0 <= y_center <= 1.0
+            and 0.0 < width <= 1.0 and 0.0 < height <= 1.0):
+        return None
+    return label, values
+
+
 def parse_yolo_annotations(txt_path, classes_path=None):
     """Parse YOLO format annotations.
 
@@ -47,24 +172,59 @@ def parse_yolo_annotations(txt_path, classes_path=None):
     if not os.path.isfile(txt_path):
         return annotations
 
-    # Load class names
-    classes = []
-    if classes_path and os.path.isfile(classes_path):
-        with open(classes_path, 'r') as f:
-            classes = [line.strip() for line in f if line.strip()]
+    classes = _read_classes(classes_path)
 
-    with open(txt_path, 'r') as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 5:
-                class_idx = int(parts[0])
-                x_center = float(parts[1])
-                y_center = float(parts[2])
-                w = float(parts[3])
-                h = float(parts[4])
-                label = classes[class_idx] if class_idx < len(classes) else f"class_{class_idx}"
-                annotations.append((label, (x_center, y_center, w, h)))
+    try:
+        with open(txt_path, 'r') as annotation_file:
+            for line in annotation_file:
+                parsed = _parse_yolo_bbox(line.strip().split(), classes)
+                if parsed is not None:
+                    annotations.append(parsed)
+    except (OSError, UnicodeError):
+        return []
     return annotations
+
+
+def parse_yolo_overlay_shapes(txt_path, classes_path=None):
+    """Parse YOLO boxes and YOLO-seg polygons as normalized overlay shapes."""
+    if not os.path.isfile(txt_path):
+        return []
+
+    classes = _read_classes(classes_path)
+    shapes = []
+    try:
+        with open(txt_path, 'r') as annotation_file:
+            for line in annotation_file:
+                parts = line.strip().split()
+                bbox = _parse_yolo_bbox(parts, classes)
+                if bbox is not None:
+                    label, (x_center, y_center, width, height) = bbox
+                    points = _rectangle_points(
+                        max(0.0, x_center - width / 2),
+                        max(0.0, y_center - height / 2),
+                        min(1.0, x_center + width / 2),
+                        min(1.0, y_center + height / 2),
+                    )
+                    shape = _normalized_overlay_shape(
+                        label, RECTANGLE, points or ())
+                    if shape is not None:
+                        shapes.append(shape)
+                    continue
+
+                # YOLO segmentation is class + at least three x/y pairs.
+                if len(parts) < 7 or (len(parts) - 1) % 2:
+                    continue
+                label = _class_label(classes, parts[0])
+                coordinates = _finite_floats(parts[1:])
+                if label is None or coordinates is None:
+                    continue
+                points = tuple(zip(coordinates[::2], coordinates[1::2]))
+                shape = _normalized_overlay_shape(label, POLYGON, points)
+                if shape is not None:
+                    shapes.append(shape)
+    except (OSError, UnicodeError):
+        return []
+    return shapes
 
 
 def parse_voc_annotations(xml_path):
@@ -110,35 +270,252 @@ def parse_voc_annotations(xml_path):
     return annotations
 
 
-def find_annotation_file(image_path, save_dir=None):
+def _voc_image_size(root):
+    try:
+        size_element = root.find('size')
+        return (
+            float(size_element.find('width').text),
+            float(size_element.find('height').text),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def parse_voc_overlay_shapes(xml_path, original_size=None):
+    """Parse VOC rectangles and native polygons into normalized shapes."""
+    if not os.path.isfile(xml_path):
+        return []
+
+    image_size = original_size
+    if image_size is None and ElementTree is not None:
+        try:
+            image_size = _voc_image_size(
+                ElementTree.parse(xml_path).getroot())
+        except Exception:
+            return []
+    if _image_dimensions(image_size) is None:
+        return []
+
+    try:
+        reader = PascalVocReader(xml_path)
+    except Exception:
+        return []
+
+    shapes = []
+    for reader_shape in reader.get_shapes():
+        try:
+            label, points = reader_shape[:2]
+            shape_type = (
+                reader_shape[5]
+                if len(reader_shape) > 5
+                and reader_shape[5] in (RECTANGLE, POLYGON)
+                else RECTANGLE
+            )
+            shape = _pixel_overlay_shape(
+                label, shape_type, points, image_size)
+            if shape is not None:
+                shapes.append(shape)
+        except (IndexError, TypeError, ValueError):
+            continue
+    return shapes
+
+
+def _load_json(json_path):
+    try:
+        with open(json_path, 'r') as annotation_file:
+            return json.load(annotation_file)
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def _json_annotation_format(data):
+    if (isinstance(data, dict)
+            and isinstance(data.get('images'), list)
+            and isinstance(data.get('annotations'), list)):
+        return 'coco'
+    if isinstance(data, list):
+        return 'createml'
+    return None
+
+
+def _matching_coco_image(images, image_path):
+    """Select the requested COCO image without falling back to the first."""
+    target_path = os.path.normcase(os.path.normpath(os.fspath(image_path)))
+    target_path = target_path.replace('\\', '/')
+    target_basename = os.path.basename(target_path)
+
+    basename_matches = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        file_name = image.get('file_name')
+        if not isinstance(file_name, str) or not file_name:
+            continue
+        normalized = os.path.normcase(os.path.normpath(file_name))
+        normalized = normalized.replace('\\', '/')
+        if normalized == target_path or target_path.endswith('/' + normalized):
+            return image
+        if os.path.basename(normalized) == target_basename:
+            basename_matches.append(image)
+    if len(basename_matches) == 1:
+        return basename_matches[0]
+    return None
+
+
+def _parse_createml_overlay_shapes(json_path, image_path, original_size):
+    if _image_dimensions(original_size) is None:
+        return []
+
+    try:
+        reader = CreateMLReader(json_path, image_path)
+    except Exception:
+        return []
+
+    shapes = []
+    for reader_shape in reader.get_shapes():
+        try:
+            label, points = reader_shape[:2]
+            shape = _pixel_overlay_shape(
+                label, RECTANGLE, points, original_size)
+            if shape is not None:
+                shapes.append(shape)
+        except (IndexError, TypeError, ValueError):
+            continue
+    return shapes
+
+
+def _parse_coco_overlay_shapes(data, json_path, image_path, original_size):
+    target = _matching_coco_image(data.get('images', []), image_path)
+    if target is None:
+        return []
+    image_size = original_size or (
+        target.get('width'), target.get('height'))
+    if _image_dimensions(image_size) is None:
+        return []
+
+    target_filename = target.get('file_name')
+    try:
+        reader = COCOReader(json_path, target_filename)
+    except Exception:
+        return []
+
+    shapes = []
+    for reader_shape in reader.get_shapes():
+        try:
+            label, points = reader_shape[:2]
+            shape_type = (
+                reader_shape[5]
+                if len(reader_shape) > 5
+                and reader_shape[5] in (RECTANGLE, POLYGON)
+                else RECTANGLE
+            )
+            shape = _pixel_overlay_shape(
+                label, shape_type, points, image_size)
+            if shape is not None:
+                shapes.append(shape)
+        except (IndexError, TypeError, ValueError):
+            continue
+    return shapes
+
+
+def parse_json_overlay_shapes(json_path, image_path, original_size=None):
+    """Parse CreateML or COCO JSON, selecting only ``image_path``."""
+    data = _load_json(json_path)
+    annotation_format = _json_annotation_format(data)
+    if annotation_format == 'createml':
+        return _parse_createml_overlay_shapes(
+            json_path, image_path, original_size)
+    if annotation_format == 'coco':
+        return _parse_coco_overlay_shapes(
+            data, json_path, image_path, original_size)
+    return []
+
+
+def parse_overlay_annotations(annotation_path, annotation_format, image_path,
+                              original_size=None, classes_path=None):
+    """Return normalized shapes for any gallery-supported annotation file."""
+    if annotation_format in ('yolo', 'yolo_seg'):
+        return parse_yolo_overlay_shapes(annotation_path, classes_path)
+    if annotation_format == 'voc':
+        return parse_voc_overlay_shapes(annotation_path, original_size)
+    if annotation_format in ('createml', 'coco'):
+        return parse_json_overlay_shapes(
+            annotation_path, image_path, original_size)
+    return []
+
+
+def _txt_annotation_format(txt_path):
+    """Detect whether a TXT sidecar contains YOLO boxes or polygons."""
+    try:
+        with open(txt_path, 'r') as annotation_file:
+            for line in annotation_file:
+                parts = line.strip().split()
+                if len(parts) < 7 or (len(parts) - 1) % 2:
+                    continue
+                if (_class_label([], parts[0]) is not None
+                        and _finite_floats(parts[1:]) is not None):
+                    return 'yolo_seg'
+    except (OSError, UnicodeError):
+        pass
+    return 'yolo'
+
+
+def _find_classes_file(annotation_path, image_dir):
+    annotation_dir = os.path.dirname(annotation_path)
+    directories = [annotation_dir, os.path.dirname(annotation_dir), image_dir]
+    seen = set()
+    for directory in directories:
+        identity = os.path.normcase(os.path.abspath(directory or os.curdir))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidate = os.path.join(directory, 'classes.txt')
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def find_annotation_file(image_path, save_dir=None, image_list=None):
     """Find annotation file for an image.
 
-    Returns (annotation_path, format) or (None, None) if not found.
-    Format is 'yolo', 'voc', or 'createml'.
+    Returns (annotation_path, format, classes_path) or three ``None`` values.
+    Format is 'yolo', 'yolo_seg', 'voc', 'createml', or 'coco'.
     """
-    base = os.path.splitext(os.path.basename(image_path))[0]
     img_dir = os.path.dirname(image_path)
 
-    # Directories to search
-    search_dirs = [img_dir]
-    if save_dir and save_dir != img_dir:
-        search_dirs.append(save_dir)
+    annotation_path = find_existing_annotation(
+        image_path,
+        save_dir=save_dir,
+        image_list=image_list,
+        extensions=('.txt', '.xml', '.json'),
+    )
+    if not annotation_path:
+        search_directories = []
+        if save_dir:
+            search_directories.append(os.fspath(save_dir))
+        if img_dir not in search_directories:
+            search_directories.append(img_dir)
+        for directory in search_directories:
+            candidate = os.path.join(directory, 'annotations.json')
+            if os.path.isfile(candidate):
+                annotation_path = candidate
+                break
+    if not annotation_path:
+        return None, None, None
 
-    # Check for YOLO format (.txt)
-    for search_dir in search_dirs:
-        txt_path = os.path.join(search_dir, base + '.txt')
-        if os.path.isfile(txt_path):
-            # Find classes.txt
-            classes_path = os.path.join(search_dir, 'classes.txt')
-            if not os.path.isfile(classes_path):
-                classes_path = os.path.join(img_dir, 'classes.txt')
-            return txt_path, 'yolo', classes_path if os.path.isfile(classes_path) else None
-
-    # Check for Pascal VOC format (.xml)
-    for search_dir in search_dirs:
-        xml_path = os.path.join(search_dir, base + '.xml')
-        if os.path.isfile(xml_path):
-            return xml_path, 'voc', None
+    extension = os.path.splitext(annotation_path)[1].lower()
+    if extension == '.txt':
+        return (
+            annotation_path,
+            _txt_annotation_format(annotation_path),
+            _find_classes_file(annotation_path, img_dir),
+        )
+    if extension == '.xml':
+        return annotation_path, 'voc', None
+    if extension == '.json':
+        annotation_format = _json_annotation_format(
+            _load_json(annotation_path))
+        return annotation_path, annotation_format, None
 
     return None, None, None
 
@@ -191,11 +568,12 @@ class ThumbnailLoaderSignals(QObject):
 class ThumbnailLoaderWorker(QRunnable):
     """Worker for async thumbnail generation with annotation overlay."""
 
-    def __init__(self, image_path, size=100, save_dir=None):
+    def __init__(self, image_path, size=100, save_dir=None, image_list=None):
         super().__init__()
         self.image_path = image_path
         self.size = size
         self.save_dir = save_dir
+        self.image_list = list(image_list) if image_list is not None else None
         self.signals = ThumbnailLoaderSignals()
 
     def run(self):
@@ -215,26 +593,34 @@ class ThumbnailLoaderWorker(QRunnable):
             image = reader.read()
             if not image.isNull():
                 # Draw annotations on thumbnail
-                image = self._draw_annotations(image)
+                source_size = (
+                    original_size
+                    if original_size.isValid()
+                    else QSize(image.width(), image.height())
+                )
+                image = self._draw_annotations(image, source_size)
                 self.signals.thumbnail_ready.emit(self.image_path, image)
         except Exception:
             pass
 
-    def _draw_annotations(self, image):
-        """Draw bounding boxes on the thumbnail image."""
+    def _draw_annotations(self, image, original_size=None):
+        """Draw normalized annotation shapes on the thumbnail image."""
         # Find annotation file
         ann_path, ann_format, classes_path = find_annotation_file(
-            self.image_path, self.save_dir
+            self.image_path, self.save_dir, self.image_list
         )
         if not ann_path:
             return image
 
-        # Parse annotations
-        if ann_format == 'yolo':
-            annotations = parse_yolo_annotations(ann_path, classes_path)
-        elif ann_format == 'voc':
-            annotations = parse_voc_annotations(ann_path)
-        else:
+        try:
+            annotations = parse_overlay_annotations(
+                ann_path,
+                ann_format,
+                self.image_path,
+                original_size=original_size,
+                classes_path=classes_path,
+            )
+        except Exception:
             return image
 
         if not annotations:
@@ -250,44 +636,42 @@ class ThumbnailLoaderWorker(QRunnable):
         # Corner marker length (proportional to image size)
         corner_len = max(4, min(img_w, img_h) // 8)
 
-        for label, bbox in annotations:
-            x_center, y_center, w, h = bbox
+        try:
+            for shape in annotations:
+                color = generate_color_by_text(shape.label)
+                pen = QPen(color)
+                pen.setWidth(2)
+                painter.setPen(pen)
 
-            # Convert normalized coords to pixel coords
-            x1 = int((x_center - w / 2) * img_w)
-            y1 = int((y_center - h / 2) * img_h)
-            x2 = int((x_center + w / 2) * img_w)
-            y2 = int((y_center + h / 2) * img_h)
+                points = [
+                    QPointF(x * img_w, y * img_h)
+                    for x, y in shape.points
+                ]
+                if shape.shape_type == POLYGON:
+                    painter.drawPolygon(QPolygonF(points))
+                    continue
 
-            # Get color for this label
-            color = generate_color_by_text(label)
-            pen = QPen(color)
-            pen.setWidth(2)
-            painter.setPen(pen)
+                x_values = [point.x() for point in points]
+                y_values = [point.y() for point in points]
+                x1, x2 = int(min(x_values)), int(max(x_values))
+                y1, y2 = int(min(y_values)), int(max(y_values))
+                box_w = x2 - x1
+                box_h = y2 - y1
+                c = min(corner_len, box_w // 3, box_h // 3)
 
-            # Draw corner markers instead of full rectangle (less cluttered)
-            box_w = x2 - x1
-            box_h = y2 - y1
-            c = min(corner_len, box_w // 3, box_h // 3)  # Adjust corner size for small boxes
-
-            if c >= 2:
-                # Top-left corner
-                painter.drawLine(x1, y1, x1 + c, y1)
-                painter.drawLine(x1, y1, x1, y1 + c)
-                # Top-right corner
-                painter.drawLine(x2, y1, x2 - c, y1)
-                painter.drawLine(x2, y1, x2, y1 + c)
-                # Bottom-left corner
-                painter.drawLine(x1, y2, x1 + c, y2)
-                painter.drawLine(x1, y2, x1, y2 - c)
-                # Bottom-right corner
-                painter.drawLine(x2, y2, x2 - c, y2)
-                painter.drawLine(x2, y2, x2, y2 - c)
-            else:
-                # Box too small, draw simple rectangle
-                painter.drawRect(x1, y1, box_w, box_h)
-
-        painter.end()
+                if c >= 2:
+                    painter.drawLine(x1, y1, x1 + c, y1)
+                    painter.drawLine(x1, y1, x1, y1 + c)
+                    painter.drawLine(x2, y1, x2 - c, y1)
+                    painter.drawLine(x2, y1, x2, y1 + c)
+                    painter.drawLine(x1, y2, x1 + c, y2)
+                    painter.drawLine(x1, y2, x1, y2 - c)
+                    painter.drawLine(x2, y2, x2 - c, y2)
+                    painter.drawLine(x2, y2, x2, y2 - c)
+                else:
+                    painter.drawRect(x1, y1, box_w, box_h)
+        finally:
+            painter.end()
         return image
 
 
@@ -317,7 +701,14 @@ class GalleryWidget(QWidget):
         self._pending_paths = []  # For batched item creation
         self._batch_id = 0  # For cancelling pending batch callbacks
         self._loading_paths = set()
+        self._thumbnail_request_serial = 0
+        self._active_thumbnail_requests = {}
         self._statuses = {}
+        # Keep the status selection when the gallery is repopulated. Statuses
+        # arrive asynchronously after a directory reload, so filtered views
+        # hide an item until its status is known instead of briefly showing it
+        # in the wrong result set.
+        self._status_filter = 0
         self._loading_thumbnails = False  # Guard against re-entrant calls
         self._thumbnail_load_pending = False  # Debounce flag
 
@@ -420,6 +811,7 @@ class GalleryWidget(QWidget):
         # Clear cache and reload thumbnails at new size
         self.thumbnail_cache.clear()
         self._loading_paths.clear()
+        self._active_thumbnail_requests.clear()
         self._reload_all_thumbnails()
 
     def _set_preset_size(self, size):
@@ -526,6 +918,7 @@ class GalleryWidget(QWidget):
 
         self.list_widget.addItem(item)
         self._path_to_item[image_path] = item
+        self._update_item_filter_visibility(image_path)
 
     def _schedule_thumbnail_load(self, delay_ms=100):
         """Debounced thumbnail loading - prevents flooding during rapid navigation."""
@@ -579,12 +972,23 @@ class GalleryWidget(QWidget):
             return
 
         self._loading_paths.add(image_path)
-        worker = ThumbnailLoaderWorker(image_path, self._icon_size, self._save_dir)
-        worker.signals.thumbnail_ready.connect(self._on_thumbnail_loaded)
+        self._thumbnail_request_serial += 1
+        request_id = self._thumbnail_request_serial
+        self._active_thumbnail_requests[image_path] = request_id
+        worker = ThumbnailLoaderWorker(
+            image_path, self._icon_size, self._save_dir, self._image_list)
+        worker.signals.thumbnail_ready.connect(
+            lambda path, image, rid=request_id:
+            self._on_thumbnail_loaded(path, image, rid))
         self.thread_pool.start(worker)
 
-    def _on_thumbnail_loaded(self, path, image):
+    def _on_thumbnail_loaded(self, path, image, request_id=None):
         """Handle loaded thumbnail."""
+        if (request_id is not None
+                and self._active_thumbnail_requests.get(path) != request_id):
+            return
+
+        self._active_thumbnail_requests.pop(path, None)
         self._loading_paths.discard(path)
         pixmap = QPixmap.fromImage(image)
         self.thumbnail_cache.put(path, pixmap)
@@ -647,6 +1051,7 @@ class GalleryWidget(QWidget):
 
         if image_path in self._path_to_item:
             item = self._path_to_item[image_path]
+            self._update_item_filter_visibility(image_path)
             # Reload icon with new border color
             cached = self.thumbnail_cache.get(image_path)
             if cached:
@@ -658,9 +1063,45 @@ class GalleryWidget(QWidget):
         for path, status in statuses.items():
             if path in self._path_to_item:
                 item = self._path_to_item[path]
+                self._update_item_filter_visibility(path)
                 cached = self.thumbnail_cache.get(path)
                 if cached:
                     self._set_item_icon(item, cached, path)
+
+    def set_status_filter(self, index):
+        """Filter thumbnails using the main-window status combo contract.
+
+        ``0`` shows all images, ``1`` shows annotated images (including
+        verified), ``2`` shows verified images, and ``3`` shows unannotated
+        images. In filtered views, images with an as-yet unknown asynchronous
+        status stay hidden until a status update arrives.
+        """
+        if index not in (0, 1, 2, 3):
+            raise ValueError('unknown gallery status filter: {}'.format(index))
+        self._status_filter = index
+        for path in self._path_to_item:
+            self._update_item_filter_visibility(path)
+        self._load_visible_thumbnails()
+
+    def _update_item_filter_visibility(self, image_path):
+        """Re-evaluate one thumbnail against the active status filter."""
+        item = self._path_to_item.get(image_path)
+        if item is None:
+            return
+
+        status = self._statuses.get(image_path)
+        if self._status_filter == 0:
+            visible = True
+        elif status is None:
+            visible = False
+        elif self._status_filter == 1:
+            visible = status in (
+                AnnotationStatus.HAS_LABELS, AnnotationStatus.VERIFIED)
+        elif self._status_filter == 2:
+            visible = status == AnnotationStatus.VERIFIED
+        else:
+            visible = status == AnnotationStatus.NO_LABELS
+        item.setHidden(not visible)
 
     def clear(self):
         """Clear all items."""
@@ -670,12 +1111,14 @@ class GalleryWidget(QWidget):
         self._path_to_item.clear()
         self._image_list.clear()
         self._loading_paths.clear()
+        self._active_thumbnail_requests.clear()
         self._statuses.clear()
 
     def refresh_thumbnail(self, image_path):
         """Force reload of a specific thumbnail."""
         self.thumbnail_cache.remove(image_path)
         self._loading_paths.discard(image_path)
+        self._active_thumbnail_requests.pop(image_path, None)
         self._load_thumbnail_async(image_path)
 
     def showEvent(self, event):
@@ -700,4 +1143,5 @@ class GalleryWidget(QWidget):
             # Clear cache so thumbnails reload with annotations
             self.thumbnail_cache.clear()
             self._loading_paths.clear()
+            self._active_thumbnail_requests.clear()
             self._reload_all_thumbnails()

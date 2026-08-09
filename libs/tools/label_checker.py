@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from enum import IntEnum
 from typing import Dict, List, Optional, Set, Tuple
 
+from libs.formats.annotation_paths import find_existing_annotation
 from libs.formats.pascal_voc_io import PascalVocReader
 
 
@@ -212,36 +213,35 @@ class LabelConsistencyChecker:
         labels_with_files: Dict[str, List[str]] = defaultdict(list)
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff'}
 
-        # Find all image files
+        # Discover every image first so collision-safe annotation paths are
+        # resolved against the complete dataset, not one file at a time.
+        image_paths = []
         for root, _, files in os.walk(directory):
             for filename in files:
                 ext = os.path.splitext(filename)[1].lower()
-                if ext not in image_extensions:
-                    continue
+                if ext in image_extensions:
+                    image_paths.append(os.path.join(root, filename))
 
-                image_path = os.path.join(root, filename)
-                base_name = os.path.splitext(filename)[0]
+        for image_path in image_paths:
+            annotation_path = find_existing_annotation(
+                image_path,
+                save_dir=save_dir,
+                image_list=image_paths,
+                extensions=('.txt', '.xml'),
+            )
+            if not annotation_path:
+                continue
 
-                # Determine annotation directory
-                ann_dir = save_dir if save_dir else root
-
-                # Check for YOLO format (.txt)
-                txt_path = os.path.join(ann_dir, base_name + '.txt')
-                if os.path.isfile(txt_path):
-                    labels = LabelConsistencyChecker._extract_yolo_labels(
-                        txt_path, ann_dir
-                    )
-                    for label in labels:
-                        labels_with_files[label].append(txt_path)
-                    continue
-
-                # Check for PASCAL VOC format (.xml)
-                xml_path = os.path.join(ann_dir, base_name + '.xml')
-                if os.path.isfile(xml_path):
-                    labels = LabelConsistencyChecker._extract_voc_labels(xml_path)
-                    for label in labels:
-                        labels_with_files[label].append(xml_path)
-                    continue
+            extension = os.path.splitext(annotation_path)[1].lower()
+            if extension == '.txt':
+                labels = LabelConsistencyChecker._extract_yolo_labels(
+                    annotation_path, os.path.dirname(annotation_path)
+                )
+            else:
+                labels = LabelConsistencyChecker._extract_voc_labels(
+                    annotation_path)
+            for label in labels:
+                labels_with_files[label].append(annotation_path)
 
         # Check for CreateML format (single JSON file)
         json_path = os.path.join(save_dir or directory, 'annotations.json')

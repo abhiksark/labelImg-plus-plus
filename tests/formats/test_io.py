@@ -139,6 +139,58 @@ class TestCreateMLIO(unittest.TestCase):
         self.assertEqual(points[0], (100, 100))  # top-left
         self.assertEqual(points[2], (200, 200))  # bottom-right
 
+    def test_polygon_roundtrip_uses_extreme_vertices_after_first_three(self):
+        """CreateML degrades a polygon to its full enclosing box."""
+        json_path = os.path.join(self.temp_dir, 'polygon_roundtrip.json')
+        shapes = [{
+            'label': 'region',
+            'points': ((10, 10), (20, 10), (20, 20),
+                       (110, 110), (10, 110)),
+        }]
+
+        CreateMLWriter('folder', 'polygon.jpg', (120, 120, 3),
+                       shapes, json_path).write()
+
+        with open(json_path, 'r') as f:
+            coordinates = json.load(f)[0]['annotations'][0]['coordinates']
+        self.assertEqual(coordinates, {
+            'x': 60.0, 'y': 60.0, 'width': 100, 'height': 100,
+        })
+
+        reader = CreateMLReader(json_path, 'folder/polygon.jpg')
+        self.assertEqual(reader.get_shapes()[0][1], [
+            (10.0, 10.0), (110.0, 10.0),
+            (110.0, 110.0), (10.0, 110.0),
+        ])
+
+    def test_polygon_bounding_box_is_independent_of_vertex_order(self):
+        """Reordering polygon vertices must not change the enclosing box."""
+        ordered_path = os.path.join(self.temp_dir, 'ordered.json')
+        reordered_path = os.path.join(self.temp_dir, 'reordered.json')
+        points = ((25, 30), (35, 30), (35, 40),
+                  (5, 90), (105, 10), (25, 40))
+        reordered_points = (points[2], points[0], points[5],
+                            points[1], points[4], points[3])
+
+        CreateMLWriter(
+            'folder', 'shape.jpg', (120, 120, 3),
+            [{'label': 'shape', 'points': points}], ordered_path,
+        ).write()
+        CreateMLWriter(
+            'folder', 'shape.jpg', (120, 120, 3),
+            [{'label': 'shape', 'points': reordered_points}], reordered_path,
+        ).write()
+
+        with open(ordered_path, 'r') as f:
+            ordered = json.load(f)[0]['annotations'][0]['coordinates']
+        with open(reordered_path, 'r') as f:
+            reordered = json.load(f)[0]['annotations'][0]['coordinates']
+
+        self.assertEqual(ordered, reordered)
+        self.assertEqual(ordered, {
+            'x': 55.0, 'y': 50.0, 'width': 100, 'height': 80,
+        })
+
     def test_append_to_existing_json(self):
         """Test that writing to existing JSON appends/updates correctly."""
         json_path = os.path.join(self.temp_dir, 'multi.json')
@@ -318,11 +370,86 @@ class TestCreateMLEdgeCases(unittest.TestCase):
         """Test reading JSON where requested image is not in the data."""
         json_path = os.path.join(self.temp_dir, 'other_image.json')
         with open(json_path, 'w') as f:
-            json.dump([{'image': 'other.jpg', 'annotations': []}], f)
+            json.dump([{
+                'image': 'other.jpg',
+                'verified': True,
+                'annotations': [{
+                    'label': 'other',
+                    'coordinates': {
+                        'x': 5, 'y': 5, 'width': 10, 'height': 10,
+                    },
+                }],
+            }], f)
 
         reader = CreateMLReader(json_path, 'folder/test.jpg')
         shapes = reader.get_shapes()
         self.assertEqual(shapes, [])
+        self.assertFalse(reader.verified)
+
+    def test_read_uses_matching_image_verified_flag_and_shapes(self):
+        """Verified state and shapes both come from the requested image."""
+        json_path = os.path.join(self.temp_dir, 'multiple_images.json')
+        with open(json_path, 'w') as f:
+            json.dump([
+                {
+                    'image': 'first.jpg',
+                    'verified': True,
+                    'annotations': [{
+                        'label': 'first',
+                        'coordinates': {
+                            'x': 5, 'y': 5, 'width': 10, 'height': 10,
+                        },
+                    }],
+                },
+                {
+                    'image': 'target.jpg',
+                    'verified': False,
+                    'annotations': [{
+                        'label': 'target',
+                        'coordinates': {
+                            'x': 25, 'y': 25, 'width': 10, 'height': 10,
+                        },
+                    }],
+                },
+            ], f)
+
+        reader = CreateMLReader(json_path, 'folder/target.jpg')
+
+        self.assertFalse(reader.verified)
+        self.assertEqual([shape[0] for shape in reader.get_shapes()],
+                         ['target'])
+
+    def test_read_duplicate_images_uses_first_exact_match(self):
+        """Malformed duplicates resolve to the first exact image match."""
+        json_path = os.path.join(self.temp_dir, 'duplicate_images.json')
+        with open(json_path, 'w') as f:
+            json.dump([
+                {
+                    'image': 'target.jpg',
+                    'verified': False,
+                    'annotations': [{
+                        'label': 'first',
+                        'coordinates': {
+                            'x': 5, 'y': 5, 'width': 10, 'height': 10,
+                        },
+                    }],
+                },
+                {
+                    'image': 'target.jpg',
+                    'verified': True,
+                    'annotations': [{
+                        'label': 'second',
+                        'coordinates': {
+                            'x': 25, 'y': 25, 'width': 10, 'height': 10,
+                        },
+                    }],
+                },
+            ], f)
+
+        reader = CreateMLReader(json_path, 'folder/target.jpg')
+
+        self.assertFalse(reader.verified)
+        self.assertEqual([shape[0] for shape in reader.get_shapes()], ['first'])
 
     def test_read_nonexistent_json_raises_error(self):
         """Test reading non-existent JSON file raises FileNotFoundError."""
@@ -363,6 +490,22 @@ class TestCreateMLEdgeCases(unittest.TestCase):
 
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]['annotations'], [])
+
+    def test_write_rejects_shapes_with_insufficient_points(self):
+        """A malformed shape cannot silently become a zero or bogus box."""
+        for points in ((), ((10, 20),)):
+            with self.subTest(points=points):
+                json_path = os.path.join(
+                    self.temp_dir, f'insufficient-{len(points)}.json')
+                writer = CreateMLWriter(
+                    'folder', 'test.jpg', (100, 100, 3),
+                    [{'label': 'bad', 'points': points}], json_path,
+                )
+
+                with self.assertRaisesRegex(
+                        ValueError, 'requires at least two points'):
+                    writer.write()
+                self.assertFalse(os.path.exists(json_path))
 
 
 class TestPascalVocPolygon(unittest.TestCase):

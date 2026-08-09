@@ -155,6 +155,27 @@ class TestAutoSaveTriggering(unittest.TestCase):
         self.win._auto_save_triggered()
         # No error means success
 
+    def test_collision_uses_same_specific_path_as_manual_save(self):
+        from unittest.mock import call, patch
+
+        from libs.formats.annotation_paths import annotation_output_base
+
+        first = os.path.join(self.temp_dir, 'a', 'frame.png')
+        second = os.path.join(self.temp_dir, 'b', 'frame.png')
+        images = [first, second]
+        self.win.file_path = first
+        self.win.default_save_dir = self.temp_dir
+        self.win.m_img_list = images
+        expected = annotation_output_base(first, self.temp_dir, images)
+
+        with patch.object(self.win, '_save_file', return_value=True) as save:
+            self.assertTrue(self.win.save_file())
+            self.win.dirty = True
+            self.win._auto_save_triggered()
+
+        self.assertNotEqual(os.path.basename(expected), 'frame')
+        self.assertEqual(save.call_args_list, [call(expected), call(expected)])
+
 
 class TestAutoSaveIntervalMenu(unittest.TestCase):
     """Tests for auto-save interval menu."""

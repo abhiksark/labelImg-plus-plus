@@ -35,7 +35,7 @@ labelImg++ 新功能
 安裝
 ----
 
-從 PyPI 安裝（Python 3.6+）
+從 PyPI 安裝（Python 3.8+）
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code:: shell

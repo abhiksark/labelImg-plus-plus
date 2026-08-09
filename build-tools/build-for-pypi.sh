@@ -8,8 +8,14 @@ echo "Building labelImgPlusPlus for PyPI..."
 # Clean previous builds
 rm -rf build dist *.egg-info
 
+# Keep the committed Qt resource module in sync with resources.qrc.
+make qt5py3
+
 # Build package
 python -m build
+
+# Validate both distributions before any upload.
+twine check dist/*
 
 echo ""
 echo "Build complete! Files in dist/:"

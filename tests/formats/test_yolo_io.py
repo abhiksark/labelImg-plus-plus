@@ -126,6 +126,44 @@ class TestYOLOWriter(unittest.TestCase):
         # new_class should have been appended
         self.assertIn('new_class', class_list)
 
+    def test_existing_class_map_is_preserved_for_old_annotations(self):
+        """An existing classes.txt is authoritative for the whole dataset."""
+        classes_path = os.path.join(self.temp_dir, 'classes.txt')
+        old_txt_path = os.path.join(self.temp_dir, 'old.txt')
+        new_txt_path = os.path.join(self.temp_dir, 'new.txt')
+
+        with open(classes_path, 'w') as f:
+            f.write('zebra\ncat\n')
+        with open(old_txt_path, 'w') as f:
+            f.write('0 0.500000 0.500000 0.200000 0.200000\n')
+
+        writer = YOLOWriter(self.temp_dir, 'new', (100, 100, 3))
+        writer.add_bnd_box(10, 10, 20, 20, 'dog', difficult=0)
+        writer.add_bnd_box(20, 20, 30, 30, 'zebra', difficult=0)
+        writer.add_bnd_box(30, 30, 40, 40, 'dog', difficult=0)
+        writer.add_bnd_box(40, 40, 50, 50, 'ant', difficult=0)
+
+        # This models MainWindow's label history: it is not the dataset map and
+        # may contain unused labels in a different order.
+        writer.save(
+            class_list=['dog', 'zebra', 'unused'],
+            target_file=new_txt_path,
+        )
+
+        with open(classes_path) as f:
+            self.assertEqual(f.read(), 'zebra\ncat\ndog\nant\n')
+        with open(new_txt_path) as f:
+            indices = [int(line.split()[0]) for line in f]
+        self.assertEqual(indices, [2, 0, 2, 3])
+
+        image = MockQImage(100, 100)
+        old_reader = YoloReader(old_txt_path, image, classes_path)
+        new_reader = YoloReader(new_txt_path, image, classes_path)
+        self.assertEqual([shape[0] for shape in old_reader.get_shapes()],
+                         ['zebra'])
+        self.assertEqual([shape[0] for shape in new_reader.get_shapes()],
+                         ['dog', 'zebra', 'dog', 'ant'])
+
     def test_save_default_class_list_does_not_leak_between_writers(self):
         """save() with no class_list must not share state across instances.
 

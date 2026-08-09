@@ -1,5 +1,5 @@
 # libs/widgets/labelCheckerDialog.py
-"""Dialog for displaying and fixing label consistency issues."""
+"""Dialog for reviewing and reporting label consistency issues."""
 
 import os
 from typing import Callable, Dict, List, Optional
@@ -23,10 +23,17 @@ ISSUE_TYPE_NAMES = {
     IssueType.DUPLICATE: "Duplicate",
 }
 
+AUTOMATIC_FIXES_UNAVAILABLE_TEXT = (
+    "Automatic label fixes are unavailable in this release. "
+    "Review the suggestions and export a report to make changes manually."
+)
+
 
 class LabelCheckerDialog(QDialog):
-    """Dialog for checking and fixing label consistency issues."""
+    """Dialog for checking and reporting label consistency issues."""
 
+    # Retained for compatibility; automatic fixes are unavailable and this
+    # signal is deliberately never emitted by the dialog.
     fix_requested = pyqtSignal(str, str)  # old_label, new_label
 
     def __init__(
@@ -110,8 +117,9 @@ class LabelCheckerDialog(QDialog):
 
         button_layout.addStretch()
 
-        self.fix_selected_btn = QPushButton("Fix Selected")
+        self.fix_selected_btn = QPushButton("Fix Selected (Unavailable)")
         self.fix_selected_btn.clicked.connect(self._fix_selected)
+        self.fix_selected_btn.setToolTip(AUTOMATIC_FIXES_UNAVAILABLE_TEXT)
         self.fix_selected_btn.setEnabled(False)
         button_layout.addWidget(self.fix_selected_btn)
 
@@ -224,7 +232,9 @@ class LabelCheckerDialog(QDialog):
                 f"Found {issue_count} issues in {label_count} unique labels"
             )
 
-            self.fix_selected_btn.setEnabled(issue_count > 0)
+            # Annotation rewriting is not implemented. Keep the action
+            # unavailable even when the scan has actionable suggestions.
+            self.fix_selected_btn.setEnabled(False)
             self.export_btn.setEnabled(issue_count > 0)
 
         except Exception as e:
@@ -320,49 +330,18 @@ class LabelCheckerDialog(QDialog):
                 checkbox.setChecked(False)
 
     def _fix_selected(self):
-        """Fix selected label issues."""
-        fixes = []
-        for row in range(self.table.rowCount()):
-            checkbox = self.table.cellWidget(row, 0)
-            if checkbox and checkbox.isChecked():
-                issue = self.issues[row]
-                if issue.suggestion:
-                    fixes.append((issue.label, issue.suggestion))
+        """Explain that automatic rewriting is unavailable and do nothing.
 
-        if not fixes:
-            QMessageBox.information(
-                self,
-                "No Fixes Selected",
-                "Please select issues with suggestions to fix."
-            )
-            return
-
-        # Confirm
-        msg = f"This will rename {len(fixes)} labels:\n\n"
-        for old, new in fixes[:10]:
-            msg += f"  '{old}' → '{new}'\n"
-        if len(fixes) > 10:
-            msg += f"  ... and {len(fixes) - 10} more\n"
-        msg += "\nThis cannot be undone. Continue?"
-
-        reply = QMessageBox.question(
+        The button is disabled in the UI, but this method is intentionally a
+        defensive no-op in case it is invoked directly by code.
+        """
+        self.fix_selected_btn.setEnabled(False)
+        QMessageBox.information(
             self,
-            "Confirm Fixes",
-            msg,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            "Automatic Fixes Unavailable",
+            AUTOMATIC_FIXES_UNAVAILABLE_TEXT,
         )
-
-        if reply == QMessageBox.Yes:
-            for old_label, new_label in fixes:
-                self.fix_requested.emit(old_label, new_label)
-
-            QMessageBox.information(
-                self,
-                "Fixes Applied",
-                f"Applied {len(fixes)} label fixes.\n"
-                "Re-scan to verify the changes."
-            )
+        return False
 
     def _export_report(self):
         """Export issues report to a file."""
