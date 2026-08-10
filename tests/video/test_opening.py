@@ -145,6 +145,12 @@ def test_missing_project_source_can_be_located_and_relinked(
     video = make_video(tmp_path / 'clip.mp4')
     assert window.open_video(video)
     project = window.video_snapshot.project_path
+    # Windows does not permit replacing a media file while the decoder owns
+    # its file handle. A moved-source project is reopened after the original
+    # document has been closed, which is also the real user workflow.
+    window.reset_state()
+    assert _wait(
+        app, lambda: not window.task_coordinator.queue_depths()['video'])
     moved = tmp_path / 'moved.mp4'
     os.replace(video, moved)
     try:
