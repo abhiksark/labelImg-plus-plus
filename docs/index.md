@@ -9,6 +9,7 @@ This documentation provides comprehensive guidance for developers working with t
 | [Architecture Overview](architecture.md) | High-level system design and data flow |
 | [Components](components/) | Deep dives into core classes |
 | [Annotation Formats](formats/) | Format specifications and I/O |
+| [Ultralytics Dataset Export](features/ultralytics-export.md) | Direct YOLO detection layout, splits, and class mapping |
 | [Smart Video Annotation](features/smart-video-annotation.md) | PTS-based video projects, tracking, review, and export |
 | [Extension Guides](guides/) | How to extend labelImg++ |
 | [Reference](reference/) | Shortcuts, settings, troubleshooting |

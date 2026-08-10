@@ -112,6 +112,20 @@ class TestYOLOWriter(unittest.TestCase):
 
         self.assertEqual(classes, ['apple', 'banana'])
 
+    def test_dataset_export_can_omit_legacy_classes_file(self):
+        """Dataset-level metadata replaces the sibling class map."""
+        txt_path = os.path.join(self.temp_dir, 'dataset-label.txt')
+        writer = YOLOWriter(self.temp_dir, 'dataset-label', (100, 100, 3))
+        writer.add_bnd_box(10, 10, 50, 50, 'apple', difficult=0)
+
+        writer.save(
+            class_list=['apple'], target_file=txt_path,
+            write_classes_file=False)
+
+        self.assertTrue(os.path.isfile(txt_path))
+        self.assertFalse(os.path.exists(
+            os.path.join(self.temp_dir, 'classes.txt')))
+
     def test_new_class_appended_to_list(self):
         """Test that new classes are appended to the class list."""
         txt_path = os.path.join(self.temp_dir, 'append.txt')

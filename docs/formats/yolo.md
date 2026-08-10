@@ -275,3 +275,8 @@ Works with:
 - Darknet YOLO
 - Ultralytics YOLOv5/v8
 - Any framework expecting normalized center format
+
+For a complete Ultralytics detection dataset rather than individual YOLO
+sidecars, use **Tools → Export Ultralytics Dataset…**. The exporter writes the
+standard split layout and a single `data.yaml`; see the
+[Ultralytics Export Guide](../features/ultralytics-export.md).

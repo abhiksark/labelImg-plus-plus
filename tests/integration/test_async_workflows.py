@@ -212,6 +212,56 @@ def test_main_window_cache_budgets_fit_combined_limit():
         window.close()
 
 
+def test_ultralytics_export_runs_on_background_lane(tmp_path):
+    app, window = get_main_app()
+    image_path = str(tmp_path / 'image.png')
+    _image(image_path, 0xFFFFFFFF)
+    annotation_path = str(tmp_path / 'image.xml')
+    from libs.formats.pascal_voc_io import PascalVocWriter
+    writer = PascalVocWriter(
+        tmp_path.name, 'image.png', (48, 64, 3),
+        local_img_path=image_path)
+    writer.add_bnd_box(8, 6, 40, 30, 'object', False)
+    writer.save(target_file=annotation_path)
+    window.import_dir_images(str(tmp_path))
+    destination = str(tmp_path / 'ultralytics')
+
+    class _Dialog:
+        output_dir = destination
+        ratios = {'train': 1.0, 'val': 0.0, 'test': 0.0}
+        seed = 42
+        copy_mode = True
+
+        def apply_theme(self, _theme):
+            pass
+
+        def exec_(self):
+            from PyQt5.QtWidgets import QDialog
+            return QDialog.Accepted
+
+    try:
+        with patch(
+                'libs.widgets.ultralyticsExportDialog.'
+                'UltralyticsExportDialog', return_value=_Dialog()), \
+                patch.object(QMessageBox, 'information') as information, \
+                patch.object(window, 'error_message') as error_message:
+            handle = window.export_ultralytics_dataset()
+            assert handle is not None
+            assert _wait(
+                app, lambda: os.path.isfile(
+                    os.path.join(destination, 'data.yaml')))
+            assert _wait(app, lambda: information.called)
+        assert not error_message.called
+        assert os.path.isfile(os.path.join(
+            destination, 'labels', 'train', 'image.txt'))
+        assert any(
+            action.text() == 'Export Ultralytics Dataset...'
+            for action in window.menus.tools.actions())
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_worker_decodes_qimage_and_gui_thread_creates_qpixmap(tmp_path):
     app, window = get_main_app()
     image_path = str(tmp_path / 'thread-boundary.png')

@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
 # libs/formats/yolo_io.py
-import codecs
 import os
 
 from libs.utils.constants import DEFAULT_ENCODING
@@ -75,7 +74,8 @@ class YOLOWriter:
 
         return class_index, x_center, y_center, w, h
 
-    def save(self, class_list=None, target_file=None):
+    def save(self, class_list=None, target_file=None,
+             write_classes_file=True):
         if class_list is None:
             class_list = []
 
@@ -99,10 +99,13 @@ class YOLOWriter:
                 class_index, x_center, y_center, w, h = self.bnd_box_to_yolo_line(box, class_list)
                 out_file.write("%d %.6f %.6f %.6f %.6f\n" % (class_index, x_center, y_center, w, h))
 
-        # Write classes file
-        with open(classes_file_path, 'w', encoding=ENCODE_METHOD) as out_class_file:
-            for c in class_list:
-                out_class_file.write(c + '\n')
+        # Standalone labelImg++ YOLO annotations keep their historical sibling
+        # class map. Dataset-level exporters can opt out because their class
+        # ordering is carried by a single data.yaml instead.
+        if write_classes_file:
+            with open(classes_file_path, 'w', encoding=ENCODE_METHOD) as out_class_file:
+                for c in class_list:
+                    out_class_file.write(c + '\n')
 
 
 

@@ -80,6 +80,14 @@ Workflow and Interface
 **Consolidated File Menu**
     Open File, Open Dir, and Change Save Dir combined into a single dropdown for cleaner toolbar.
 
+**Direct Ultralytics Dataset Export**
+    Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
+    YOLO detection dataset with ``images/{train,val,test}``, matching
+    ``labels/{train,val,test}``, and ``data.yaml``. Configure deterministic
+    split ratios and either copy images or create absolute local symlinks. The
+    destination must be new or empty, and it is published only after the full
+    export succeeds. See the `Ultralytics Export Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/features/ultralytics-export.md>`_.
+
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
 

@@ -1027,8 +1027,12 @@ class MainWindow(QMainWindow, WindowMixin):
         split_dataset_action = action(
             get_str('splitDataset'), self.split_dataset,
             None, 'file', get_str('splitDatasetDetail'))
+        export_ultralytics_action = action(
+            get_str('exportUltralytics'), self.export_ultralytics_dataset,
+            None, 'save-as', get_str('exportUltralyticsDetail'))
         add_actions(self.menus.tools, (
             check_labels, batch_verify_action, split_dataset_action,
+            export_ultralytics_action,
             None, video_play_pause, video_add_keyframe,
             video_track_forward, video_track_backward,
             video_accept_suggestion, video_reject_suggestion,
@@ -4941,6 +4945,107 @@ class MainWindow(QMainWindow, WindowMixin):
             f'  Test: {counts["test"]} images\n\n'
             f'Manifest: {manifest_path}'
         )
+
+    def export_ultralytics_dataset(self, _value=False,
+                                   skip_dirty_prompt=False):
+        """Export the current image dataset in Ultralytics YOLO layout."""
+        if (self.document_kind != DocumentKind.IMAGE
+                or not self.m_img_list):
+            QMessageBox.warning(
+                self, 'Export Ultralytics Dataset',
+                'No image dataset is loaded. Open a directory first.')
+            return None
+
+        if self.dirty and not skip_dirty_prompt:
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return None
+            if answer == QMessageBox.Yes:
+                return self.request_save_file(
+                    on_success=lambda: self.export_ultralytics_dataset(
+                        skip_dirty_prompt=True))
+
+        from libs.widgets.ultralyticsExportDialog import (
+            UltralyticsExportDialog,
+        )
+        default_dir = self.dataset_snapshot.root_dir or (
+            os.path.dirname(self.m_img_list[0])
+            if self.m_img_list else '')
+        dialog = UltralyticsExportDialog(
+            self, len(self.m_img_list), default_dir)
+        if hasattr(self, '_current_theme'):
+            dialog.apply_theme(self._current_theme)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+
+        output_dir = ustr(dialog.output_dir)
+        if not output_dir:
+            QMessageBox.warning(
+                self, 'Export Ultralytics Dataset',
+                'Please select an output directory.')
+            return None
+        if (os.path.lexists(output_dir)
+                and (os.path.islink(output_dir)
+                     or not os.path.isdir(output_dir)
+                     or os.listdir(output_dir))):
+            QMessageBox.warning(
+                self, 'Export Ultralytics Dataset',
+                'The destination must be a new or empty directory.')
+            return None
+
+        from libs.core.ultralytics_export import (
+            UltralyticsExportRequest, export_ultralytics_dataset,
+        )
+        snapshot = self.dataset_snapshot
+        request = UltralyticsExportRequest(
+            destination=output_dir,
+            image_paths=snapshot.image_paths,
+            save_dir=snapshot.save_dir,
+            resolver=snapshot.resolver,
+            source_format=self.label_file_format,
+            class_order=tuple(self.label_hist),
+            ratios=tuple(dialog.ratios.items()),
+            seed=dialog.seed,
+            copy_images=dialog.copy_mode,
+        )
+
+        def export_dataset(handle):
+            return export_ultralytics_dataset(request, handle)
+
+        worker = self.task_coordinator.submit(
+            'background', export_dataset, priority=JobPriority.BULK,
+            key='ultralytics-export', latest=True,
+            generation=snapshot.generation)
+        worker.progress.connect(
+            lambda value: self.status(
+                'Exporting Ultralytics dataset: %d / %d' % value))
+        worker.result.connect(self._on_ultralytics_export_complete)
+        worker.error.connect(self._on_ultralytics_export_error)
+        return worker
+
+    def _on_ultralytics_export_complete(self, result):
+        if result is None:
+            self.status('Ultralytics dataset export cancelled')
+            return
+        counts = result.counts_by_split
+        details = (
+            'Ultralytics dataset exported to:\n%s\n\n'
+            'Train: %d images\nVal: %d images\nTest: %d images\n'
+            'Classes: %d\nAnnotated: %d\nUnannotated: %d'
+            % (result.destination, counts['train'], counts['val'],
+               counts['test'], len(result.class_order),
+               result.annotated_images, result.unannotated_images))
+        if result.polygon_boxes:
+            details += ('\nPolygon annotations converted to boxes: %d'
+                        % result.polygon_boxes)
+        QMessageBox.information(
+            self, 'Ultralytics Export Complete', details)
+        self.status('Exported Ultralytics dataset to %s'
+                    % result.destination)
+
+    def _on_ultralytics_export_error(self, message):
+        self.status('Ultralytics dataset export failed: ' + message)
+        self.error_message('Ultralytics Export Failed', message)
 
     def import_dir_images(self, dir_path):
         """Synchronous compatibility path used by tests and extensions."""

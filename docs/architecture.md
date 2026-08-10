@@ -33,6 +33,14 @@ Menu, shortcut, autosave, navigation, and verification saves create immutable
 `os.replace`; a revision check marks the document clean only if no later edit
 occurred. `save_file()` remains the synchronous compatibility entry point.
 
+Ultralytics dataset export captures the active immutable snapshot, annotation
+resolver, source-format selection, class order, split ratios, and copy mode in
+an `UltralyticsExportRequest`. A background job reuses the image annotation
+pipeline and YOLO normalization writer, builds `images/`, `labels/`,
+`data.yaml`, and a manifest in an owned sibling staging directory, then
+atomically publishes only to a new or empty destination. Cancellation and
+conversion errors remove only that staging tree.
+
 ## Smart-video pipeline
 
 `DocumentKind` isolates no-document, image, and video state. Video requests use
