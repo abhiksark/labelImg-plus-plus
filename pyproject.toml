@@ -67,7 +67,7 @@ py-modules = ["labelImgPlusPlus"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["libs*"]
+include = ["libs*", "labelimgplusplus*"]
 
 [tool.setuptools.package-data]
 "*" = ["data/*.txt", "resources/**/*"]
