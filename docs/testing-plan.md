@@ -22,6 +22,24 @@ Linux workstation gate and its deterministic 10k corpora.
 
 - GitHub Actions workflow: `.github/workflows/ci.yaml`
 - Installs `pytest` and runs `pytest tests/ -v` across Python 3.8–3.13.
+- Runs focused `[video]` jobs across Python 3.8–3.13, combined `[sam,video]`
+  jobs on Python 3.8 and 3.13, and decoder/persistence smoke tests on Windows
+  and macOS.
+- Base jobs import the application without PyAV, NumPy, or OpenCV to preserve
+  the optional-dependency boundary.
+
+### Smart-video coverage
+
+`tests/video/` covers PyAV dependency markers, PTS and VFR seeking, rotation,
+MP4/MOV/MKV/AVI decoding, corrupt media, source fingerprints, SQLite schema and
+revision behavior, track precedence/interpolation, frame-aware editing,
+tracking and review, cache/navigation behavior, export formats and atomic
+staging, CLI/project opening, and Qt GUI-thread boundaries.
+
+Temporary smoke workloads cover CFR, VFR, short/long GOP, rotation, reduced
+4K/8K navigation analogues, and optical-flow stress. Timing remains excluded
+from hosted CI; the full-resolution, five-run acceptance gate is local and is
+documented in `docs/performance.md`.
 
 ### Stability / isolation risks
 

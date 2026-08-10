@@ -186,7 +186,7 @@ def load_image_result(path, resolver=None, image_list=None, save_dir=None,
 
 
 class FrameCache:
-    """Fingerprint-aware LRU capped by both frame count and image bytes."""
+    """Image/video LRU capped by both frame count and detached image bytes."""
 
     def __init__(self, max_images=5, max_bytes=128 * 1024 * 1024):
         self.max_images = max(1, int(max_images))
@@ -201,11 +201,29 @@ class FrameCache:
     def __len__(self):
         return len(self._entries)
 
-    def get(self, path):
-        path = os.path.abspath(os.fspath(path))
-        entry = self._entries.get(path)
+    @staticmethod
+    def _key(value):
+        cache_key = getattr(value, 'cache_key', None)
+        if cache_key is not None:
+            return cache_key
+        if hasattr(value, 'path'):
+            return os.path.abspath(os.fspath(value.path))
+        if isinstance(value, tuple) and value[:1] == ('video',):
+            return value
+        return os.path.abspath(os.fspath(value))
+
+    def get(self, key):
+        key = self._key(key)
+        entry = self._entries.get(key)
         if entry is None:
             return None
+        # Video cache entries are session-scoped and cleared on document
+        # replacement. Re-hashing multi-gigabyte media on every lookup would
+        # defeat interactive seeks.
+        if hasattr(entry, 'frame_ref'):
+            self._entries.move_to_end(key)
+            return entry
+        path = entry.path
         try:
             if entry.fingerprint != file_fingerprint(path):
                 self.remove(path)
@@ -226,25 +244,43 @@ class FrameCache:
         except OSError:
             self.remove(path)
             return None
-        self._entries.move_to_end(path)
+        self._entries.move_to_end(key)
         return entry
 
     def put(self, result):
-        self.remove(result.path)
+        key = self._key(result)
+        self.remove(key)
         if result.byte_size > self.max_bytes:
             return
-        self._entries[result.path] = result
+        self._entries[key] = result
         self._bytes += result.byte_size
         while (len(self._entries) > self.max_images
                or self._bytes > self.max_bytes):
             _path, evicted = self._entries.popitem(last=False)
             self._bytes -= evicted.byte_size
 
-    def remove(self, path):
-        entry = self._entries.pop(os.path.abspath(os.fspath(path)), None)
+    def remove(self, key):
+        entry = self._entries.pop(self._key(key), None)
         if entry is not None:
             self._bytes -= entry.byte_size
 
     def clear(self):
         self._entries.clear()
         self._bytes = 0
+
+    def video_neighbor(self, frame_ref, direction):
+        """Return the closest cached PTS before/after *frame_ref*."""
+        direction = 1 if direction > 0 else -1
+        candidates = []
+        for entry in self._entries.values():
+            other = getattr(entry, 'frame_ref', None)
+            if other is None:
+                continue
+            if (other.fingerprint != frame_ref.fingerprint
+                    or other.stream_index != frame_ref.stream_index):
+                continue
+            delta = other.pts - frame_ref.pts
+            if delta * direction > 0:
+                candidates.append((abs(delta), entry))
+        return min(candidates, key=lambda item: item[0])[1] \
+            if candidates else None

@@ -7,6 +7,7 @@ import json
 DEFAULT_SHORTCUTS = {
     'quit': 'Ctrl+Q',
     'open': 'Ctrl+O',
+    'open_video': 'Ctrl+Alt+V',
     'open_dir': 'Ctrl+U',
     'change_save_dir': 'Ctrl+R',
     'open_annotation': 'Ctrl+Shift+O',
@@ -14,6 +15,7 @@ DEFAULT_SHORTCUTS = {
     'open_next_image': 'D',
     'open_prev_image': 'A',
     'verify': 'Space',
+    'video_play_pause': 'Ctrl+Space',
     'save': 'Ctrl+S',
     'save_format': 'Ctrl+Y',
     'save_as': 'Ctrl+Shift+S',
@@ -46,6 +48,11 @@ DEFAULT_SHORTCUTS = {
     'show_grid': 'Ctrl+Shift+G',
     'create_polygon': 'P',
     'keypoint_mode': 'K',
+    'video_add_keyframe': 'Shift+K',
+    'video_track_forward': 'T',
+    'video_track_backward': 'Shift+T',
+    'video_accept_suggestion': 'Shift+Enter',
+    'video_reject_suggestion': 'Backspace',
 }
 
 

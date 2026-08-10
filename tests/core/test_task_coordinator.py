@@ -85,3 +85,12 @@ def test_generation_cancellation_discards_result():
     assert _wait_until(lambda: not coordinator.queue_depths()['interactive'])
     assert delivered == []
     coordinator.shutdown()
+
+
+def test_video_lane_is_single_threaded_and_independent():
+    coordinator = TaskCoordinator(logical_cpus=8)
+    assert coordinator.pool('video').maxThreadCount() == 1
+    assert coordinator.pool('video') is not coordinator.pool('interactive')
+    assert coordinator.pool('video') is not coordinator.pool('background')
+    assert 'video' in coordinator.queue_depths()
+    coordinator.shutdown()

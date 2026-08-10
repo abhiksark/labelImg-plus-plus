@@ -7,6 +7,7 @@ Complete reference of all keyboard shortcuts in labelImg++.
 | Shortcut | Action | Description |
 |----------|--------|-------------|
 | `Ctrl+O` | Open File | Open single image or label file |
+| `Ctrl+Alt+V` | Open Video | Open local video or LabelImg++ video project |
 | `Ctrl+U` | Open Directory | Load all images from a directory |
 | `Ctrl+R` | Change Save Dir | Set annotation save location |
 | `Ctrl+Shift+O` | Open Annotation | Load specific annotation file |
@@ -22,6 +23,26 @@ Complete reference of all keyboard shortcuts in labelImg++.
 | `D` | Next Image | Go to next image in directory |
 | `A` | Previous Image | Go to previous image in directory |
 | `Space` | Verify Image | Toggle verified status (green background) |
+
+In video mode, `A` and `D` step exact frames and `Space` verifies the current
+frame rather than the whole source.
+
+## Smart Video
+
+| Shortcut | Action | Description |
+|----------|--------|-------------|
+| `Ctrl+Space` | Play/Pause | Toggle silent video playback |
+| `A` | Previous Frame | Use cache history or seek to the predecessor |
+| `D` | Next Frame | Decode the next presentation frame |
+| `Shift+K` | Add Track Keyframe | Promote the selected occurrence to a manual anchor |
+| `T` | Track Forward | Choose an endpoint and propagate the selected rectangle |
+| `Shift+T` | Track Backward | Choose an endpoint and propagate backward |
+| `Shift+Enter` | Accept Suggestion | Accept the current pending tracker state |
+| `Backspace` | Reject Suggestion | Reject the current pending tracker state |
+
+Visible-range and full-run review, Delete Track, and frame export are available
+from **Tools** without default shortcuts. All listed video shortcuts use the
+same **Help → Keyboard Shortcuts** editor as image actions.
 
 ## Annotation Creation
 

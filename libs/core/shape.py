@@ -6,10 +6,10 @@ from enum import Enum
 
 try:
     from PyQt5.QtGui import QColor, QPen, QPainterPath, QFont
-    from PyQt5.QtCore import QPointF
+    from PyQt5.QtCore import QPointF, Qt
 except ImportError:
     from PyQt4.QtGui import QColor, QPen, QPainterPath, QFont
-    from PyQt4.QtCore import QPointF
+    from PyQt4.QtCore import QPointF, Qt
 
 from libs.utils import distance
 import sys
@@ -243,8 +243,15 @@ class Shape(object):
     def _draw_shape(self, painter, line_path, vertex_path):
         """Draw the shape outline and vertices."""
         color = self.select_line_color if self.selected else self.line_color
+        render_state = getattr(self, 'video_render_state', None)
+        if not self.selected and render_state == 'interpolation':
+            color = QColor(40, 130, 230, 230)
+        elif not self.selected and render_state == 'pending':
+            color = QColor(235, 165, 35, 230)
         pen = QPen(color)
         pen.setWidth(max(1, int(round(2.0 / self.scale))))
+        if render_state in ('interpolation', 'pending'):
+            pen.setStyle(Qt.DashLine)
         painter.setPen(pen)
 
         painter.drawPath(line_path)

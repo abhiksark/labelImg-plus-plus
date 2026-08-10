@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 import argparse
 import codecs
+from dataclasses import replace
 import os.path
 import platform
 import shutil
 import sys
 import threading
+import time
 import webbrowser as wb
 from functools import partial
 
@@ -19,7 +21,7 @@ try:
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
         QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
-        QListWidget, QMainWindow, QMenu, QMessageBox,
+        QInputDialog, QListWidget, QMainWindow, QMenu, QMessageBox,
         QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
@@ -34,7 +36,7 @@ except ImportError:
     from PyQt4.QtGui import (
         QColor, QCursor, QImage, QImageReader, QPixmap,
         QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
-        QFileDialog, QHBoxLayout, QLabel, QListWidget,
+        QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
         QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
@@ -57,6 +59,8 @@ from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
+from libs.widgets.videoTimelineWidget import VideoTimelineWidget
+from libs.widgets.videoExportDialog import VideoExportDialog
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -64,6 +68,7 @@ from libs.core.settings import Settings
 from libs.core.commands import (
     UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand,
     EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
+    VideoModelCommand,
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.sam_controller import SamController
@@ -77,6 +82,22 @@ from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
+from libs.core.video_decoder import VIDEO_EXTENSIONS, VideoDecoderSession
+from libs.core.video_project import (
+    PROJECT_SUFFIX, VideoSourceChanged, VideoSourceMissing,
+    checkpoint_project, default_project_path, save_project_as,
+    save_project_delta,
+)
+from libs.core.video_model import VideoProjectModel
+from libs.core.video_export import export_video_frames
+from libs.core.video_tracking import track_optical_flow
+from libs.core.video_session import (
+    VideoOpenProblem, is_video_project, prepare_video_open,
+)
+from libs.core.video_types import (
+    DocumentKind, TrackingRequest, VideoExportRequest, VideoFrameRef,
+)
+from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.integrations import segmentation
 
 # Formats
@@ -191,6 +212,34 @@ class MainWindow(QMainWindow, WindowMixin):
         # thumbnail galleries (16 MiB each): 96 + 16 + 16 = 128 MiB total.
         self.frame_cache = FrameCache(
             max_images=5, max_bytes=96 * 1024 * 1024)
+        self.document_kind = DocumentKind.NONE
+        self.video_decoder = None
+        self.video_snapshot = None
+        self.video_tracks = ()
+        self.video_observations = ()
+        self.video_frame_states = ()
+        self.video_classes = ()
+        self.video_model = None
+        self._selected_video_track_id = None
+        self._video_open_request_id = 0
+        self._video_save_handle = None
+        self._video_save_active = False
+        self._video_save_queued = False
+        self._video_save_callbacks = []
+        self._video_close_save_pending = False
+        self._video_frame_request_id = 0
+        self._video_decode_in_flight = False
+        self._video_prefetch_handle = None
+        self.current_video_frame_ref = None
+        self._video_playback_speed = 1.0
+        self._video_play_started_wall = None
+        self._video_play_started_seconds = None
+        self._tracking_request_id = 0
+        self._tracking_handle = None
+        self._active_tracking_request = None
+        self._tracking_run_keys = set()
+        self._applying_tracking_batch = False
+        self._video_export_handle = None
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -282,8 +331,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_tab_widget = QTabWidget()
         self.rect_label_list = QListWidget()
         self.poly_label_list = QListWidget()
+        self.track_list_widget = QListWidget()
         self.label_tab_widget.addTab(self.rect_label_list, 'Rectangles (0)')
         self.label_tab_widget.addTab(self.poly_label_list, 'Polygons (0)')
+        self.label_tab_widget.addTab(self.track_list_widget, 'Tracks (0)')
+        self.label_tab_widget.setTabEnabled(2, False)
 
         # Keep self.label_list as alias to rect list for backward compatibility
         self.label_list = self.rect_label_list
@@ -297,6 +349,10 @@ class MainWindow(QMainWindow, WindowMixin):
             lw.itemSelectionChanged.connect(self.label_selection_changed)
             lw.itemDoubleClicked.connect(self.edit_label)
             lw.itemChanged.connect(self.label_item_changed)
+        self.track_list_widget.itemSelectionChanged.connect(
+            self._video_track_selection_changed)
+        self.track_list_widget.itemChanged.connect(
+            self._video_track_item_changed)
 
         list_layout.addWidget(self.label_tab_widget)
 
@@ -390,6 +446,28 @@ class MainWindow(QMainWindow, WindowMixin):
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
 
+        self.video_timeline = VideoTimelineWidget(self)
+        self.timeline_dock = QDockWidget('Video Timeline', self)
+        self.timeline_dock.setObjectName('videoTimeline')
+        self.timeline_dock.setWidget(self.video_timeline)
+        self.timeline_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.timeline_dock)
+        self.timeline_dock.hide()
+        self.video_timeline.seekRequested.connect(self.request_video_frame)
+        self.video_timeline.previousRequested.connect(
+            self.request_previous_video_frame)
+        self.video_timeline.nextRequested.connect(
+            self.request_next_video_frame)
+        self.video_timeline.playPauseRequested.connect(
+            self.play_pause_video)
+        self.video_timeline.speedChanged.connect(
+            self._set_video_playback_speed)
+        self._video_playback_timer = QTimer(self)
+        self._video_playback_timer.setTimerType(Qt.PreciseTimer)
+        self._video_playback_timer.setInterval(10)
+        self._video_playback_timer.timeout.connect(self._video_playback_tick)
+
         # Configure dock features - all docks are movable for resizing
         # DockWidgetMovable enables drag-to-rearrange and proper splitter resizing
         self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -413,6 +491,11 @@ class MainWindow(QMainWindow, WindowMixin):
         open = action(get_str('openFile'), self.open_file,
                       self.shortcut_config.get('open'), 'open', get_str('openFileDetail'))
 
+        open_video = action(
+            'Open Video…', self.open_video_dialog,
+            self.shortcut_config.get('open_video'), 'file',
+            'Open a local video or LabelImg++ video project')
+
         open_dir = action(get_str('openDir'), self.open_dir_dialog,
                           self.shortcut_config.get('open_dir'), 'open', get_str('openDir'))
 
@@ -431,6 +514,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
         verify = action(get_str('verifyImg'), self.request_verify_image,
                         self.shortcut_config.get('verify'), 'verify', get_str('verifyImgDetail'))
+
+        video_play_pause = action(
+            'Play/Pause Video', self.play_pause_video,
+            self.shortcut_config.get('video_play_pause'), None,
+            'Play or pause the active video without audio', enabled=False)
 
         save = action(get_str('save'), self.request_save_file,
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
@@ -469,6 +557,68 @@ class MainWindow(QMainWindow, WindowMixin):
             self.shortcut_config.get('keypoint_mode'),
             'verify',
             get_str('addKeypointsDetail'),
+            enabled=False)
+        video_add_keyframe = action(
+            'Add Track Keyframe', self.add_track_keyframe,
+            self.shortcut_config.get('video_add_keyframe'), 'verify',
+            'Promote the selected track at the current PTS to a manual anchor',
+            enabled=False)
+        video_delete_track = action(
+            'Delete Track…', self.delete_selected_track,
+            None, 'delete', 'Delete the selected track on every frame',
+            enabled=False)
+        video_track_forward = action(
+            'Track Forward…',
+            lambda _checked=False: self.track_selected_forward(
+                choose_endpoint=True),
+            self.shortcut_config.get('video_track_forward'), None,
+            'Propagate the selected rectangle forward with optical flow',
+            enabled=False)
+        video_track_backward = action(
+            'Track Backward…',
+            lambda _checked=False: self.track_selected_backward(
+                choose_endpoint=True),
+            self.shortcut_config.get('video_track_backward'), None,
+            'Propagate the selected rectangle backward with optical flow',
+            enabled=False)
+        video_accept_suggestion = action(
+            'Accept Current Suggestion', self.accept_current_suggestion,
+            self.shortcut_config.get('video_accept_suggestion'), 'verify',
+            'Accept the pending tracker observation on this frame',
+            enabled=False)
+        video_reject_suggestion = action(
+            'Reject Current Suggestion', self.reject_current_suggestion,
+            self.shortcut_config.get('video_reject_suggestion'), 'close',
+            'Reject the pending tracker observation on this frame',
+            enabled=False)
+        video_accept_visible = action(
+            'Accept Visible Suggestions',
+            lambda: self.review_visible_suggestions('accepted'),
+            None, 'verify',
+            'Accept pending tracker observations in the visible range',
+            enabled=False)
+        video_reject_visible = action(
+            'Reject Visible Suggestions',
+            lambda: self.review_visible_suggestions('rejected'),
+            None, 'close',
+            'Reject pending tracker observations in the visible range',
+            enabled=False)
+        video_accept_run = action(
+            'Accept Full Propagation',
+            lambda: self.review_full_propagation('accepted'),
+            None, 'verify',
+            'Accept pending observations from the latest propagation run',
+            enabled=False)
+        video_reject_run = action(
+            'Reject Full Propagation',
+            lambda: self.review_full_propagation('rejected'),
+            None, 'close',
+            'Reject pending observations from the latest propagation run',
+            enabled=False)
+        video_export = action(
+            'Export Video Frames…', self.open_video_export_dialog,
+            None, 'save-as',
+            'Export accepted tracked frames to the selected image format',
             enabled=False)
         sam_mode_action = action(
             'SAM Segment',
@@ -649,6 +799,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._action_map = {
             'quit': quit,
             'open': open,
+            'open_video': open_video,
             'open_dir': open_dir,
             'change_save_dir': change_save_dir,
             'open_annotation': open_annotation,
@@ -656,6 +807,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'open_next_image': open_next_image,
             'open_prev_image': open_prev_image,
             'verify': verify,
+            'video_play_pause': video_play_pause,
             'save': save,
             'save_format': save_format,
             'save_as': save_as,
@@ -687,17 +839,34 @@ class MainWindow(QMainWindow, WindowMixin):
             'light_org': light_org,
             'edit_label': edit,
             'keypoint_mode': keypoint_mode_action,
+            'video_add_keyframe': video_add_keyframe,
+            'video_track_forward': video_track_forward,
+            'video_track_backward': video_track_backward,
+            'video_accept_suggestion': video_accept_suggestion,
+            'video_reject_suggestion': video_reject_suggestion,
         }
 
         # Store actions for further handling.
-        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
+        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, openVideo=open_video, close=close, resetAll=reset_all, deleteImg=delete_image, verify=verify,
                               lineColor=color1, create=create, create_polygon=create_polygon,
                               keypoint_mode=keypoint_mode_action,
+                              videoAddKeyframe=video_add_keyframe,
+                              videoDeleteTrack=video_delete_track,
+                              videoTrackForward=video_track_forward,
+                              videoTrackBackward=video_track_backward,
+                              videoAcceptSuggestion=video_accept_suggestion,
+                              videoRejectSuggestion=video_reject_suggestion,
+                              videoAcceptVisible=video_accept_visible,
+                              videoRejectVisible=video_reject_visible,
+                              videoAcceptRun=video_accept_run,
+                              videoRejectRun=video_reject_run,
+                              videoExport=video_export,
                               sam_mode=sam_mode_action,
                               delete=delete, edit=edit, copy=copy,
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
                               copyAllToClipboard=copy_all_to_clipboard,
                               undo=undo, redo=redo,
+                              videoPlayPause=video_play_pause,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode, galleryMode=gallery_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
@@ -706,11 +875,13 @@ class MainWindow(QMainWindow, WindowMixin):
                               lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
                               lightActions=light_actions,
                               fileMenuActions=(
-                                  open, open_dir, save, save_as, close, reset_all, quit),
+                                  open, open_video, open_dir, save, save_as,
+                                  close, reset_all, quit),
                               beginner=(), advanced=(),
                               editMenu=(undo, redo, None, edit, copy, copy_to_clipboard,
                                         paste_from_clipboard, copy_all_to_clipboard, delete,
                                         None, keypoint_mode_action,
+                                        video_add_keyframe,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, create_polygon, edit, copy, copy_to_clipboard, paste_from_clipboard, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy, copy_to_clipboard,
@@ -808,7 +979,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.icon_size_group.actions()[-1].setChecked(True)
 
         add_actions(self.menus.file,
-                    (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
+                    (open, open_video, open_dir, change_save_dir,
+                     open_annotation, copy_prev_bounding,
+                     self.menus.recentFiles, save, save_format, save_as,
+                     close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
             self.auto_saving,
@@ -855,6 +1029,12 @@ class MainWindow(QMainWindow, WindowMixin):
             None, 'file', get_str('splitDatasetDetail'))
         add_actions(self.menus.tools, (
             check_labels, batch_verify_action, split_dataset_action,
+            None, video_play_pause, video_add_keyframe,
+            video_track_forward, video_track_backward,
+            video_accept_suggestion, video_reject_suggestion,
+            video_accept_visible, video_reject_visible,
+            video_accept_run, video_reject_run,
+            video_delete_track, video_export,
             None, sam_mode_action, sam_settings_action))
 
         # Custom context menu for the canvas widget:
@@ -875,7 +1055,7 @@ class MainWindow(QMainWindow, WindowMixin):
         file_dropdown = DropdownToolButton(
             text=get_str('openFile'),
             icon=new_icon('file'),
-            actions=[open, open_dir, change_save_dir]
+            actions=[open, open_video, open_dir, change_save_dir]
         )
 
         self.actions.beginner = (
@@ -1168,7 +1348,29 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.settings.get(SETTING_TOOLBAR_EXPANDED, False):
             self.tools.set_expanded(True)
 
+    def _video_editable(self):
+        snapshot = getattr(self, 'video_snapshot', None)
+        return not (
+            self.document_kind == DocumentKind.VIDEO
+            and snapshot is not None
+            and snapshot.read_only)
+
+    def _ensure_video_editable(self):
+        if self._video_editable():
+            return True
+        self.status('This video is open read-only; editing is disabled')
+        return False
+
     def set_dirty(self):
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                return
+            self.pause_video()
+            self.dirty = True
+            self.actions.save.setEnabled(True)
+            self.update_save_status(saved=False)
+            self.update_box_count()
+            return
         self._document_revision += 1
         self.dirty = True
         self.actions.save.setEnabled(True)
@@ -1180,6 +1382,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.save.setEnabled(False)
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(True)
+        if (self.document_kind == DocumentKind.VIDEO
+                and self.video_snapshot is not None
+                and self.video_snapshot.read_only):
+            self.actions.create.setEnabled(False)
+            self.actions.create_polygon.setEnabled(False)
+            self.actions.createMode.setEnabled(False)
+            self.actions.editMode.setEnabled(False)
+            self.actions.verify.setEnabled(False)
         self.update_save_status(saved=True)
 
     def toggle_actions(self, value=True):
@@ -1250,10 +1460,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def reset_state(self):
         self._restart_workers_if_needed()
+        self._close_video_decoder()
+        self._set_document_kind(DocumentKind.NONE)
         self.items_to_shapes.clear()
         self.shapes_to_items.clear()
         self.rect_label_list.clear()
         self.poly_label_list.clear()
+        self.track_list_widget.clear()
         self._update_tab_counts()
         self.file_path = None
         self.image_data = None
@@ -1266,6 +1479,85 @@ class MainWindow(QMainWindow, WindowMixin):
         # Reset status bar widgets
         self.label_box_count.setText('Boxes: 0')
         self.update_save_status(saved=True)
+
+    def _set_document_kind(self, kind):
+        """Switch cache policy and document-only UI without touching content."""
+        previous = getattr(self, 'document_kind', DocumentKind.NONE)
+        if previous != kind and hasattr(self, 'frame_cache'):
+            self.frame_cache.clear()
+        self.document_kind = kind
+        if hasattr(self, 'frame_cache'):
+            self.frame_cache.max_images = (
+                12 if kind == DocumentKind.VIDEO else 5)
+        if hasattr(self, 'file_dock'):
+            self.file_dock.setVisible(kind != DocumentKind.VIDEO)
+        if hasattr(self, 'timeline_dock'):
+            self.timeline_dock.setVisible(kind == DocumentKind.VIDEO)
+        if hasattr(self, 'label_tab_widget'):
+            self.label_tab_widget.setTabEnabled(
+                2, kind == DocumentKind.VIDEO)
+            if kind != DocumentKind.VIDEO \
+                    and self.label_tab_widget.currentIndex() == 2:
+                self.label_tab_widget.setCurrentIndex(0)
+        if kind != DocumentKind.VIDEO and hasattr(self, 'diffc_button'):
+            self.diffc_button.setEnabled(True)
+        if hasattr(self, 'actions') and hasattr(
+                self.actions, 'videoPlayPause'):
+            self.actions.verify.setEnabled(kind != DocumentKind.NONE)
+            self.actions.videoPlayPause.setEnabled(
+                kind == DocumentKind.VIDEO)
+            self.actions.videoExport.setEnabled(
+                kind == DocumentKind.VIDEO)
+            self.actions.videoAddKeyframe.setEnabled(False)
+            self.actions.videoDeleteTrack.setEnabled(False)
+            self.actions.videoTrackForward.setEnabled(False)
+            self.actions.videoTrackBackward.setEnabled(False)
+            self.actions.videoAcceptSuggestion.setEnabled(False)
+            self.actions.videoRejectSuggestion.setEnabled(False)
+            self.actions.videoAcceptVisible.setEnabled(False)
+            self.actions.videoRejectVisible.setEnabled(False)
+            self.actions.videoAcceptRun.setEnabled(False)
+            self.actions.videoRejectRun.setEnabled(False)
+
+    def _close_video_decoder(self, close_decoder=True):
+        if hasattr(self, '_video_playback_timer'):
+            self.pause_video()
+        if hasattr(self, '_tracking_handle'):
+            self.cancel_video_tracking()
+        if hasattr(self, '_video_export_handle'):
+            self.cancel_video_export()
+        decoder = getattr(self, 'video_decoder', None)
+        self.video_decoder = None
+        snapshot = getattr(self, 'video_snapshot', None)
+        self.video_snapshot = None
+        self.video_model = None
+        self._selected_video_track_id = None
+        self._video_save_active = False
+        self._video_save_queued = False
+        self._video_save_callbacks = []
+        self._video_close_save_pending = False
+        self.current_video_frame_ref = None
+        if hasattr(self, 'video_timeline'):
+            self.video_timeline.set_session(None)
+        if decoder is not None and close_decoder:
+            coordinator = getattr(self, 'task_coordinator', None)
+            if coordinator is not None and not coordinator.is_shutting_down:
+                handle = coordinator.submit(
+                    'video', lambda _handle, session=decoder: session.close(),
+                    priority=JobPriority.IMAGE_LOAD,
+                    generation=self._dataset_generation)
+                # Session teardown must stay ordered behind any active decode,
+                # even if a later document generation cancels ordinary work.
+                handle.begin_non_cancellable()
+            else:
+                decoder.close()
+        if (snapshot is not None and snapshot.project_path
+                and not snapshot.read_only and not self.dirty):
+            try:
+                checkpoint_project(snapshot.project_path)
+            except Exception:
+                pass
+        return decoder
 
     def _restart_workers_if_needed(self):
         coordinator = getattr(self, 'task_coordinator', None)
@@ -1345,12 +1637,18 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def create_shape(self):
         assert self.beginner()
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
         self.actions.create_polygon.setEnabled(True)
 
     def create_polygon_mode(self):
         """Switch to polygon drawing mode."""
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         self.canvas.set_polygon_drawing(True)
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(False)
@@ -1360,6 +1658,9 @@ class MainWindow(QMainWindow, WindowMixin):
         """Toggle keypoint annotation mode for the selected shape."""
         from libs.core.keypoint_config import get_template
 
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
@@ -1387,6 +1688,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_sam_mode(self):
         """Enter/leave single-click SAM segmentation mode."""
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if not segmentation.sam_available():
             QMessageBox.warning(
                 self, "SAM unavailable",
@@ -1441,6 +1745,19 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _on_polygon_vertices_edited(self, shape, old_points):
         """Capture polygon vertex edits for undo support."""
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
+            before = self.video_model.snapshot_state()
+            self._store_video_shape_as_manual(shape)
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Edit video polygon keyframe'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            return
         cmd = EditPolygonVerticesCommand(
             self, shape, old_points, list(shape.points))
         self.undo_stack.push(cmd)
@@ -1448,12 +1765,38 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _on_shape_move_finished(self, shape, old_points):
         """Capture whole-shape moves / rectangle resizes for undo support."""
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
+            before = self.video_model.snapshot_state()
+            self._store_video_shape_as_manual(shape)
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Edit video track keyframe'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            return
         cmd = MoveShapeCommand(self, shape, old_points, list(shape.points))
         self.undo_stack.push(cmd)
         self.set_dirty()
 
     def _on_keypoints_edited(self, shape, old_keypoints):
         """Capture keypoint mutations for undo support."""
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
+            before = self.video_model.snapshot_state()
+            self._store_video_shape_as_manual(shape)
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Edit video keypoints'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            return
         cmd = EditKeypointsCommand(
             self, shape, old_keypoints,
             list(shape.keypoints) if shape.keypoints else None)
@@ -1462,17 +1805,23 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_drawing_sensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""
-        self.actions.editMode.setEnabled(not drawing)
-        self.actions.create_polygon.setEnabled(not drawing)
+        if drawing and self.document_kind == DocumentKind.VIDEO:
+            self.pause_video()
+        editable = self._video_editable()
+        self.actions.editMode.setEnabled(not drawing and editable)
+        self.actions.create_polygon.setEnabled(not drawing and editable)
         if not drawing and self.beginner():
             # Cancel creation.
             print('Cancel creation.')
             self.canvas.set_editing(True)
             self.canvas.restore_cursor()
-            self.actions.create.setEnabled(True)
-            self.actions.create_polygon.setEnabled(True)
+            self.actions.create.setEnabled(editable)
+            self.actions.create_polygon.setEnabled(editable)
 
     def toggle_draw_mode(self, edit=True):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         self.canvas.set_editing(edit)
         self.actions.createMode.setEnabled(edit)
         self.actions.editMode.setEnabled(not edit)
@@ -1480,11 +1829,17 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def set_create_mode(self):
         assert self.advanced()
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         self.toggle_draw_mode(False)
         self.actions.create_polygon.setEnabled(True)
 
     def set_edit_mode(self):
         assert self.advanced()
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         self.toggle_draw_mode(True)
         self.actions.create_polygon.setEnabled(True)
         self.label_selection_changed()
@@ -1524,6 +1879,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.menus.labelList.exec_(self.rect_label_list.mapToGlobal(point))
 
     def edit_label(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if not self.canvas.editing():
             return
         item = self.current_item()
@@ -1533,7 +1891,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if text is not None:
             item.setText(text)
             item.setBackground(generate_color_by_text(text))
-            self.set_dirty()
+            if self.document_kind != DocumentKind.VIDEO:
+                self.set_dirty()
             self.update_combo_box()
 
     # Tzutalin 20160906 : Add file list and dock to move faster
@@ -1737,6 +2096,23 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Checked and Update
         if difficult != shape.difficult:
+            if self.document_kind == DocumentKind.VIDEO:
+                if not self._ensure_video_editable():
+                    blocked = self.diffc_button.blockSignals(True)
+                    self.diffc_button.setChecked(shape.difficult)
+                    self.diffc_button.blockSignals(blocked)
+                    return
+                track_id = getattr(shape, 'video_track_id', None)
+                before = self.video_model.snapshot_state()
+                self.video_model.update_track(
+                    track_id, difficult=difficult)
+                after = self.video_model.snapshot_state()
+                self.undo_stack.push(VideoModelCommand(
+                    self, before, after, 'Change video track difficulty'))
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
             shape.difficult = difficult
             self.set_dirty()
         else:  # User probably changed item visibility
@@ -1749,18 +2125,23 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             shape = self.canvas.selected_shape
             if shape:
+                if self.document_kind == DocumentKind.VIDEO:
+                    self._selected_video_track_id = getattr(
+                        shape, 'video_track_id', None)
                 self.shapes_to_items[shape].setSelected(True)
             else:
                 self.rect_label_list.clearSelection()
                 self.poly_label_list.clearSelection()
-        self.actions.delete.setEnabled(selected)
-        self.actions.copy.setEnabled(selected)
+        editable = self._video_editable()
+        self.actions.delete.setEnabled(selected and editable)
+        self.actions.copy.setEnabled(selected and editable)
         self.actions.copyToClipboard.setEnabled(selected)
-        self.actions.edit.setEnabled(selected)
-        self.actions.shapeLineColor.setEnabled(selected)
-        self.actions.shapeFillColor.setEnabled(selected)
+        self.actions.edit.setEnabled(selected and editable)
+        self.actions.shapeLineColor.setEnabled(selected and editable)
+        self.actions.shapeFillColor.setEnabled(selected and editable)
         # Enable paste if clipboard has shapes
-        self.actions.pasteFromClipboard.setEnabled(len(self.clipboard_shapes) > 0)
+        self.actions.pasteFromClipboard.setEnabled(
+            len(self.clipboard_shapes) > 0 and editable)
         # Enable copy all if there are shapes
         self.actions.copyAllToClipboard.setEnabled(len(self.canvas.shapes) > 0)
 
@@ -1770,7 +2151,7 @@ class MainWindow(QMainWindow, WindowMixin):
         has_template = (shape is not None
                         and shape.shape_type == ShapeType.RECTANGLE
                         and get_template(shape.label) is not None)
-        self.actions.keypoint_mode.setEnabled(has_template)
+        self.actions.keypoint_mode.setEnabled(has_template and editable)
         if has_template and shape.keypoints:
             self.keypoint_panel.load_template(shape.label.lower())
             self.keypoint_panel.set_keypoints(shape.keypoints)
@@ -1908,6 +2289,9 @@ class MainWindow(QMainWindow, WindowMixin):
         poly_count = self.poly_label_list.count()
         self.label_tab_widget.setTabText(0, f'Rectangles ({rect_count})')
         self.label_tab_widget.setTabText(1, f'Polygons ({poly_count})')
+        if hasattr(self, 'track_list_widget'):
+            self.label_tab_widget.setTabText(
+                2, f'Tracks ({self.track_list_widget.count()})')
 
     def _check_polygon_degradation(self, format_name):
         """Warn the user if polygons will be saved as bounding boxes.
@@ -2006,12 +2390,27 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
 
     def copy_selected_shape(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         shape = self.canvas.copy_selected_shape()
         self.add_label(shape)
 
-        # Push command for undo support (shape already created, so just push)
-        cmd = CreateShapeCommand(self, shape)
-        self.undo_stack.push(cmd)
+        if self.document_kind == DocumentKind.VIDEO:
+            before = self.video_model.snapshot_state()
+            if hasattr(shape, 'video_track_id'):
+                del shape.video_track_id
+            track_id = self._store_video_shape_as_manual(shape)
+            self._selected_video_track_id = track_id
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Duplicate video track'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+        else:
+            # Push command for undo support (shape already created).
+            cmd = CreateShapeCommand(self, shape)
+            self.undo_stack.push(cmd)
 
         # fix copy and delete
         self.shape_selection_changed(True)
@@ -2022,7 +2421,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         # Store a copy of the selected shape
         self.clipboard_shapes = [self.canvas.selected_shape.copy()]
-        self.actions.pasteFromClipboard.setEnabled(True)
+        self.actions.pasteFromClipboard.setEnabled(self._video_editable())
         self.statusBar().showMessage('Copied 1 annotation to clipboard', 3000)
 
     def copy_all_to_clipboard(self):
@@ -2031,28 +2430,42 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         # Store copies of all shapes
         self.clipboard_shapes = [shape.copy() for shape in self.canvas.shapes]
-        self.actions.pasteFromClipboard.setEnabled(True)
+        self.actions.pasteFromClipboard.setEnabled(self._video_editable())
         self.statusBar().showMessage(f'Copied {len(self.clipboard_shapes)} annotations to clipboard', 3000)
 
     def paste_from_clipboard(self):
         """Paste shapes from clipboard to current image."""
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if not self.clipboard_shapes:
             return
         if not self.canvas.pixmap or self.canvas.pixmap.isNull():
             return
 
+        before = (self.video_model.snapshot_state()
+                  if self.document_kind == DocumentKind.VIDEO else None)
         for clipboard_shape in self.clipboard_shapes:
             # Create a new copy for each paste
             shape = clipboard_shape.copy()
             # Add shape to canvas
             self.canvas.shapes.append(shape)
             self.add_label(shape)
-            # Push command for undo support
-            cmd = CreateShapeCommand(self, shape)
-            self.undo_stack.push(cmd)
+            if self.document_kind == DocumentKind.VIDEO:
+                self._store_video_shape_as_manual(shape)
+            else:
+                cmd = CreateShapeCommand(self, shape)
+                self.undo_stack.push(cmd)
 
         self.canvas.rebuild_spatial_index()
-        self.set_dirty()
+        if self.document_kind == DocumentKind.VIDEO:
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Paste video tracks'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+        else:
+            self.set_dirty()
         self.canvas.update()
         self.update_box_count()
         self.statusBar().showMessage(f'Pasted {len(self.clipboard_shapes)} annotations', 3000)
@@ -2091,6 +2504,24 @@ class MainWindow(QMainWindow, WindowMixin):
         shape = self.items_to_shapes[item]
         label = item.text()
         if label != shape.label:
+            if self.document_kind == DocumentKind.VIDEO:
+                if not self._ensure_video_editable():
+                    blocked = item.listWidget().blockSignals(True)
+                    item.setText(shape.label)
+                    item.listWidget().blockSignals(blocked)
+                    return
+                track_id = getattr(shape, 'video_track_id', None)
+                if track_id is None:
+                    return
+                before = self.video_model.snapshot_state()
+                self.video_model.rename_track(track_id, label)
+                after = self.video_model.snapshot_state()
+                self.undo_stack.push(VideoModelCommand(
+                    self, before, after, 'Rename video track'))
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
             old_label = shape.label
             shape.label = item.text()
             shape.line_color = generate_color_by_text(shape.label)
@@ -2109,6 +2540,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         position MUST be in global coordinates.
         """
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            self.canvas.reset_all_lines()
+            return
         if not self.use_default_label_checkbox.isChecked():
             if len(self.label_hist) > 0:
                 self.label_dialog = LabelDialog(
@@ -2133,9 +2568,20 @@ class MainWindow(QMainWindow, WindowMixin):
             shape = self.canvas.set_last_label(text, generate_color)
             self.add_label(shape)
 
-            # Push command for undo support (shape already created, so just push)
-            cmd = CreateShapeCommand(self, shape)
-            self.undo_stack.push(cmd)
+            if self.document_kind == DocumentKind.VIDEO:
+                before = self.video_model.snapshot_state()
+                track_id = self._store_video_shape_as_manual(shape)
+                self._selected_video_track_id = track_id
+                after = self.video_model.snapshot_state()
+                self.undo_stack.push(VideoModelCommand(
+                    self, before, after, 'Create video track'))
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+            else:
+                # Shape already exists, so record without re-executing it.
+                cmd = CreateShapeCommand(self, shape)
+                self.undo_stack.push(cmd)
 
             if self.beginner():  # Switch to edit mode.
                 self.canvas.set_editing(True)
@@ -2144,7 +2590,8 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 self.actions.editMode.setEnabled(True)
                 self.actions.create_polygon.setEnabled(True)
-            self.set_dirty()
+            if self.document_kind != DocumentKind.VIDEO:
+                self.set_dirty()
             self._update_current_image_stats()
 
             if text not in self.label_hist:
@@ -2249,9 +2696,1278 @@ class MainWindow(QMainWindow, WindowMixin):
         for item, shape in self.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
+    def _video_project_target(self, source_path, project_path=None,
+                              allow_dialog=False):
+        """Resolve the default sidecar, falling back to read-only safely."""
+        if is_video_project(source_path):
+            return source_path, False
+        if project_path:
+            return os.path.abspath(ustr(project_path)), False
+        default = default_project_path(source_path)
+        if os.path.exists(default) or os.access(
+                os.path.dirname(default) or '.', os.W_OK):
+            return default, False
+        if allow_dialog:
+            chosen, _selected_filter = QFileDialog.getSaveFileName(
+                self, '%s - Choose Video Project' % __appname__, default,
+                'LabelImg++ video project (*.labelimgpp.sqlite)')
+            if chosen:
+                chosen = ustr(chosen)
+                if not chosen.lower().endswith('.labelimgpp.sqlite'):
+                    chosen += '.labelimgpp.sqlite'
+                return os.path.abspath(chosen), False
+        return None, True
+
+    def request_open_video(self, path, project_path=None, skip_prompt=False,
+                           source_override=None):
+        """Queue a transactional video/project open on the decoder lane."""
+        path = os.path.abspath(ustr(path))
+        if not skip_prompt and self.dirty:
+            if self.auto_saving.isChecked():
+                self.request_save_file(on_success=lambda: self.request_open_video(
+                    path, project_path=project_path, skip_prompt=True,
+                    source_override=source_override))
+                return None
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return None
+            if answer == QMessageBox.Yes:
+                self.request_save_file(on_success=lambda: self.request_open_video(
+                    path, project_path=project_path, skip_prompt=True,
+                    source_override=source_override))
+                return None
+
+        target, read_only = self._video_project_target(
+            path, project_path=project_path, allow_dialog=True)
+        self._dataset_generation = self.task_coordinator.next_generation()
+        generation = self._dataset_generation
+        self._video_open_request_id += 1
+        request_id = self._video_open_request_id
+        self._show_loading_veil('Opening video %s…' % os.path.basename(path))
+
+        def prepare(handle):
+            try:
+                prepared = prepare_video_open(
+                    path, project_path=target, read_only=read_only,
+                    cancelled=handle.is_cancelled,
+                    source_override=source_override)
+            except VideoSourceMissing as exc:
+                return VideoOpenProblem('missing', str(exc))
+            except VideoSourceChanged as exc:
+                return VideoOpenProblem('changed', str(exc))
+            if handle.is_cancelled():
+                prepared.decoder.close()
+                return None
+            return prepared
+
+        handle = self.task_coordinator.submit(
+            'video', prepare, priority=JobPriority.IMAGE_LOAD,
+            key='video-open', latest=True, generation=generation)
+        handle.result.connect(
+            lambda prepared, rid=request_id, gen=generation,
+            requested=path, project=target, override=source_override:
+            self._on_video_open_result(
+                prepared, rid, gen, requested, project, override))
+        handle.error.connect(
+            lambda message, rid=request_id, gen=generation:
+            self._on_video_open_error(message, rid, gen))
+        return handle
+
+    def _on_video_open_error(self, message, request_id, generation):
+        if (request_id != self._video_open_request_id
+                or generation != self._dataset_generation):
+            return
+        self._hide_loading_veil()
+        self.canvas.setEnabled(bool(self.file_path))
+        self.status('Error opening video: ' + message, delay=10000)
+
+    def _on_video_open_result(self, prepared, request_id, generation,
+                              requested_path=None, project_path=None,
+                              source_override=None):
+        if prepared is None:
+            return
+        if (request_id != self._video_open_request_id
+                or generation != self._dataset_generation):
+            decoder = getattr(prepared, 'decoder', None)
+            if decoder is not None:
+                decoder.close()
+            return
+        if isinstance(prepared, VideoOpenProblem):
+            self._hide_loading_veil()
+            self._resolve_video_open_problem(
+                prepared, requested_path, project_path, source_override)
+            return
+        self._commit_video_open(prepared)
+        self._hide_loading_veil()
+
+    def _locate_video_source(self, project_path):
+        source, _selected = QFileDialog.getOpenFileName(
+            self, 'Locate original video', os.path.dirname(project_path),
+            'Video files (*.mp4 *.mov *.mkv *.avi);;All files (*)')
+        return os.path.abspath(ustr(source)) if source else None
+
+    def _video_source_changed_choice(self, message):
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Warning)
+        dialog.setWindowTitle('Video source changed')
+        dialog.setText(message)
+        dialog.setInformativeText(
+            'Annotations will not be applied to changed media.')
+        locate = dialog.addButton('Locate Original', QMessageBox.AcceptRole)
+        create = dialog.addButton(
+            'Create New Project', QMessageBox.DestructiveRole)
+        cancel = dialog.addButton(QMessageBox.Cancel)
+        dialog.exec_()
+        clicked = dialog.clickedButton()
+        if clicked is locate:
+            return 'locate'
+        if clicked is create:
+            return 'create'
+        if clicked is cancel:
+            return 'cancel'
+        return 'cancel'
+
+    def _new_video_project_path(self, source_path, old_project_path):
+        suggested = default_project_path(source_path)
+        if os.path.abspath(suggested) == os.path.abspath(old_project_path):
+            suggested = source_path + '.new' + PROJECT_SUFFIX
+        path, _selected = QFileDialog.getSaveFileName(
+            self, 'Create new video project', suggested,
+            'LabelImg++ video project (*.labelimgpp.sqlite)')
+        return os.path.abspath(ustr(path)) if path else None
+
+    def _resolve_video_open_problem(self, problem, requested_path,
+                                    project_path, source_override):
+        if problem.kind == 'missing':
+            located = self._locate_video_source(project_path)
+            if located:
+                self.request_open_video(
+                    project_path, skip_prompt=True,
+                    source_override=located)
+            else:
+                self.status('Video project open cancelled')
+            return
+        choice = self._video_source_changed_choice(problem.message)
+        if choice == 'locate':
+            located = self._locate_video_source(project_path)
+            if located:
+                self.request_open_video(
+                    project_path, skip_prompt=True,
+                    source_override=located)
+            return
+        if choice == 'create':
+            source_path = source_override
+            if source_path is None and not is_video_project(requested_path):
+                source_path = requested_path
+            if source_path is None:
+                source_path = self._locate_video_source(project_path)
+            if source_path:
+                new_project = self._new_video_project_path(
+                    source_path, project_path)
+                if new_project:
+                    self.request_open_video(
+                        source_path, project_path=new_project,
+                        skip_prompt=True)
+            return
+        self.status('Video project open cancelled')
+
+    def _commit_video_open(self, prepared):
+        """Atomically publish worker data on QApplication.thread()."""
+        assert QApplication.instance().thread() == self.thread()
+        snapshot = prepared.snapshot
+        first = snapshot.initial_frame
+        self.reset_state()
+        self._set_document_kind(DocumentKind.VIDEO)
+        self.video_decoder = prepared.decoder
+        self.video_snapshot = snapshot
+        self.video_tracks = prepared.tracks
+        self.video_observations = prepared.observations
+        self.video_frame_states = prepared.frame_states
+        self.video_classes = prepared.classes
+        self.video_model = VideoProjectModel(
+            snapshot.revision, tracks=prepared.tracks,
+            observations=prepared.observations,
+            frame_states=prepared.frame_states, classes=prepared.classes)
+        self._document_revision = snapshot.revision
+        self.m_img_list = []
+        self._path_to_idx = {}
+        self.img_count = 0
+        self.cur_img_idx = 0
+        self.file_list_widget.clear()
+        self.file_path = snapshot.source_path
+        self.image_data = None
+        self.image = first.image
+        self._image_scale_factor = (
+            first.display_width / snapshot.width if snapshot.width else 1.0)
+        self._original_image_size = QSize(snapshot.width, snapshot.height)
+        verified_pts = {state.pts for state in prepared.frame_states
+                        if state.verified}
+        self.canvas.verified = first.frame_ref.pts in verified_pts
+        self.canvas.locked = (
+            snapshot.read_only
+            or (self.canvas.verified
+                and self.lock_on_verify_option.isChecked()))
+        self.canvas.load_pixmap(QPixmap.fromImage(first.image))
+        self.current_video_frame_ref = first.frame_ref
+        self.frame_cache.put(first)
+        self.video_timeline.set_session(snapshot)
+        self._refresh_video_timeline_markers()
+        self._materialize_video_frame(first.frame_ref.pts)
+        self.set_clean()
+        self.canvas.setEnabled(True)
+        self.adjust_scale(initial=True)
+        self.paint_canvas()
+        self.toggle_actions(True)
+        editable = not snapshot.read_only
+        mutation_actions = (
+            self.actions.create, self.actions.create_polygon,
+            self.actions.createMode, self.actions.editMode,
+            self.actions.verify, self.actions.delete, self.actions.copy,
+            self.actions.edit, self.actions.pasteFromClipboard,
+            self.actions.keypoint_mode, self.actions.sam_mode,
+            self.actions.shapeLineColor, self.actions.shapeFillColor,
+            self.actions.undo, self.actions.redo,
+            self.actions.videoAddKeyframe,
+            self.actions.videoDeleteTrack,
+            self.actions.videoTrackForward,
+            self.actions.videoTrackBackward,
+            self.actions.videoAcceptSuggestion,
+            self.actions.videoRejectSuggestion,
+            self.actions.videoAcceptVisible,
+            self.actions.videoRejectVisible,
+            self.actions.videoAcceptRun,
+            self.actions.videoRejectRun,
+        )
+        if not editable:
+            for action in mutation_actions:
+                action.setEnabled(False)
+        else:
+            for action in (self.actions.create, self.actions.create_polygon,
+                           self.actions.createMode, self.actions.editMode,
+                           self.actions.verify):
+                action.setEnabled(True)
+        self.diffc_button.setEnabled(editable)
+        self.actions.saveAs.setEnabled(bool(snapshot.project_path))
+        self.add_recent_file(snapshot.project_path or snapshot.source_path)
+        suffix = ' [read-only]' if snapshot.read_only else ''
+        self.setWindowTitle(
+            '%s %s%s' % (__appname__, snapshot.source_path, suffix))
+        self.update_status_bar()
+        self.canvas.setFocus(True)
+        self.status('Opened video %s' % os.path.basename(snapshot.source_path))
+
+    def open_video(self, path, project_path=None):
+        """Synchronous compatibility API for extensions and tests."""
+        if self.dirty and not self.may_continue():
+            return False
+        path = os.path.abspath(ustr(path))
+        target, read_only = self._video_project_target(
+            path, project_path=project_path, allow_dialog=False)
+        try:
+            prepared = prepare_video_open(
+                path, project_path=target, read_only=read_only)
+        except Exception as exc:
+            self.status('Error opening video: %s' % exc, delay=10000)
+            return False
+        self._dataset_generation = self.task_coordinator.next_generation()
+        self._commit_video_open(prepared)
+        return True
+
+    def request_save_video_project(self, _value=False, on_success=None):
+        snapshot = self.video_snapshot
+        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
+                or snapshot.read_only or not snapshot.project_path):
+            return None
+        if callable(on_success):
+            self._video_save_callbacks.append(on_success)
+        if self._video_save_active:
+            self._video_save_queued = True
+            return self._video_save_handle
+        model = self.video_model
+        if model is None or not model.dirty:
+            try:
+                checkpoint_project(snapshot.project_path)
+            except Exception as exc:
+                self.status(
+                    'Error saving video project: %s' % exc, delay=10000)
+                return None
+            self.set_clean()
+            callbacks, self._video_save_callbacks = \
+                self._video_save_callbacks, []
+            for callback in callbacks:
+                callback()
+            return None
+        request = model.build_save_request(snapshot.project_path)
+        generation = self._dataset_generation
+
+        def save(handle):
+            handle.check_cancelled()
+            return save_project_delta(
+                request, cancelled=handle.is_cancelled,
+                begin_commit=handle.begin_non_cancellable)
+
+        handle = self.task_coordinator.submit(
+            'background', save, priority=JobPriority.IMAGE_LOAD,
+            generation=generation)
+        self._video_save_handle = handle
+        self._video_save_active = True
+        self._video_save_queued = False
+        handle.result.connect(
+            lambda revision, req=request, gen=generation:
+            self._on_video_save_result(revision, req, gen))
+        handle.error.connect(
+            self._on_video_save_error)
+        handle.finished.connect(self._on_video_save_finished)
+        return handle
+
+    def _on_video_save_result(self, revision, request, generation):
+        if (revision is None or generation != self._dataset_generation
+                or self.video_model is None
+                or self.video_snapshot is None
+                or request.project_path != self.video_snapshot.project_path):
+            return
+        self.video_model.mark_saved(revision)
+        self.video_snapshot = replace(
+            self.video_snapshot, revision=revision)
+        if not self.video_model.dirty:
+            self.set_clean()
+        else:
+            self._video_save_queued = True
+        self.status('Saved video project to %s' % request.project_path)
+
+    def _on_video_save_error(self, message):
+        self._video_save_queued = False
+        self._video_save_callbacks = []
+        self._video_close_save_pending = False
+        self.status('Error saving video project: ' + message, delay=10000)
+
+    def _on_video_save_finished(self):
+        self._video_save_active = False
+        self._video_save_handle = None
+        if (self.video_model is not None and self.video_model.dirty
+                and self._video_save_queued):
+            self.request_save_video_project()
+            return
+        if self.video_model is not None and not self.video_model.dirty:
+            callbacks, self._video_save_callbacks = \
+                self._video_save_callbacks, []
+            for callback in callbacks:
+                callback()
+
+    def save_video_project(self):
+        snapshot = self.video_snapshot
+        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
+                or snapshot.read_only or not snapshot.project_path):
+            return False
+        try:
+            if self.video_model is not None and self.video_model.dirty:
+                request = self.video_model.build_save_request(
+                    snapshot.project_path)
+                revision = save_project_delta(request)
+                self.video_model.mark_saved(revision)
+                self.video_snapshot = replace(
+                    self.video_snapshot, revision=revision)
+            checkpoint_project(snapshot.project_path)
+        except Exception as exc:
+            self.status('Error saving video project: %s' % exc, delay=10000)
+            return False
+        self.set_clean()
+        return True
+
+    def _refresh_video_timeline_markers(self):
+        if self.video_snapshot is None:
+            return
+        by_track = {}
+        accepted = []
+        pending = []
+        for observation in self.video_observations:
+            by_track.setdefault(observation.track_id, []).append(
+                observation.pts)
+            if (observation.source == 'manual'
+                    and observation.review_state == 'accepted'
+                    and observation.anchor):
+                accepted.append(observation.pts)
+            elif observation.review_state == 'pending':
+                pending.append(observation.pts)
+        spans = tuple(
+            (min(values), max(values)) for values in by_track.values()
+            if values)
+        verified = tuple(
+            state.pts for state in self.video_frame_states if state.verified)
+        self.video_timeline.set_markers(
+            spans=spans, accepted=accepted, pending=pending,
+            verified=verified)
+
+    def _sync_video_model_views(self):
+        model = self.video_model
+        if model is None:
+            return
+        self.video_tracks = tuple(model.tracks.values())
+        self.video_observations = tuple(model.observations.values())
+        self.video_frame_states = tuple(model.frame_states.values())
+        self.video_classes = tuple(model.classes)
+
+    def _on_video_model_mutation(self):
+        if not self._ensure_video_editable():
+            return
+        if (self._active_tracking_request is not None
+                and not self._applying_tracking_batch):
+            self.cancel_video_tracking()
+        self.pause_video()
+        self._sync_video_model_views()
+        self._document_revision = self.video_model.revision
+        self.dirty = self.video_model.dirty
+        self.actions.save.setEnabled(self.dirty)
+        self.update_save_status(saved=not self.dirty)
+        self._refresh_video_timeline_markers()
+        self._refresh_video_track_list()
+        self.update_box_count()
+
+    def _shape_geometry(self, shape):
+        inverse = (1.0 / self._image_scale_factor
+                   if self._image_scale_factor else 1.0)
+        points = [(point.x() * inverse, point.y() * inverse)
+                  for point in shape.points]
+        if shape.shape_type == ShapeType.RECTANGLE:
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            geometry = [min(xs), min(ys), max(xs), max(ys)]
+        else:
+            geometry = [[point[0], point[1]] for point in points]
+        keypoints = None
+        if shape.keypoints is not None:
+            keypoints = [
+                ([item[0] * inverse, item[1] * inverse, item[2]]
+                 if item is not None else None)
+                for item in shape.keypoints]
+        return geometry, keypoints
+
+    def _store_video_shape_as_manual(self, shape):
+        if not self._video_editable():
+            raise RuntimeError('cannot mutate a read-only video project')
+        track_id = getattr(shape, 'video_track_id', None)
+        if track_id is None:
+            track = self.video_model.create_track(
+                shape.label, shape.shape_type.value,
+                shape.line_color.getRgb(), difficult=shape.difficult)
+            track_id = track.track_id
+            shape.video_track_id = track_id
+        geometry, keypoints = self._shape_geometry(shape)
+        self.video_model.upsert_manual(
+            track_id, self.current_video_frame_ref.pts,
+            geometry, keypoints=keypoints)
+        return track_id
+
+    def _shape_for_materialized(self, materialized):
+        track = materialized.track
+        observation = materialized.observation
+        shape_type = (ShapeType.POLYGON if track.shape_type == 'polygon'
+                      else ShapeType.RECTANGLE)
+        shape = Shape(
+            label=track.label, line_color=QColor(*track.color),
+            difficult=track.difficult, shape_type=shape_type)
+        scale = self._image_scale_factor
+        geometry = observation.geometry
+        if shape_type == ShapeType.RECTANGLE:
+            xmin, ymin, xmax, ymax = geometry
+            points = ((xmin, ymin), (xmax, ymin),
+                      (xmax, ymax), (xmin, ymax))
+        else:
+            points = geometry
+        for x, y in points:
+            shape.add_point(QPointF(x * scale, y * scale))
+        shape.close()
+        if observation.keypoints is not None:
+            shape.keypoints = [
+                ([item[0] * scale, item[1] * scale, item[2]]
+                 if item is not None else None)
+                for item in observation.keypoints]
+        shape.video_track_id = track.track_id
+        shape.video_render_state = materialized.render_state
+        return shape
+
+    def _materialize_video_frame(self, pts):
+        model = self.video_model
+        if model is None:
+            return
+        selected = self._selected_video_track_id
+        shapes = [self._shape_for_materialized(item)
+                  for item in model.materialize(int(pts))]
+        for widget in (self.rect_label_list, self.poly_label_list):
+            widget.blockSignals(True)
+            widget.clear()
+        self.items_to_shapes.clear()
+        self.shapes_to_items.clear()
+        self.canvas.load_shapes(shapes)
+        for shape in shapes:
+            self.add_label(shape, refresh=False)
+        for widget in (self.rect_label_list, self.poly_label_list):
+            widget.blockSignals(False)
+        self._update_tab_counts()
+        self.update_combo_box()
+        if selected:
+            match = next((shape for shape in shapes
+                          if shape.video_track_id == selected), None)
+            if match is not None:
+                self.canvas.select_shape(match)
+        self._refresh_video_track_list()
+        self.update_box_count()
+        has_pending = any(
+            item.pts == int(pts) and item.review_state == 'pending'
+            for item in model.observations.values())
+        editable = self._video_editable()
+        self.actions.videoAcceptSuggestion.setEnabled(has_pending and editable)
+        self.actions.videoRejectSuggestion.setEnabled(has_pending and editable)
+        has_any_pending = any(
+            item.review_state == 'pending'
+            for item in model.observations.values())
+        has_run_pending = any(
+            key in self._tracking_run_keys
+            and item.review_state == 'pending'
+            for key, item in model.observations.items())
+        self.actions.videoAcceptVisible.setEnabled(
+            has_any_pending and editable)
+        self.actions.videoRejectVisible.setEnabled(
+            has_any_pending and editable)
+        self.actions.videoAcceptRun.setEnabled(has_run_pending and editable)
+        self.actions.videoRejectRun.setEnabled(has_run_pending and editable)
+
+    def _refresh_video_track_list(self):
+        model = self.video_model
+        if model is None or not hasattr(self, 'track_list_widget'):
+            return
+        selected = self._selected_video_track_id
+        self.track_list_widget.blockSignals(True)
+        self.track_list_widget.clear()
+        for track in model.tracks.values():
+            observations = [
+                item for item in model.observations.values()
+                if item.track_id == track.track_id]
+            pending = sum(item.review_state == 'pending'
+                          for item in observations)
+            if observations:
+                span = '%s–%s' % (
+                    min(item.pts for item in observations),
+                    max(item.pts for item in observations))
+            else:
+                span = 'empty'
+            text = '%s  [%s]  · %s pending' % (
+                track.label, span, pending)
+            item = HashableQListWidgetItem(text)
+            item.setData(Qt.UserRole, track.track_id)
+            item.setFlags((item.flags() | Qt.ItemIsUserCheckable)
+                          & ~Qt.ItemIsEditable)
+            item.setCheckState(Qt.Checked)
+            item.setForeground(QColor(*track.color))
+            self.track_list_widget.addItem(item)
+            if track.track_id == selected:
+                item.setSelected(True)
+                self.track_list_widget.setCurrentItem(item)
+        self.track_list_widget.blockSignals(False)
+        self._update_tab_counts()
+
+    def _video_track_selection_changed(self):
+        items = self.track_list_widget.selectedItems()
+        if not items:
+            return
+        track_id = items[0].data(Qt.UserRole)
+        self._selected_video_track_id = track_id
+        editable = self._video_editable()
+        self.actions.videoAddKeyframe.setEnabled(editable)
+        self.actions.videoDeleteTrack.setEnabled(editable)
+        track = self.video_model.tracks.get(track_id)
+        can_track = track is not None and track.shape_type == 'rectangle'
+        self.actions.videoTrackForward.setEnabled(can_track and editable)
+        self.actions.videoTrackBackward.setEnabled(can_track and editable)
+        shape = next((item for item in self.canvas.shapes
+                      if getattr(item, 'video_track_id', None) == track_id),
+                     None)
+        if shape is not None:
+            self.canvas.select_shape(shape)
+
+    def _video_track_item_changed(self, item):
+        track_id = item.data(Qt.UserRole)
+        visible = item.checkState() == Qt.Checked
+        for shape in self.canvas.shapes:
+            if getattr(shape, 'video_track_id', None) == track_id:
+                self.canvas.set_shape_visible(shape, visible)
+
+    def add_track_keyframe(self):
+        if not self._ensure_video_editable():
+            return
+        model = self.video_model
+        track_id = self._selected_video_track_id
+        if model is None or track_id is None \
+                or self.current_video_frame_ref is None:
+            return
+        before = model.snapshot_state()
+        observation = model.promote_to_manual(
+            track_id, self.current_video_frame_ref.pts)
+        if observation is None:
+            self.status('Selected track is not present on this frame')
+            return
+        after = model.snapshot_state()
+        self.undo_stack.push(VideoModelCommand(
+            self, before, after, 'Add video track keyframe'))
+        self._on_video_model_mutation()
+        self._materialize_video_frame(self.current_video_frame_ref.pts)
+
+    def delete_selected_track(self):
+        if not self._ensure_video_editable():
+            return
+        model = self.video_model
+        track_id = self._selected_video_track_id
+        if model is None or track_id not in model.tracks:
+            return
+        track = model.tracks[track_id]
+        answer = QMessageBox.question(
+            self, 'Delete Track',
+            'Delete track "%s" and all of its observations?' % track.label,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        before = model.snapshot_state()
+        model.delete_track(track_id)
+        after = model.snapshot_state()
+        self._selected_video_track_id = None
+        self.undo_stack.push(VideoModelCommand(
+            self, before, after, 'Delete video track'))
+        self._on_video_model_mutation()
+        self._materialize_video_frame(self.current_video_frame_ref.pts)
+
+    def track_selected_forward(self, choose_endpoint=False):
+        return self._request_video_tracking(
+            1, choose_endpoint=choose_endpoint)
+
+    def track_selected_backward(self, choose_endpoint=False):
+        return self._request_video_tracking(
+            -1, choose_endpoint=choose_endpoint)
+
+    def _tracking_endpoint(self, track_id, start_pts, direction):
+        anchors = sorted(
+            item.pts for item in self.video_model.observations.values()
+            if item.track_id == track_id and item.source == 'manual'
+            and item.review_state == 'accepted' and item.anchor
+            and (item.pts - start_pts) * direction > 0)
+        if anchors:
+            return anchors[0] if direction > 0 else anchors[-1]
+        snapshot = self.video_snapshot
+        five_seconds = int(round(
+            5 * snapshot.time_base_den / snapshot.time_base_num))
+        endpoint = start_pts + direction * five_seconds
+        lower = int(snapshot.start_pts or 0)
+        upper = lower + int(snapshot.duration_pts or five_seconds)
+        return max(lower, min(upper, endpoint))
+
+    def _choose_tracking_endpoint(self, default_pts, direction):
+        snapshot = self.video_snapshot
+        start = int(snapshot.start_pts or 0)
+        seconds = (default_pts - start) * snapshot.time_base_num / \
+            snapshot.time_base_den
+        value, accepted = QInputDialog.getText(
+            self, 'Optical-flow endpoint',
+            'Track %s until (HH:MM:SS.mmm):' % (
+                'forward' if direction > 0 else 'backward'),
+            text=format_timecode(seconds))
+        if not accepted:
+            return None
+        try:
+            endpoint = start + int(round(
+                parse_timecode(value) * snapshot.time_base_den /
+                snapshot.time_base_num))
+        except ValueError as exc:
+            self.status('Invalid tracking endpoint: %s' % exc)
+            return None
+        current = self.current_video_frame_ref.pts
+        if (endpoint - current) * direction <= 0:
+            self.status('Tracking endpoint must be in the selected direction')
+            return None
+        upper = start + int(snapshot.duration_pts or max(0, endpoint - start))
+        return max(start, min(upper, endpoint))
+
+    def _request_video_tracking(self, direction, choose_endpoint=False):
+        if not self._ensure_video_editable():
+            return None
+        model = self.video_model
+        frame_ref = self.current_video_frame_ref
+        track_id = self._selected_video_track_id
+        if model is None or frame_ref is None or track_id is None:
+            self.status('Select a rectangle track before tracking')
+            return None
+        track = model.tracks.get(track_id)
+        seed = model.observations.get((track_id, frame_ref.pts))
+        if (track is None or track.shape_type != 'rectangle'
+                or seed is None or not seed.present
+                or seed.review_state != 'accepted'):
+            self.status(
+                'Tracking must start from an accepted exact rectangle')
+            return None
+        endpoint = self._tracking_endpoint(
+            track_id, frame_ref.pts, direction)
+        if choose_endpoint:
+            endpoint = self._choose_tracking_endpoint(endpoint, direction)
+            if endpoint is None:
+                return None
+        if endpoint == frame_ref.pts:
+            self.status('No tracking range is available in that direction')
+            return None
+        self.cancel_video_tracking()
+        self._tracking_request_id += 1
+        request = TrackingRequest(
+            request_id=self._tracking_request_id,
+            generation=self._dataset_generation,
+            source_path=self.video_snapshot.source_path,
+            stream_index=self.video_snapshot.stream_index,
+            start_ref=frame_ref, end_pts=endpoint, direction=direction,
+            track=track, seed=seed,
+            seed_track_revision=track.revision,
+            document_revision=model.revision)
+        self._active_tracking_request = request
+        self._tracking_run_keys = set()
+
+        def propagate(handle):
+            return track_optical_flow(request, handle)
+
+        handle = self.task_coordinator.submit(
+            'background', propagate, priority=JobPriority.BULK,
+            key='video-tracking', latest=True,
+            generation=self._dataset_generation)
+        self._tracking_handle = handle
+        handle.progress.connect(self._on_tracking_batch)
+        handle.result.connect(self._on_tracking_result)
+        handle.error.connect(self._on_tracking_error)
+        handle.finished.connect(self._on_tracking_finished)
+        self.status('Tracking %s…' % (
+            'forward' if direction > 0 else 'backward'))
+        return handle
+
+    def _tracking_batch_is_current(self, batch):
+        request = self._active_tracking_request
+        if (request is None or self.video_model is None
+                or not self._video_editable()):
+            return False
+        track = self.video_model.tracks.get(batch.track_id)
+        return (
+            batch.request_id == request.request_id
+            and batch.generation == self._dataset_generation
+            and batch.track_id == request.track.track_id
+            and batch.seed_track_revision == request.seed_track_revision
+            and batch.document_revision == request.document_revision
+            and track is not None
+            and track.revision == request.seed_track_revision
+        )
+
+    def _on_tracking_batch(self, batch):
+        if not self._tracking_batch_is_current(batch):
+            return
+        changed = False
+        self._applying_tracking_batch = True
+        try:
+            for observation in batch.observations:
+                value = self.video_model.upsert_tracker(observation)
+                if value.review_state == 'pending':
+                    self._tracking_run_keys.add(
+                        (value.track_id, value.pts))
+                changed = changed or value is not observation \
+                    or value.revision != observation.revision
+            if batch.observations:
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+        finally:
+            self._applying_tracking_batch = False
+        if batch.observations:
+            self.status('Tracking: %s to %s PTS' % (
+                batch.start_pts, batch.end_pts))
+        return changed
+
+    def _on_tracking_result(self, batch):
+        if not self._tracking_batch_is_current(batch):
+            return
+        self._on_tracking_batch(batch)
+        self.status('Tracking stopped: %s' % (
+            batch.stop_reason or 'range complete'))
+
+    def _on_tracking_error(self, message):
+        self.status('Video tracking failed: ' + message, delay=10000)
+
+    def _on_tracking_finished(self):
+        self._tracking_handle = None
+        self._active_tracking_request = None
+
+    def cancel_video_tracking(self):
+        handle = getattr(self, '_tracking_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._tracking_handle = None
+        self._active_tracking_request = None
+
+    def _current_pending_keys(self):
+        if self.video_model is None or self.current_video_frame_ref is None:
+            return ()
+        pts = self.current_video_frame_ref.pts
+        values = [
+            key for key, item in self.video_model.observations.items()
+            if item.pts == pts and item.review_state == 'pending']
+        if self._selected_video_track_id is not None:
+            preferred = (self._selected_video_track_id, pts)
+            if preferred in values:
+                return (preferred,)
+        return tuple(values[:1])
+
+    def _review_video_keys(self, keys, review_state, description):
+        if not self._ensure_video_editable():
+            return False
+        keys = tuple(
+            key for key in keys
+            if key in self.video_model.observations
+            and self.video_model.observations[key].review_state == 'pending')
+        if not keys:
+            return False
+        self.cancel_video_tracking()
+        before = self.video_model.snapshot_state()
+        for track_id, pts in keys:
+            self.video_model.review(track_id, pts, review_state)
+        after = self.video_model.snapshot_state()
+        self.undo_stack.push(VideoModelCommand(
+            self, before, after, description))
+        self._on_video_model_mutation()
+        self._materialize_video_frame(self.current_video_frame_ref.pts)
+        return True
+
+    def accept_current_suggestion(self):
+        return self._review_video_keys(
+            self._current_pending_keys(), 'accepted',
+            'Accept tracker suggestion')
+
+    def reject_current_suggestion(self):
+        return self._review_video_keys(
+            self._current_pending_keys(), 'rejected',
+            'Reject tracker suggestion')
+
+    def review_visible_suggestions(self, review_state, start_pts=None,
+                                   end_pts=None):
+        if self.video_model is None:
+            return False
+        if start_pts is None or end_pts is None:
+            center = self.current_video_frame_ref.pts
+            radius = int(round(
+                2.5 * self.video_snapshot.time_base_den /
+                self.video_snapshot.time_base_num))
+            start_pts, end_pts = center - radius, center + radius
+        keys = tuple(
+            key for key, item in self.video_model.observations.items()
+            if start_pts <= item.pts <= end_pts
+            and item.review_state == 'pending')
+        return self._review_video_keys(
+            keys, review_state,
+            '%s visible tracker suggestions' % review_state.title())
+
+    def review_full_propagation(self, review_state):
+        return self._review_video_keys(
+            tuple(self._tracking_run_keys), review_state,
+            '%s full tracker propagation' % review_state.title())
+
+    def _video_export_range_bounds(self, values):
+        snapshot = self.video_snapshot
+        start_seconds = parse_timecode(values['start_time'])
+        end_seconds = parse_timecode(values['end_time'])
+        if end_seconds < start_seconds:
+            raise ValueError('export range end precedes its start')
+        start_pts = int(snapshot.start_pts or 0) + int(round(
+            start_seconds * snapshot.time_base_den /
+            snapshot.time_base_num))
+        end_pts = int(snapshot.start_pts or 0) + int(round(
+            end_seconds * snapshot.time_base_den /
+            snapshot.time_base_num))
+        media_end = int(snapshot.start_pts or 0) + int(
+            snapshot.duration_pts or max(0, end_pts - start_pts))
+        start_pts = max(int(snapshot.start_pts or 0), start_pts)
+        end_pts = min(media_end, end_pts)
+        return start_pts, end_pts
+
+    def _video_export_frame_refs(self, values):
+        snapshot = self.video_snapshot
+        selection = values['selection']
+        if selection == 'current':
+            pts_values = [self.current_video_frame_ref.pts]
+        elif selection == 'annotated':
+            pts_values = sorted({
+                item.pts for item in self.video_model.observations.values()
+                if item.present and item.review_state == 'accepted'})
+        elif selection == 'verified':
+            pts_values = sorted({
+                item.pts for item in self.video_model.frame_states.values()
+                if item.verified})
+        else:
+            start_pts, end_pts = self._video_export_range_bounds(values)
+            if values['sample_unit'] == 'seconds':
+                step = max(1, int(round(
+                    values['sample_seconds'] * snapshot.time_base_den /
+                    snapshot.time_base_num)))
+                pts_values = list(range(start_pts, end_pts + 1, step))
+            else:
+                # Actual every-N-frame selection is resolved by the bulk
+                # decoder. A fixed PTS grid cannot represent VFR frame cadence.
+                pts_values = [start_pts]
+                if end_pts != start_pts:
+                    pts_values.append(end_pts)
+        return tuple(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index, int(pts),
+            snapshot.time_base_num, snapshot.time_base_den)
+            for pts in pts_values)
+
+    def open_video_export_dialog(self):
+        if self.document_kind != DocumentKind.VIDEO:
+            return None
+        dialog = VideoExportDialog(self.label_file_format, self)
+        stem = os.path.splitext(
+            os.path.basename(self.video_snapshot.source_path))[0]
+        dialog.destination.setText(os.path.join(
+            os.path.dirname(self.video_snapshot.source_path),
+            stem + '-export'))
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        values = dialog.values()
+        if not values['destination']:
+            self.status('Choose an export destination')
+            return None
+        try:
+            frame_refs = self._video_export_frame_refs(values)
+            range_start_pts = None
+            range_end_pts = None
+            sample_every_frames = None
+            if (values['selection'] == 'range'
+                    and values['sample_unit'] == 'frames'):
+                range_start_pts, range_end_pts = \
+                    self._video_export_range_bounds(values)
+                sample_every_frames = max(1, int(values['sample_frames']))
+        except ValueError as exc:
+            self.status('Invalid video export selection: %s' % exc)
+            return None
+        if not frame_refs:
+            self.status('The selected video export contains no frames')
+            return None
+        state = self.video_model.snapshot_state()
+        request = VideoExportRequest(
+            source_path=self.video_snapshot.source_path,
+            project_path=self.video_snapshot.project_path,
+            destination=os.path.abspath(values['destination']),
+            stream_index=self.video_snapshot.stream_index,
+            frame_refs=frame_refs, observations=state.observations,
+            tracks=state.tracks, frame_states=state.frame_states,
+            annotation_format=values['annotation_format'],
+            image_format=values['image_format'],
+            jpeg_quality=values['jpeg_quality'],
+            class_order=state.classes,
+            range_start_pts=range_start_pts,
+            range_end_pts=range_end_pts,
+            sample_every_frames=sample_every_frames)
+        return self.request_export_video(request)
+
+    def request_export_video(self, export_request):
+        """Run one cancellable atomic export on an independent decoder."""
+        if not isinstance(export_request, VideoExportRequest):
+            raise TypeError('export_request must be a VideoExportRequest')
+        self.cancel_video_export()
+        generation = self._dataset_generation
+
+        def export(handle):
+            return export_video_frames(export_request, handle)
+
+        handle = self.task_coordinator.submit(
+            'background', export, priority=JobPriority.BULK,
+            key='video-export', latest=True, generation=generation)
+        self._video_export_handle = handle
+        handle.progress.connect(
+            lambda value, gen=generation:
+            self.status('Exporting video frame %s / %s: %s' % value)
+            if gen == self._dataset_generation else None)
+        handle.result.connect(
+            lambda destination, gen=generation:
+            self.status('Exported video frames to %s' % destination)
+            if gen == self._dataset_generation else None)
+        handle.error.connect(
+            lambda message, gen=generation:
+            self.status('Video export failed: ' + message, delay=10000)
+            if gen == self._dataset_generation else None)
+        handle.finished.connect(
+            lambda current=handle: self._clear_video_export_handle(current))
+        return handle
+
+    def _clear_video_export_handle(self, handle):
+        if self._video_export_handle is handle:
+            self._video_export_handle = None
+
+    def cancel_video_export(self):
+        handle = getattr(self, '_video_export_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._video_export_handle = None
+
+    def _video_step_pts(self):
+        snapshot = self.video_snapshot
+        if snapshot is None:
+            return 1
+        if snapshot.average_rate_num and snapshot.average_rate_den:
+            seconds = (snapshot.average_rate_den /
+                       snapshot.average_rate_num)
+        else:
+            seconds = 1.0 / 30.0
+        return max(1, int(round(
+            seconds * snapshot.time_base_den / snapshot.time_base_num)))
+
+    def request_video_frame(self, frame_ref, playback=False):
+        """Seek by immutable PTS reference with latest-request-wins semantics."""
+        snapshot = self.video_snapshot
+        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
+                or not isinstance(frame_ref, VideoFrameRef)
+                or frame_ref.fingerprint != snapshot.fingerprint
+                or frame_ref.stream_index != snapshot.stream_index):
+            return None
+        if playback and self._video_decode_in_flight:
+            return None
+        if not playback:
+            self.pause_video()
+        cached = self.frame_cache.get(frame_ref)
+        if cached is not None:
+            self._commit_video_frame(cached, playback=playback)
+            return None
+        mode = 'at_or_after' if playback else 'nearest'
+        return self._submit_video_decode(
+            lambda decoder, handle: decoder.seek_pts(
+                frame_ref.pts, mode=mode, cancelled=handle.is_cancelled),
+            playback=playback)
+
+    def _submit_video_decode(self, operation, playback=False):
+        if self.video_decoder is None:
+            return None
+        decoder = self.video_decoder
+        self._video_frame_request_id += 1
+        request_id = self._video_frame_request_id
+        generation = self._dataset_generation
+        if playback:
+            self._video_decode_in_flight = True
+
+        def decode(handle):
+            handle.check_cancelled()
+            return operation(decoder, handle)
+
+        handle = self.task_coordinator.submit(
+            'video', decode, priority=JobPriority.IMAGE_LOAD,
+            key='video-frame', latest=True, generation=generation)
+        handle.result.connect(
+            lambda result, rid=request_id, gen=generation, playing=playback:
+            self._on_video_frame_result(result, rid, gen, playing))
+        handle.error.connect(
+            lambda message, rid=request_id:
+            self._on_video_frame_error(message, rid))
+        handle.finished.connect(
+            lambda rid=request_id:
+            self._on_video_decode_finished(rid))
+        return handle
+
+    def _on_video_frame_result(self, result, request_id, generation,
+                               playback=False):
+        snapshot = self.video_snapshot
+        if (request_id != self._video_frame_request_id
+                or generation != self._dataset_generation
+                or snapshot is None):
+            return
+        if result is None:
+            self.pause_video()
+            return
+        if result.frame_ref.fingerprint != snapshot.fingerprint:
+            return
+        self.frame_cache.put(result)
+        self._commit_video_frame(result, playback=playback)
+
+    def _on_video_frame_error(self, message, request_id):
+        if request_id != self._video_frame_request_id:
+            return
+        self.pause_video()
+        self.status('Error decoding video frame: ' + message, delay=10000)
+
+    def _on_video_decode_finished(self, request_id):
+        if request_id == self._video_frame_request_id:
+            self._video_decode_in_flight = False
+
+    def _commit_video_frame(self, result, playback=False):
+        assert QApplication.instance().thread() == self.thread()
+        self.image = result.image
+        self._image_scale_factor = (
+            result.display_width / self.video_snapshot.width
+            if self.video_snapshot.width else 1.0)
+        self._original_image_size = QSize(
+            self.video_snapshot.width, self.video_snapshot.height)
+        self.canvas.load_pixmap(QPixmap.fromImage(result.image))
+        self.current_video_frame_ref = result.frame_ref
+        verified = any(
+            state.pts == result.frame_ref.pts and state.verified
+            for state in self.video_frame_states)
+        self.canvas.verified = verified
+        self.canvas.locked = (
+            not self._video_editable()
+            or (verified and self.lock_on_verify_option.isChecked()))
+        # Track materialization is installed by the next delivery slice. Until
+        # then a seek must never leak ordinary image shapes across frames.
+        materialize = getattr(self, '_materialize_video_frame', None)
+        if materialize is not None:
+            materialize(result.frame_ref.pts)
+        else:
+            self.items_to_shapes.clear()
+            self.shapes_to_items.clear()
+            self.rect_label_list.clear()
+            self.poly_label_list.clear()
+            self.canvas.load_shapes([])
+        self.undo_stack.clear()
+        self.video_timeline.set_current_frame(result.frame_ref)
+        self.paint_canvas()
+        self.update_status_bar()
+        if not playback:
+            self._schedule_video_prefetch(result.frame_ref)
+
+    def request_next_video_frame(self):
+        if self.current_video_frame_ref is None:
+            return None
+        self.pause_video()
+        self._navigation_direction = 1
+        cached = self.frame_cache.video_neighbor(
+            self.current_video_frame_ref, 1)
+        if cached is not None:
+            self._commit_video_frame(cached)
+            return None
+        return self._submit_video_decode(
+            lambda decoder, handle: decoder.next_frame(
+                cancelled=handle.is_cancelled))
+
+    def request_previous_video_frame(self):
+        if self.current_video_frame_ref is None:
+            return None
+        self.pause_video()
+        self._navigation_direction = -1
+        cached = self.frame_cache.video_neighbor(
+            self.current_video_frame_ref, -1)
+        if cached is not None:
+            self._commit_video_frame(cached)
+            return None
+        current = self.current_video_frame_ref
+        return self._submit_video_decode(
+            lambda decoder, handle: decoder.previous_frame(
+                current, cancelled=handle.is_cancelled))
+
+    def _schedule_video_prefetch(self, frame_ref):
+        snapshot = self.video_snapshot
+        if snapshot is None:
+            return
+        step = self._video_step_pts()
+        offsets = ((-1, -2, 1) if self._navigation_direction < 0
+                   else (1, 2, -1))
+        targets = tuple(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index,
+            frame_ref.pts + offset * step,
+            snapshot.time_base_num, snapshot.time_base_den)
+            for offset in offsets
+            if frame_ref.pts + offset * step >= int(snapshot.start_pts or 0))
+        source_path = snapshot.source_path
+        stream_index = snapshot.stream_index
+        generation = self._dataset_generation
+
+        def prefetch(handle):
+            decoder = VideoDecoderSession(
+                source_path, stream_index=stream_index,
+                cancelled=handle.is_cancelled)
+            results = []
+            try:
+                for target in targets:
+                    handle.check_cancelled()
+                    result = decoder.seek_pts(
+                        target.pts, cancelled=handle.is_cancelled)
+                    if result is not None:
+                        results.append(result)
+                return tuple(results)
+            finally:
+                decoder.close()
+
+        handle = self.task_coordinator.submit(
+            'background', prefetch, priority=JobPriority.BULK,
+            key='video-prefetch', latest=True, generation=generation)
+        self._video_prefetch_handle = handle
+        handle.result.connect(
+            lambda results, gen=generation:
+            self._on_video_prefetch_results(results, gen))
+
+    def _on_video_prefetch_results(self, results, generation):
+        snapshot = self.video_snapshot
+        if generation != self._dataset_generation or snapshot is None:
+            return
+        for result in results:
+            if result.frame_ref.fingerprint == snapshot.fingerprint:
+                self.frame_cache.put(result)
+
+    def play_pause_video(self, _value=False):
+        if self.document_kind != DocumentKind.VIDEO:
+            return
+        if self._video_playback_timer.isActive():
+            self.pause_video()
+            return
+        if self.current_video_frame_ref is None:
+            return
+        self._video_play_started_wall = time.monotonic()
+        self._video_play_started_seconds = \
+            self.current_video_frame_ref.seconds
+        self.video_timeline.set_playing(True)
+        self._video_playback_timer.start()
+
+    def pause_video(self):
+        active = (getattr(self, '_video_decode_in_flight', False)
+                  or (hasattr(self, '_video_playback_timer')
+                      and self._video_playback_timer.isActive()))
+        if hasattr(self, '_video_playback_timer'):
+            self._video_playback_timer.stop()
+        if hasattr(self, 'video_timeline'):
+            self.video_timeline.set_playing(False)
+        self._video_decode_in_flight = False
+        if active and hasattr(self, 'task_coordinator'):
+            self.task_coordinator.cancel_key('video-frame')
+            self._video_frame_request_id += 1
+
+    def _set_video_playback_speed(self, speed):
+        self._video_playback_speed = float(speed)
+        if (hasattr(self, '_video_playback_timer')
+                and self._video_playback_timer.isActive()
+                and self.current_video_frame_ref is not None):
+            self._video_play_started_wall = time.monotonic()
+            self._video_play_started_seconds = \
+                self.current_video_frame_ref.seconds
+
+    def _video_playback_tick(self):
+        snapshot = self.video_snapshot
+        if (snapshot is None or self.current_video_frame_ref is None
+                or self._video_decode_in_flight):
+            return
+        elapsed = time.monotonic() - self._video_play_started_wall
+        target_seconds = (self._video_play_started_seconds
+                          + elapsed * self._video_playback_speed)
+        end_pts = (int(snapshot.start_pts or 0)
+                   + int(snapshot.duration_pts or 0))
+        target_pts = int(round(
+            target_seconds * snapshot.time_base_den /
+            snapshot.time_base_num))
+        if snapshot.duration_pts is not None and target_pts >= end_pts:
+            self.pause_video()
+            return
+        self.request_video_frame(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index, target_pts,
+            snapshot.time_base_num, snapshot.time_base_den), playback=True)
+
     def request_open_file(self, file_path, skip_prompt=False):
         """Load a standalone file transactionally if it is outside the dataset."""
         file_path = os.path.abspath(ustr(file_path))
+        if (is_video_project(file_path)
+                or file_path.lower().endswith(VIDEO_EXTENSIONS)):
+            return self.request_open_video(
+                file_path, skip_prompt=skip_prompt)
         if file_path in self._path_to_idx:
             return self.request_load_file(
                 file_path, skip_prompt=skip_prompt)
@@ -2379,8 +4095,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if replacement_snapshot is not None:
             self._commit_dataset_snapshot(replacement_snapshot)
-        self.frame_cache.put(result)
         self._commit_image_result(result)
+        self.frame_cache.put(result)
         self._pending_navigation_index = None
         self._hide_loading_veil()
         self._schedule_prefetch(result.path)
@@ -2393,6 +4109,7 @@ class MainWindow(QMainWindow, WindowMixin):
             trace_started = time.perf_counter_ns()
         assert QApplication.instance().thread() == self.thread()
         self.reset_state()
+        self._set_document_kind(DocumentKind.IMAGE)
         self._image_scale_factor = result.scale_factor
         self._original_image_size = QSize(
             result.original_width, result.original_height)
@@ -2452,9 +4169,13 @@ class MainWindow(QMainWindow, WindowMixin):
                       'shapes': len(result.shapes)})
 
     def request_next_image(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.request_next_video_frame()
         return self._request_relative_image(1)
 
     def request_previous_image(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.request_previous_video_frame()
         return self._request_relative_image(-1)
 
     def _request_relative_image(self, direction):
@@ -2525,6 +4246,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def load_file(self, file_path=None):
         """Load the specified file, or the last opened file if None."""
+        requested = (file_path if file_path is not None
+                     else self.settings.get(SETTING_FILENAME))
+        if requested:
+            requested = os.path.abspath(ustr(requested))
+            if (is_video_project(requested)
+                    or requested.lower().endswith(VIDEO_EXTENSIONS)):
+                return self.open_video(requested)
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
@@ -2608,6 +4336,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
+            self._set_document_kind(DocumentKind.IMAGE)
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.on_image_changed()
             self.file_path = unicode_file_path
@@ -2733,7 +4462,28 @@ class MainWindow(QMainWindow, WindowMixin):
             event.accept()
             return
 
-        if not self.may_continue():
+        if self._video_close_save_pending:
+            event.ignore()
+            return
+
+        if self.document_kind == DocumentKind.VIDEO and self.dirty:
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Yes:
+                self._video_close_save_pending = True
+                handle = self.request_save_video_project(
+                    on_success=self._finish_video_close_after_save)
+                if handle is None and self.dirty:
+                    self._video_close_save_pending = False
+                    self._video_save_callbacks = []
+                    self.status(
+                        'Could not save the video project; close cancelled',
+                        delay=10000)
+                event.ignore()
+                return
+        elif not self.may_continue():
             event.ignore()
             return
 
@@ -2779,11 +4529,23 @@ class MainWindow(QMainWindow, WindowMixin):
         settings.save()
         self._shutdown_workers()
 
+    def _finish_video_close_after_save(self):
+        if not self._video_close_save_pending:
+            return
+        self._video_close_save_pending = False
+        QTimer.singleShot(0, self.close)
+
     def _shutdown_workers(self):
         self.annotation_catalog.cancel()
         if hasattr(self, 'sam_controller'):
             self.sam_controller.cancel()
-        self.task_coordinator.shutdown()
+        decoder = self._close_video_decoder(close_decoder=False)
+        all_done = self.task_coordinator.shutdown()
+        # Never close a PyAV container while its serialized lane may still be
+        # decoding. If cancellation missed the bounded shutdown wait, the
+        # worker retains the final reference and releases it when it finishes.
+        if decoder is not None and all_done:
+            decoder.close()
 
     def load_recent(self, filename):
         self.request_open_file(filename)
@@ -3326,6 +5088,17 @@ class MainWindow(QMainWindow, WindowMixin):
             self._loading_veil.hide()
 
     def verify_image(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                return False
+            if self.current_video_frame_ref is None:
+                return
+            self.video_model.set_frame_verified(
+                self.current_video_frame_ref.pts,
+                not bool(self.canvas.verified))
+            self.canvas.verified = not bool(self.canvas.verified)
+            self._on_video_model_mutation()
+            return self.save_video_project()
         # Proceeding next image without dialog if having any label
         if self.file_path is not None:
             try:
@@ -3347,6 +5120,20 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def request_verify_image(self, _value=False):
         """Toggle verification and persist it through the async save lane."""
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                return None
+            if self.current_video_frame_ref is None:
+                return None
+            self.video_model.set_frame_verified(
+                self.current_video_frame_ref.pts,
+                not bool(self.canvas.verified))
+            self.canvas.verified = not bool(self.canvas.verified)
+            if self.lock_on_verify_option.isChecked():
+                self.canvas.locked = self.canvas.verified
+            self._on_video_model_mutation()
+            self.paint_canvas()
+            return self.request_save_video_project()
         if self.file_path is None:
             return None
         if self.label_file is None:
@@ -3425,9 +5212,23 @@ class MainWindow(QMainWindow, WindowMixin):
                 filename = filename[0]
             self.request_open_file(filename)
 
+    def open_video_dialog(self, _value=False):
+        path = os.path.dirname(ustr(self.file_path)) if self.file_path else '.'
+        filters = (
+            'Video and LabelImg++ projects '
+            '(*.mp4 *.mov *.mkv *.avi *.labelimgpp.sqlite);;'
+            'All files (*)')
+        filename, _selected_filter = QFileDialog.getOpenFileName(
+            self, '%s - Choose Video or Project' % __appname__,
+            path, filters)
+        if filename:
+            self.request_open_video(ustr(filename))
+
     def request_save_file(self, _value=False, on_success=None,
                           annotation_base=None):
         """Queue an immutable, revision-aware save for GUI workflows."""
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.request_save_video_project(on_success=on_success)
         if not self.file_path:
             return None
         degradation_formats = {
@@ -3553,6 +5354,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.file_path, snapshot=self.dataset_snapshot)
 
     def save_file(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.save_video_project()
         if not self.file_path:
             return False
 
@@ -3576,16 +5379,69 @@ class MainWindow(QMainWindow, WindowMixin):
                                    else self.save_file_dialog(remove_ext=False))
 
     def save_file_as(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            target = self._video_project_save_dialog()
+            if not target:
+                return False
+            if self.video_model.dirty and not self.save_video_project():
+                return False
+            try:
+                save_project_as(self.video_snapshot.project_path, target)
+            except Exception as exc:
+                self.status('Error saving video project: %s' % exc)
+                return False
+            return True
         assert not self.image.isNull(), "cannot save empty image"
         return self._save_file(self.save_file_dialog())
 
     def request_save_file_as(self, _value=False):
         """Choose a target on the GUI thread and write it asynchronously."""
+        if self.document_kind == DocumentKind.VIDEO:
+            target = self._video_project_save_dialog()
+            if not target:
+                return None
+            if self.video_model.dirty:
+                return self.request_save_video_project(
+                    on_success=lambda: self._request_video_project_backup(
+                        target))
+            return self._request_video_project_backup(target)
+
         assert not self.image.isNull(), "cannot save empty image"
         annotation_base = self.save_file_dialog()
         if not annotation_base:
             return None
         return self.request_save_file(annotation_base=annotation_base)
+
+    def _request_video_project_backup(self, target):
+        source = self.video_snapshot.project_path
+
+        def save_as(handle):
+            handle.check_cancelled()
+            return save_project_as(source, target)
+
+        handle = self.task_coordinator.submit(
+            'background', save_as, priority=JobPriority.IMAGE_LOAD,
+            key='video-project-save-as', latest=True,
+            generation=self._dataset_generation)
+        handle.result.connect(
+            lambda path: self.status('Saved video project to %s' % path))
+        handle.error.connect(
+            lambda message: self.status(
+                'Error saving video project: ' + message))
+        return handle
+
+    def _video_project_save_dialog(self):
+        snapshot = self.video_snapshot
+        if snapshot is None or not snapshot.project_path:
+            return ''
+        filename, _selected_filter = QFileDialog.getSaveFileName(
+            self, '%s - Save Video Project As' % __appname__,
+            snapshot.project_path,
+            'LabelImg++ video project (*.labelimgpp.sqlite)')
+        filename = ustr(filename)
+        if filename and not filename.lower().endswith('.labelimgpp.sqlite'):
+            filename += '.labelimgpp.sqlite'
+        return filename
 
     def save_file_dialog(self, remove_ext=True):
         caption = '%s - Choose File' % __appname__
@@ -3726,6 +5582,9 @@ class MainWindow(QMainWindow, WindowMixin):
         return os.path.dirname(self.file_path) if self.file_path else '.'
 
     def choose_color1(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         color = self.color_dialog.getColor(self.line_color, u'Choose line color',
                                            default=DEFAULT_LINE_COLOR)
         if color:
@@ -3740,6 +5599,21 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.canvas.selected_shape is None:
             return
         shape = self.canvas.selected_shape
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable():
+                return
+            track_id = getattr(shape, 'video_track_id', None)
+            if track_id is None:
+                return
+            before = self.video_model.snapshot_state()
+            self.video_model.delete_occurrence(
+                track_id, self.current_video_frame_ref.pts)
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Delete video occurrence'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            return
         index = self.canvas.shapes.index(shape) if shape in self.canvas.shapes else None
 
         # Create and push command (command handles the actual deletion)
@@ -3755,6 +5629,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def undo_action(self):
         """Undo the last action."""
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if self.undo_stack.can_undo():
             self.undo_stack.undo()
             self.set_dirty()
@@ -3762,6 +5639,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def redo_action(self):
         """Redo the last undone action."""
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if self.undo_stack.can_redo():
             self.undo_stack.redo()
             self.set_dirty()
@@ -3769,8 +5649,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def update_undo_redo_actions(self):
         """Update the enabled state of undo/redo actions."""
-        self.actions.undo.setEnabled(self.undo_stack.can_undo())
-        self.actions.redo.setEnabled(self.undo_stack.can_redo())
+        editable = self._video_editable()
+        self.actions.undo.setEnabled(
+            self.undo_stack.can_undo() and editable)
+        self.actions.redo.setEnabled(
+            self.undo_stack.can_redo() and editable)
 
         # Update tooltips with descriptions
         if self.undo_stack.can_undo():
@@ -3786,14 +5669,32 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.redo.setToolTip("Redo")
 
     def choose_shape_line_color(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         color = self.color_dialog.getColor(self.line_color, u'Choose Line Color',
                                            default=DEFAULT_LINE_COLOR)
         if color:
+            if self.document_kind == DocumentKind.VIDEO:
+                shape = self.canvas.selected_shape
+                track_id = getattr(shape, 'video_track_id', None)
+                before = self.video_model.snapshot_state()
+                self.video_model.update_track(track_id, color=color.getRgb())
+                after = self.video_model.snapshot_state()
+                self.undo_stack.push(VideoModelCommand(
+                    self, before, after, 'Change video track color'))
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
             self.canvas.selected_shape.line_color = color
             self.canvas.update()
             self.set_dirty()
 
     def choose_shape_fill_color(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         color = self.color_dialog.getColor(self.fill_color, u'Choose Fill Color',
                                            default=DEFAULT_FILL_COLOR)
         if color:
@@ -3802,6 +5703,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_dirty()
 
     def copy_shape(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         if self.canvas.selected_shape is None:
             # True if one accidentally touches the left mouse button before releasing
             return
@@ -3810,6 +5714,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_dirty()
 
     def move_shape(self):
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return
         self.canvas.end_move(copy=False)
         self.set_dirty()
 
