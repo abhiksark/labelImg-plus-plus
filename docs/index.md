@@ -11,6 +11,8 @@ This documentation provides comprehensive guidance for developers working with t
 | [Annotation Formats](formats/) | Format specifications and I/O |
 | [Ultralytics Dataset Export](features/ultralytics-export.md) | Direct YOLO detection layout, splits, and class mapping |
 | [Smart Video Annotation](features/smart-video-annotation.md) | PTS-based video projects, tracking, review, and export |
+| [Plugin Authoring](guides/plugin-authoring.md) | Build separately installed command plugins |
+| [Plugin API Major 1](reference/plugin-api-v1.md) | Stable types, services, lifecycle, and compatibility |
 | [Extension Guides](guides/) | How to extend labelImg++ |
 | [Reference](reference/) | Shortcuts, settings, troubleshooting |
 
@@ -142,6 +144,7 @@ python3 -m unittest discover tests -v
 - [CreateML](formats/createml.md) - JSON format details
 
 ### Guides
+- [Plugin Authoring](guides/plugin-authoring.md) - Package, install, enable, and test an external plugin
 - [Extension Guide](guides/extension-guide.md) - Overview of extension points
 - [Adding Formats](guides/adding-formats.md) - Create new annotation formats
 - [Adding Features](guides/adding-features.md) - Add new actions and UI
@@ -151,6 +154,7 @@ python3 -m unittest discover tests -v
 - [Testing Plan](testing-plan.md) - Test audit findings and roadmap
 
 ### Reference
+- [Plugin API Major 1](reference/plugin-api-v1.md) - Public plugin contract and deprecation policy
 - [Keyboard Shortcuts](reference/keyboard-shortcuts.md) - Complete hotkey reference
 - [Settings](reference/settings.md) - Configuration options
 - [Troubleshooting](reference/troubleshooting.md) - Common issues and solutions

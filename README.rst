@@ -88,6 +88,15 @@ Workflow and Interface
     destination must be new or empty, and it is published only after the full
     export succeeds. See the `Ultralytics Export Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/features/ultralytics-export.md>`_.
 
+**Installed Python Plugins**
+    Add trusted command plugins from separately installed Python distributions
+    without editing labelImg++ source. Review and enable them under
+    **Tools → Plugins…**; changes take effect after restart. Plugins use a
+    versioned public API with host-owned actions, namespaced shortcuts and
+    settings, bounded background work, read-only document state, diagnostics,
+    and ``LABELIMGPP_DISABLE_PLUGINS=1`` recovery. See the
+    `Plugin Authoring Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/guides/plugin-authoring.md>`_.
+
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
 

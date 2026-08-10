@@ -1,229 +1,130 @@
-# Settings Reference
+# Settings reference
 
-labelImg++ persists user preferences using a pickle-based settings system.
+labelImg++ stores application and plugin preferences as JSON. It never
+deserializes pickle data.
 
-**File:** `libs/settings.py` (lines 5-45)
+## Location and safety
 
-## Settings Location
+The default file is:
 
-```
-~/.labelImgSettings.pkl
-```
-
-The settings file is created automatically on first run and updated when the application closes.
-
-## Settings Class
-
-```python
-class Settings(object):
-    def __init__(self):
-        self.data = {}
-        self.path = get_config('.labelImgSettings.pkl')
-
-    def __setitem__(self, key, value):
-        self.data[key] = value
-
-    def __getitem__(self, key):
-        return self.data[key]
-
-    def get(self, key, default=None):
-        return self.data.get(key, default)
-
-    def save(self):
-        with open(self.path, 'wb') as f:
-            pickle.dump(self.data, f)
-
-    def load(self):
-        if os.path.exists(self.path):
-            with open(self.path, 'rb') as f:
-                self.data = pickle.load(f)
-
-    def reset(self):
-        if os.path.exists(self.path):
-            os.remove(self.path)
+```text
+~/.labelImgSettings.json
 ```
 
-## Settings Keys
+`libs/core/settings.py` loads the file during MainWindow construction and saves
+it on close or when a plugin enablement/configuration change must persist
+immediately. Corrupt JSON, invalid UTF-8, and old pickle content are rejected
+and defaults are used.
 
-**File:** `libs/constants.py` (lines 1-20)
+Qt values used by the application are represented by whitelisted `__type__`
+tags for `QSize`, `QPoint`, `QColor`, `QByteArray`, and known enums. Plugin
+settings cannot use `__type__` at any nesting level, preventing a plugin value
+from entering the application's tagged-value decoder.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `SETTING_FILENAME` | str | '' | Last opened file path |
-| `SETTING_RECENT_FILES` | list | [] | Recent files list (max 7) |
-| `SETTING_WIN_SIZE` | QSize | (600, 500) | Window size |
-| `SETTING_WIN_POSE` | QPoint | (0, 0) | Window position |
-| `SETTING_WIN_STATE` | QByteArray | - | Dock/toolbar layout |
-| `SETTING_LINE_COLOR` | QColor | Green | Default line color |
-| `SETTING_FILL_COLOR` | QColor | Red | Default fill color |
-| `SETTING_ADVANCE_MODE` | bool | False | Advanced mode enabled |
-| `SETTING_AUTO_SAVE` | bool | False | Auto-save on navigate |
-| `SETTING_SINGLE_CLASS` | bool | False | Single class mode |
-| `SETTING_PAINT_LABEL` | bool | False | Display labels on boxes |
-| `SETTING_DRAW_SQUARE` | bool | False | Constrain to squares |
-| `SETTING_SAVE_DIR` | str | None | Default save directory |
-| `SETTING_LAST_OPEN_DIR` | str | None | Last browsed directory |
-| `SETTING_LABEL_FILE_FORMAT` | enum | PASCAL_VOC | Default format |
+## Application settings
 
-## Setting Details
+Common persisted keys include:
 
-### Window State
+| Key | Type | Description |
+|---|---|---|
+| `filename` | string | Last startup file when no directory is active |
+| `recentFiles` | list | Recently opened files/projects |
+| `window/size` | tagged QSize | Main window size |
+| `window/position` | tagged QPoint | Validated on-screen position |
+| `window/state` | tagged QByteArray | Dock and toolbar layout |
+| `line/color` | tagged QColor | Default annotation line color |
+| `fill/color` | tagged QColor | Default annotation fill color |
+| `advanced` | boolean | Advanced mode |
+| `galleryMode` | boolean | Full gallery mode |
+| `savedir` | string | Annotation destination |
+| `lastOpenDir` | string | Last browsed directory |
+| `autosave` | boolean | Save while navigating |
+| `autoSaveEnabled` | boolean | Timer-based autosave |
+| `autoSaveInterval` | integer | Timer interval in seconds |
+| `labelFileFormat` | tagged enum | Active built-in annotation format |
+| `shortcuts` | object | Built-in and retained plugin shortcut overrides |
 
-```python
-# Saved on close (labelImgPlusPlus.py:1255-1257)
-settings[SETTING_WIN_SIZE] = self.size()
-settings[SETTING_WIN_POSE] = self.pos()
-settings[SETTING_WIN_STATE] = self.saveState()
+See `libs/utils/constants.py` for the complete built-in key list. Existing
+annotation formats, filenames, class ordering, and project data are not stored
+in the plugin section.
 
-# Restored on start (labelImgPlusPlus.py:485-503)
-size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
-position = settings.get(SETTING_WIN_POSE, QPoint(0, 0))
-self.resize(size)
-self.move(position)
-self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
+## Plugin settings
+
+Plugin state uses one top-level JSON object:
+
+```json
+{
+  "plugins": {
+    "enabled": ["com.example.review"],
+    "config": {
+      "com.example.review": {
+        "threshold": 0.8
+      }
+    },
+    "metadata": {
+      "com.example.review": {
+        "display_name": "Example Review",
+        "version": "0.1.0",
+        "api_major": 1,
+        "capabilities": ["commands"],
+        "description": "",
+        "homepage": "https://example.com/plugin"
+      }
+    },
+    "shortcut_owners": {
+      "plugin.com.example.review.run": "com.example.review"
+    }
+  }
+}
 ```
 
-### Multi-Monitor Handling
+- `plugins.enabled` is the sorted set requested for the next startup. Newly
+  discovered plugins default to disabled. Changes made in **Tools → Plugins…**
+  save immediately and require restart.
+- `plugins.config.<plugin-id>` is accessible only through that plugin's
+  `PluginSettings` service. Values must be strict JSON with string keys, finite
+  numbers, no cycles, and no `__type__` key.
+- `plugins.metadata.<plugin-id>` caches structurally validated metadata after
+  an enabled load so the manager can show API/capability details without
+  importing a disabled plugin on later starts.
+- `plugins.shortcut_owners` is a host-maintained ownership index used to forget
+  retained shortcuts exactly even when one plugin ID is a dot-prefix of
+  another. Plugins cannot read or write it through `PluginSettings`.
+- Configuration and cached metadata remain when a distribution is removed.
+  **Forget Unavailable Plugin** removes them, its enabled state, and retained
+  `plugin.<plugin-id>.*` shortcut keys.
 
-```python
-# Validates position is on a visible screen
-saved_position = settings.get(SETTING_WIN_POSE, position)
-for i in range(QApplication.desktop().screenCount()):
-    if QApplication.desktop().availableGeometry(i).contains(saved_position):
-        position = saved_position
-        break
-```
+Disabled plugin shortcuts remain in `shortcuts` but are hidden from the
+shortcut editor and conflict detection until their commands are registered.
+Reset/import/export includes active plugin commands; unknown non-plugin keys
+are ignored.
 
-### Recent Files
+## Inspect the file
 
-```python
-# Maximum 7 recent files
-self.max_recent = 7
-
-def add_recent_file(self, file_path):
-    if file_path in self.recent_files:
-        self.recent_files.remove(file_path)
-    elif len(self.recent_files) >= self.max_recent:
-        self.recent_files.pop()
-    self.recent_files.insert(0, file_path)
-```
-
-### Colors
-
-```python
-# Default colors (libs/shape.py)
-DEFAULT_LINE_COLOR = QColor(0, 255, 0, 128)    # Green, semi-transparent
-DEFAULT_FILL_COLOR = QColor(255, 0, 0, 128)    # Red, semi-transparent
-
-# Saved as QColor objects
-settings[SETTING_LINE_COLOR] = self.line_color
-settings[SETTING_FILL_COLOR] = self.fill_color
-```
-
-### Format Setting
-
-```python
-# Saved as enum value
-settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
-
-# Restored
-self.label_file_format = settings.get(
-    SETTING_LABEL_FILE_FORMAT,
-    LabelFileFormat.PASCAL_VOC
-)
-```
-
-## UI Menu Options
-
-These settings are accessible via the View menu:
-
-| Menu Item | Setting Key | Description |
-|-----------|-------------|-------------|
-| Auto Save Mode | `SETTING_AUTO_SAVE` | Save when navigating |
-| Single Class Mode | `SETTING_SINGLE_CLASS` | Reuse last label |
-| Display Labels | `SETTING_PAINT_LABEL` | Show labels on canvas |
-| Draw Squares | `SETTING_DRAW_SQUARE` | Square constraint |
-
-## Resetting Settings
-
-### Via Menu
-
-```
-File > Reset All
-```
-
-This calls `MainWindow.reset_all()`:
-```python
-def reset_all(self):
-    self.settings.reset()  # Deletes settings file
-    self.close()
-    process = QProcess()
-    process.startDetached(os.path.abspath(__file__))  # Restart app
-```
-
-### Manual Reset
+Use a JSON parser rather than pickle:
 
 ```bash
-rm ~/.labelImgSettings.pkl
+python -m json.tool ~/.labelImgSettings.json
 ```
 
-## Save Triggers
+Do not edit the file while labelImg++ is running; a later application or
+plugin save may replace manual changes.
 
-Settings are saved in `closeEvent`:
+## Recovery and reset
 
-```python
-def closeEvent(self, event):
-    if not self.may_continue():
-        event.ignore()
-        return
+To bypass plugin discovery/loading without changing settings:
 
-    settings = self.settings
-    # ... set all values ...
-    settings.save()
+```bash
+LABELIMGPP_DISABLE_PLUGINS=1 labelimgpp
 ```
 
-## Load Timing
+To reset every application and plugin preference, use **File → Reset All** or
+remove the JSON file while the application is closed:
 
-Settings are loaded during `MainWindow.__init__`:
-
-```python
-def __init__(self, ...):
-    # Line 81-83
-    self.settings = Settings()
-    self.settings.load()
-    settings = self.settings
+```bash
+rm ~/.labelImgSettings.json
 ```
 
-## Constants Reference
-
-```python
-# libs/constants.py
-SETTING_FILENAME = 'filename'
-SETTING_RECENT_FILES = 'recentFiles'
-SETTING_WIN_SIZE = 'window/size'
-SETTING_WIN_POSE = 'window/position'
-SETTING_WIN_STATE = 'window/state'
-SETTING_LINE_COLOR = 'line/color'
-SETTING_FILL_COLOR = 'fill/color'
-SETTING_ADVANCE_MODE = 'advanced'
-SETTING_WIN_GEOMETRY = 'window/geometry'
-SETTING_SAVE_DIR = 'savedir'
-SETTING_LAST_OPEN_DIR = 'lastOpenDir'
-SETTING_AUTO_SAVE = 'autosave'
-SETTING_SINGLE_CLASS = 'singleclass'
-SETTING_PAINT_LABEL = 'paintlabel'
-SETTING_DRAW_SQUARE = 'draw/square'
-SETTING_LABEL_FILE_FORMAT = 'labelFileFormat'
-```
-
-## Debugging Settings
-
-To inspect current settings:
-
-```python
-import pickle
-with open(os.path.expanduser('~/.labelImgSettings.pkl'), 'rb') as f:
-    data = pickle.load(f)
-    for key, value in data.items():
-        print(f"{key}: {value}")
-```
+Reset All keeps the configured settings path usable, relaunches the
+application, and does not delete annotations, images, videos, or video project
+databases.

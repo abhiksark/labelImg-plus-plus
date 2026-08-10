@@ -16,10 +16,24 @@ git push origin v3.0.0
 ```
 
 The workflow tests Python 3.8 through 3.13, tests the optional SAM dependency
-on the oldest and newest supported Python versions, verifies Qt resources,
-checks the wheel and sdist with Twine, and waits for all native packaging jobs
+on the oldest and newest supported Python versions, runs plugin discovery,
+packaged-wheel, lifecycle, threading, performance, and teardown gates across
+Python 3.8 through 3.13, verifies Qt resources, checks the wheel and sdist with
+Twine, and waits for all native packaging jobs
 before publishing the exact tested distributions through PyPI Trusted
 Publishing. Native binaries remain private workflow artifacts.
+
+Publishing must include both ``libs*`` and the stable ``labelimgplusplus*``
+public namespace. The base wheel has no plugin-only dependencies and contains
+no third-party plugins. The packaged fixture under
+``tests/fixtures/plugin_distribution`` is built and installed separately in a
+temporary environment so entry-point behavior is tested from real distribution
+metadata.
+
+PyInstaller builds contain the plugin host but intentionally bundle no external
+plugin distributions. The Linux release job boots the base executable with
+``LABELIMGPP_DISABLE_PLUGINS=1`` before upload. Use the normal Python package in
+a virtual environment when separately installed plugins are required.
 
 ## Build for Ubuntu
 

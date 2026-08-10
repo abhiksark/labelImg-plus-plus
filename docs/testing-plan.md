@@ -13,7 +13,7 @@ Linux workstation gate and its deterministic 10k corpora.
 
 - `tests/test_commands.py`: unit tests for undo/redo command system (`libs/commands.py`)
 - `tests/test_io.py`: Pascal VOC + CreateML I/O smoke tests (`libs/pascal_voc_io.py`, `libs/create_ml_io.py`)
-- `tests/test_settings.py`: basic settings persistence (`libs/settings.py`)
+- `tests/core/test_settings.py`: isolated JSON settings persistence (`libs/core/settings.py`)
 - `tests/test_utils.py`: basic utilities (`libs/utils.py`)
 - `tests/test_stringBundle.py`: i18n bundle loading (`libs/stringBundle.py`)
 - `tests/test_qt.py`: Qt app boot (currently a no-op test)
@@ -43,7 +43,7 @@ documented in `docs/performance.md`.
 
 ### Stability / isolation risks
 
-- `tests/test_settings.py` writes to `~/.labelImgSettings.pkl` (can pollute machines and create flaky tests)
+- Settings tests replace the default path with isolated temporary JSON files.
 - `tests/test_stringBundle.py` assumes `LC_ALL` and `LANG` exist in the environment
 - `tests/test_io.py` writes into the repository under `tests/` instead of a temporary directory
 

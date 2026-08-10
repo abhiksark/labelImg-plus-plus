@@ -33,6 +33,41 @@ Menu, shortcut, autosave, navigation, and verification saves create immutable
 `os.replace`; a revision check marks the document clean only if no later edit
 occurred. `save_file()` remains the synchronous compatibility entry point.
 
+## Plugin runtime
+
+The Qt-free public boundary is `labelimgplusplus.plugins`. Installed
+distributions advertise zero-argument factories through the
+`labelimgplusplus.plugins` entry-point group. `plugin_discovery.py` reads only
+distribution metadata during discovery, adapts both legacy and selectable
+`importlib.metadata` collections, sorts deterministically, and does not import
+disabled plugin targets.
+
+MainWindow constructs `PluginManager` after Settings and TaskCoordinator. Once
+core UI construction is complete, enabled candidates are loaded in order.
+Each activation receives an `ActivationContext` containing staged commands,
+namespaced JSON settings, a restricted background task service, immutable
+document descriptors, and diagnostics. The manager commits registrations
+atomically or discards them and continues base startup.
+
+The Qt command host creates every plugin `QAction`, places actions in the
+host-owned Plugins menu, and applies dynamic shortcut defaults and retained
+overrides. Plugins never receive MainWindow, menu, action, Canvas, Shape, or
+mutable video objects. Enable/disable state is saved immediately but is applied
+only on restart.
+
+Plugin workers share the bounded background lane and use cooperative
+cancellation. Result, error, progress, command, enablement, and document
+callbacks return to `QApplication.thread()`. Successful image/video commits,
+reset/close transitions, and dirty/revision changes publish frozen
+`DocumentDescriptor` values. A generation change cancels plugin work and
+discards stale results.
+
+Shutdown stops plugin task submission, cancels handles, deactivates active
+plugins in reverse order, removes host registrations, and then shuts down the
+core TaskCoordinator. `LABELIMGPP_DISABLE_PLUGINS=1` bypasses discovery and
+loading for recovery. This boundary limits accidental coupling but is not a
+sandbox; enabled plugins are trusted in-process Python code.
+
 Ultralytics dataset export captures the active immutable snapshot, annotation
 resolver, source-format selection, class order, split ratios, and copy mode in
 an `UltralyticsExportRequest`. A background job reuses the image annotation
