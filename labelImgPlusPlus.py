@@ -77,6 +77,12 @@ from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
+from libs.core.video_decoder import VIDEO_EXTENSIONS
+from libs.core.video_project import (
+    checkpoint_project, default_project_path, save_project_as,
+)
+from libs.core.video_session import is_video_project, prepare_video_open
+from libs.core.video_types import DocumentKind
 from libs.integrations import segmentation
 
 # Formats
@@ -191,6 +197,15 @@ class MainWindow(QMainWindow, WindowMixin):
         # thumbnail galleries (16 MiB each): 96 + 16 + 16 = 128 MiB total.
         self.frame_cache = FrameCache(
             max_images=5, max_bytes=96 * 1024 * 1024)
+        self.document_kind = DocumentKind.NONE
+        self.video_decoder = None
+        self.video_snapshot = None
+        self.video_tracks = ()
+        self.video_observations = ()
+        self.video_frame_states = ()
+        self.video_classes = ()
+        self._video_open_request_id = 0
+        self._video_save_handle = None
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -1250,6 +1265,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def reset_state(self):
         self._restart_workers_if_needed()
+        self._close_video_decoder()
+        self._set_document_kind(DocumentKind.NONE)
         self.items_to_shapes.clear()
         self.shapes_to_items.clear()
         self.rect_label_list.clear()
@@ -1266,6 +1283,32 @@ class MainWindow(QMainWindow, WindowMixin):
         # Reset status bar widgets
         self.label_box_count.setText('Boxes: 0')
         self.update_save_status(saved=True)
+
+    def _set_document_kind(self, kind):
+        """Switch cache policy and document-only UI without touching content."""
+        previous = getattr(self, 'document_kind', DocumentKind.NONE)
+        if previous != kind and hasattr(self, 'frame_cache'):
+            self.frame_cache.clear()
+        self.document_kind = kind
+        if hasattr(self, 'frame_cache'):
+            self.frame_cache.max_images = (
+                12 if kind == DocumentKind.VIDEO else 5)
+        if hasattr(self, 'file_dock'):
+            self.file_dock.setVisible(kind != DocumentKind.VIDEO)
+
+    def _close_video_decoder(self):
+        decoder = getattr(self, 'video_decoder', None)
+        self.video_decoder = None
+        snapshot = getattr(self, 'video_snapshot', None)
+        self.video_snapshot = None
+        if decoder is not None:
+            decoder.close()
+        if (snapshot is not None and snapshot.project_path
+                and not snapshot.read_only and not self.dirty):
+            try:
+                checkpoint_project(snapshot.project_path)
+            except Exception:
+                pass
 
     def _restart_workers_if_needed(self):
         coordinator = getattr(self, 'task_coordinator', None)
@@ -2249,9 +2292,211 @@ class MainWindow(QMainWindow, WindowMixin):
         for item, shape in self.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
+    def _video_project_target(self, source_path, project_path=None,
+                              allow_dialog=False):
+        """Resolve the default sidecar, falling back to read-only safely."""
+        if is_video_project(source_path):
+            return source_path, False
+        if project_path:
+            return os.path.abspath(ustr(project_path)), False
+        default = default_project_path(source_path)
+        if os.path.exists(default) or os.access(
+                os.path.dirname(default) or '.', os.W_OK):
+            return default, False
+        if allow_dialog:
+            chosen, _selected_filter = QFileDialog.getSaveFileName(
+                self, '%s - Choose Video Project' % __appname__, default,
+                'LabelImg++ video project (*.labelimgpp.sqlite)')
+            if chosen:
+                chosen = ustr(chosen)
+                if not chosen.lower().endswith('.labelimgpp.sqlite'):
+                    chosen += '.labelimgpp.sqlite'
+                return os.path.abspath(chosen), False
+        return None, True
+
+    def request_open_video(self, path, project_path=None, skip_prompt=False):
+        """Queue a transactional video/project open on the decoder lane."""
+        path = os.path.abspath(ustr(path))
+        if not skip_prompt and self.dirty:
+            if self.auto_saving.isChecked():
+                self.request_save_file(on_success=lambda: self.request_open_video(
+                    path, project_path=project_path, skip_prompt=True))
+                return None
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return None
+            if answer == QMessageBox.Yes:
+                self.request_save_file(on_success=lambda: self.request_open_video(
+                    path, project_path=project_path, skip_prompt=True))
+                return None
+
+        target, read_only = self._video_project_target(
+            path, project_path=project_path, allow_dialog=True)
+        self._dataset_generation = self.task_coordinator.next_generation()
+        generation = self._dataset_generation
+        self._video_open_request_id += 1
+        request_id = self._video_open_request_id
+        self._show_loading_veil('Opening video %s…' % os.path.basename(path))
+
+        def prepare(handle):
+            prepared = prepare_video_open(
+                path, project_path=target, read_only=read_only,
+                cancelled=handle.is_cancelled)
+            if handle.is_cancelled():
+                prepared.decoder.close()
+                return None
+            return prepared
+
+        handle = self.task_coordinator.submit(
+            'video', prepare, priority=JobPriority.IMAGE_LOAD,
+            key='video-open', latest=True, generation=generation)
+        handle.result.connect(
+            lambda prepared, rid=request_id, gen=generation:
+            self._on_video_open_result(prepared, rid, gen))
+        handle.error.connect(
+            lambda message, rid=request_id, gen=generation:
+            self._on_video_open_error(message, rid, gen))
+        return handle
+
+    def _on_video_open_error(self, message, request_id, generation):
+        if (request_id != self._video_open_request_id
+                or generation != self._dataset_generation):
+            return
+        self._hide_loading_veil()
+        self.canvas.setEnabled(bool(self.file_path))
+        self.status('Error opening video: ' + message, delay=10000)
+
+    def _on_video_open_result(self, prepared, request_id, generation):
+        if prepared is None:
+            return
+        if (request_id != self._video_open_request_id
+                or generation != self._dataset_generation):
+            prepared.decoder.close()
+            return
+        self._commit_video_open(prepared)
+        self._hide_loading_veil()
+
+    def _commit_video_open(self, prepared):
+        """Atomically publish worker data on QApplication.thread()."""
+        assert QApplication.instance().thread() == self.thread()
+        snapshot = prepared.snapshot
+        first = snapshot.initial_frame
+        self.reset_state()
+        self._set_document_kind(DocumentKind.VIDEO)
+        self.video_decoder = prepared.decoder
+        self.video_snapshot = snapshot
+        self.video_tracks = prepared.tracks
+        self.video_observations = prepared.observations
+        self.video_frame_states = prepared.frame_states
+        self.video_classes = prepared.classes
+        self._document_revision = snapshot.revision
+        self.m_img_list = []
+        self._path_to_idx = {}
+        self.img_count = 0
+        self.cur_img_idx = 0
+        self.file_list_widget.clear()
+        self.file_path = snapshot.source_path
+        self.image_data = None
+        self.image = first.image
+        self._image_scale_factor = (
+            first.display_width / snapshot.width if snapshot.width else 1.0)
+        self._original_image_size = QSize(snapshot.width, snapshot.height)
+        verified_pts = {state.pts for state in prepared.frame_states
+                        if state.verified}
+        self.canvas.verified = first.frame_ref.pts in verified_pts
+        self.canvas.locked = (
+            self.canvas.verified and self.lock_on_verify_option.isChecked())
+        self.canvas.load_pixmap(QPixmap.fromImage(first.image))
+        self.frame_cache.put(first)
+        self.set_clean()
+        self.canvas.setEnabled(True)
+        self.adjust_scale(initial=True)
+        self.paint_canvas()
+        self.toggle_actions(True)
+        editable = not snapshot.read_only
+        for action in (self.actions.create, self.actions.create_polygon,
+                       self.actions.createMode, self.actions.editMode):
+            action.setEnabled(editable)
+        self.actions.saveAs.setEnabled(bool(snapshot.project_path))
+        self.add_recent_file(snapshot.project_path or snapshot.source_path)
+        suffix = ' [read-only]' if snapshot.read_only else ''
+        self.setWindowTitle(
+            '%s %s%s' % (__appname__, snapshot.source_path, suffix))
+        self.update_status_bar()
+        self.canvas.setFocus(True)
+        self.status('Opened video %s' % os.path.basename(snapshot.source_path))
+
+    def open_video(self, path, project_path=None):
+        """Synchronous compatibility API for extensions and tests."""
+        if self.dirty and not self.may_continue():
+            return False
+        path = os.path.abspath(ustr(path))
+        target, read_only = self._video_project_target(
+            path, project_path=project_path, allow_dialog=False)
+        try:
+            prepared = prepare_video_open(
+                path, project_path=target, read_only=read_only)
+        except Exception as exc:
+            self.status('Error opening video: %s' % exc, delay=10000)
+            return False
+        self._dataset_generation = self.task_coordinator.next_generation()
+        self._commit_video_open(prepared)
+        return True
+
+    def request_save_video_project(self, _value=False, on_success=None):
+        snapshot = self.video_snapshot
+        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
+                or snapshot.read_only or not snapshot.project_path):
+            return None
+        revision = self._document_revision
+        project_path = snapshot.project_path
+
+        def save(handle):
+            handle.check_cancelled()
+            checkpoint_project(project_path)
+            return project_path
+
+        handle = self.task_coordinator.submit(
+            'background', save, priority=JobPriority.IMAGE_LOAD,
+            key='video-project-save', latest=True,
+            generation=self._dataset_generation)
+        self._video_save_handle = handle
+        handle.result.connect(
+            lambda saved, rev=revision, callback=on_success:
+            self._on_video_save_result(saved, rev, callback))
+        handle.error.connect(
+            lambda message: self.status(
+                'Error saving video project: ' + message, delay=10000))
+        return handle
+
+    def _on_video_save_result(self, path, revision, on_success=None):
+        if path and self._document_revision == revision:
+            self.set_clean()
+        if path:
+            self.status('Saved video project to %s' % path)
+        if path and callable(on_success):
+            on_success()
+
+    def save_video_project(self):
+        snapshot = self.video_snapshot
+        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
+                or snapshot.read_only or not snapshot.project_path):
+            return False
+        try:
+            checkpoint_project(snapshot.project_path)
+        except Exception as exc:
+            self.status('Error saving video project: %s' % exc, delay=10000)
+            return False
+        self.set_clean()
+        return True
+
     def request_open_file(self, file_path, skip_prompt=False):
         """Load a standalone file transactionally if it is outside the dataset."""
         file_path = os.path.abspath(ustr(file_path))
+        if (is_video_project(file_path)
+                or file_path.lower().endswith(VIDEO_EXTENSIONS)):
+            return self.request_open_video(
+                file_path, skip_prompt=skip_prompt)
         if file_path in self._path_to_idx:
             return self.request_load_file(
                 file_path, skip_prompt=skip_prompt)
@@ -2379,8 +2624,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if replacement_snapshot is not None:
             self._commit_dataset_snapshot(replacement_snapshot)
-        self.frame_cache.put(result)
         self._commit_image_result(result)
+        self.frame_cache.put(result)
         self._pending_navigation_index = None
         self._hide_loading_veil()
         self._schedule_prefetch(result.path)
@@ -2393,6 +2638,7 @@ class MainWindow(QMainWindow, WindowMixin):
             trace_started = time.perf_counter_ns()
         assert QApplication.instance().thread() == self.thread()
         self.reset_state()
+        self._set_document_kind(DocumentKind.IMAGE)
         self._image_scale_factor = result.scale_factor
         self._original_image_size = QSize(
             result.original_width, result.original_height)
@@ -2525,6 +2771,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def load_file(self, file_path=None):
         """Load the specified file, or the last opened file if None."""
+        requested = (file_path if file_path is not None
+                     else self.settings.get(SETTING_FILENAME))
+        if requested:
+            requested = os.path.abspath(ustr(requested))
+            if (is_video_project(requested)
+                    or requested.lower().endswith(VIDEO_EXTENSIONS)):
+                return self.open_video(requested)
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
@@ -2608,6 +2861,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
+            self._set_document_kind(DocumentKind.IMAGE)
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.on_image_changed()
             self.file_path = unicode_file_path
@@ -2783,6 +3037,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.annotation_catalog.cancel()
         if hasattr(self, 'sam_controller'):
             self.sam_controller.cancel()
+        self._close_video_decoder()
         self.task_coordinator.shutdown()
 
     def load_recent(self, filename):
@@ -3428,6 +3683,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def request_save_file(self, _value=False, on_success=None,
                           annotation_base=None):
         """Queue an immutable, revision-aware save for GUI workflows."""
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.request_save_video_project(on_success=on_success)
         if not self.file_path:
             return None
         degradation_formats = {
@@ -3553,6 +3810,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.file_path, snapshot=self.dataset_snapshot)
 
     def save_file(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.save_video_project()
         if not self.file_path:
             return False
 
@@ -3576,16 +3835,59 @@ class MainWindow(QMainWindow, WindowMixin):
                                    else self.save_file_dialog(remove_ext=False))
 
     def save_file_as(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            target = self._video_project_save_dialog()
+            if not target:
+                return False
+            try:
+                save_project_as(self.video_snapshot.project_path, target)
+            except Exception as exc:
+                self.status('Error saving video project: %s' % exc)
+                return False
+            return True
         assert not self.image.isNull(), "cannot save empty image"
         return self._save_file(self.save_file_dialog())
 
     def request_save_file_as(self, _value=False):
         """Choose a target on the GUI thread and write it asynchronously."""
+        if self.document_kind == DocumentKind.VIDEO:
+            target = self._video_project_save_dialog()
+            if not target:
+                return None
+            source = self.video_snapshot.project_path
+
+            def save_as(handle):
+                handle.check_cancelled()
+                return save_project_as(source, target)
+
+            handle = self.task_coordinator.submit(
+                'background', save_as, priority=JobPriority.IMAGE_LOAD,
+                key='video-project-save-as', latest=True,
+                generation=self._dataset_generation)
+            handle.result.connect(
+                lambda path: self.status('Saved video project to %s' % path))
+            handle.error.connect(
+                lambda message: self.status(
+                    'Error saving video project: ' + message))
+            return handle
         assert not self.image.isNull(), "cannot save empty image"
         annotation_base = self.save_file_dialog()
         if not annotation_base:
             return None
         return self.request_save_file(annotation_base=annotation_base)
+
+    def _video_project_save_dialog(self):
+        snapshot = self.video_snapshot
+        if snapshot is None or not snapshot.project_path:
+            return ''
+        filename, _selected_filter = QFileDialog.getSaveFileName(
+            self, '%s - Save Video Project As' % __appname__,
+            snapshot.project_path,
+            'LabelImg++ video project (*.labelimgpp.sqlite)')
+        filename = ustr(filename)
+        if filename and not filename.lower().endswith('.labelimgpp.sqlite'):
+            filename += '.labelimgpp.sqlite'
+        return filename
 
     def save_file_dialog(self, remove_ext=True):
         caption = '%s - Choose File' % __appname__

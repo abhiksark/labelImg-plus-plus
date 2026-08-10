@@ -119,6 +119,10 @@ class TaskCoordinator(QObject):
             'interactive': _Lane('interactive', interactive),
             'background': _Lane('background', background),
             'sam': _Lane('sam', 1),
+            # The active PyAV container is session-owned and never touched by
+            # two workers concurrently. Tracking/export open independent
+            # containers on the background lane.
+            'video': _Lane('video', 1),
         }
         self._sequence = itertools.count()
         self._generation = 0
