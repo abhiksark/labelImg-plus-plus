@@ -123,13 +123,17 @@ def _stem_has_annotation(save_dir, stem, extensions=ANNOTATION_EXTENSIONS):
                for ext in extensions)
 
 
-def annotation_output_stem(image_path, save_dir, image_list=None):
+def annotation_output_stem(image_path, save_dir, image_list=None,
+                           resolver=None):
     """Choose the flat output stem for an image.
 
     An existing image-specific sidecar takes precedence so its name remains
     stable when the active list changes.  Otherwise the specific stem is used
     only for a current case-insensitive basename collision.
     """
+    if resolver is not None:
+        return resolver.output_stem(image_path)
+
     specific_stems = list(_valid_specific_stems(image_path, image_list))
     for stem in specific_stems:
         if _stem_has_annotation(save_dir, stem):
@@ -142,21 +146,26 @@ def annotation_output_stem(image_path, save_dir, image_list=None):
     return legacy_annotation_stem(image_path)
 
 
-def annotation_output_base(image_path, save_dir, image_list=None):
+def annotation_output_base(image_path, save_dir, image_list=None,
+                           resolver=None):
     """Return the extension-less path used for a central annotation save."""
     return os.path.join(
         os.fspath(save_dir),
-        annotation_output_stem(image_path, save_dir, image_list),
+        annotation_output_stem(
+            image_path, save_dir, image_list, resolver=resolver),
     )
 
 
 def annotation_path_candidates(image_path, extension, save_dir=None,
-                               image_list=None):
+                               image_list=None, resolver=None):
     """Return sidecar paths ordered specific-first and legacy-last.
 
     For each stem the central save directory is preferred, followed by the
     original image directory.  Duplicate directory spellings are removed.
     """
+    if resolver is not None:
+        return list(resolver.path_candidates(image_path, extension))
+
     if not extension.startswith('.'):
         extension = '.' + extension
 
@@ -182,8 +191,11 @@ def annotation_path_candidates(image_path, extension, save_dir=None,
 
 
 def find_existing_annotation(image_path, save_dir=None, image_list=None,
-                             extensions=ANNOTATION_EXTENSIONS):
+                             extensions=ANNOTATION_EXTENSIONS, resolver=None):
     """Return the first existing specific/legacy annotation sidecar."""
+    if resolver is not None:
+        return resolver.find_existing(image_path, extensions=extensions)
+
     stems = annotation_stem_candidates(image_path, image_list)
     directories = []
     if save_dir:
@@ -202,4 +214,3 @@ def find_existing_annotation(image_path, save_dir=None, image_list=None,
                 if os.path.isfile(path):
                     return path
     return None
-
