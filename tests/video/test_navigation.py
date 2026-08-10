@@ -1,0 +1,107 @@
+import time
+
+from labelImgPlusPlus import DocumentKind, get_main_app
+from libs.core.video_types import VideoFrameRef
+
+
+def _wait(app, predicate, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(.002)
+    return False
+
+
+def _ref(window, pts):
+    snapshot = window.video_snapshot
+    return VideoFrameRef(
+        snapshot.fingerprint, snapshot.stream_index, pts,
+        snapshot.time_base_num, snapshot.time_base_den)
+
+
+def test_frame_step_and_previous_use_pts_not_frame_index(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'clip.mp4')
+    try:
+        assert window.open_video(video)
+        first_pts = window.current_video_frame_ref.pts
+        window.request_next_video_frame()
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts > first_pts)
+        next_pts = window.current_video_frame_ref.pts
+        assert next_pts - first_pts != 1
+        window.request_previous_video_frame()
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == first_pts)
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_rapid_seek_commits_only_latest_request(tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'clip.mp4', frames=20)
+    try:
+        assert window.open_video(video)
+        step = window._video_step_pts()
+        start = int(window.video_snapshot.start_pts or 0)
+        window.request_video_frame(_ref(window, start + 3 * step))
+        window.request_video_frame(_ref(window, start + 12 * step))
+        assert _wait(
+            app, lambda: not window.task_coordinator.queue_depths()['video'])
+        app.processEvents()
+        assert abs(window.current_video_frame_ref.pts -
+                   (start + 12 * step)) <= step
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_playback_has_one_decode_request_in_flight_and_drops_debt(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'clip.mp4', frames=30)
+    try:
+        assert window.open_video(video)
+        window.play_pause_video()
+        window._video_play_started_wall -= .3
+        window._video_playback_tick()
+        request_id = window._video_frame_request_id
+        window._video_playback_tick()
+        assert window._video_frame_request_id == request_id
+        assert window.task_coordinator.queue_depths()['video'] <= 1
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts > 0)
+        window.pause_video()
+        assert not window._video_playback_timer.isActive()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_image_video_mode_transitions_reconfigure_docks_and_cache(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'clip.mp4')
+    from PyQt5.QtGui import QImage
+    image_path = str(tmp_path / 'image.png')
+    image = QImage(32, 24, QImage.Format_RGB32)
+    image.fill(0xFFFFFFFF)
+    assert image.save(image_path)
+    try:
+        assert window.open_video(video)
+        assert window.document_kind == DocumentKind.VIDEO
+        assert window.timeline_dock.isVisible()
+        assert not window.file_dock.isVisible()
+        assert window.frame_cache.max_images == 12
+        window.request_open_file(image_path, skip_prompt=True)
+        assert _wait(app, lambda: window.document_kind == DocumentKind.IMAGE)
+        assert not window.timeline_dock.isVisible()
+        assert window.file_dock.isVisible()
+        assert window.frame_cache.max_images == 5
+    finally:
+        window.dirty = False
+        window.close()

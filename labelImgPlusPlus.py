@@ -7,6 +7,7 @@ import platform
 import shutil
 import sys
 import threading
+import time
 import webbrowser as wb
 from functools import partial
 
@@ -57,6 +58,7 @@ from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
+from libs.widgets.videoTimelineWidget import VideoTimelineWidget
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -77,12 +79,12 @@ from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
-from libs.core.video_decoder import VIDEO_EXTENSIONS
+from libs.core.video_decoder import VIDEO_EXTENSIONS, VideoDecoderSession
 from libs.core.video_project import (
     checkpoint_project, default_project_path, save_project_as,
 )
 from libs.core.video_session import is_video_project, prepare_video_open
-from libs.core.video_types import DocumentKind
+from libs.core.video_types import DocumentKind, VideoFrameRef
 from libs.integrations import segmentation
 
 # Formats
@@ -206,6 +208,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_classes = ()
         self._video_open_request_id = 0
         self._video_save_handle = None
+        self._video_frame_request_id = 0
+        self._video_decode_in_flight = False
+        self._video_prefetch_handle = None
+        self.current_video_frame_ref = None
+        self._video_playback_speed = 1.0
+        self._video_play_started_wall = None
+        self._video_play_started_seconds = None
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -405,6 +414,28 @@ class MainWindow(QMainWindow, WindowMixin):
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
 
+        self.video_timeline = VideoTimelineWidget(self)
+        self.timeline_dock = QDockWidget('Video Timeline', self)
+        self.timeline_dock.setObjectName('videoTimeline')
+        self.timeline_dock.setWidget(self.video_timeline)
+        self.timeline_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.timeline_dock)
+        self.timeline_dock.hide()
+        self.video_timeline.seekRequested.connect(self.request_video_frame)
+        self.video_timeline.previousRequested.connect(
+            self.request_previous_video_frame)
+        self.video_timeline.nextRequested.connect(
+            self.request_next_video_frame)
+        self.video_timeline.playPauseRequested.connect(
+            self.play_pause_video)
+        self.video_timeline.speedChanged.connect(
+            self._set_video_playback_speed)
+        self._video_playback_timer = QTimer(self)
+        self._video_playback_timer.setTimerType(Qt.PreciseTimer)
+        self._video_playback_timer.setInterval(10)
+        self._video_playback_timer.timeout.connect(self._video_playback_tick)
+
         # Configure dock features - all docks are movable for resizing
         # DockWidgetMovable enables drag-to-rearrange and proper splitter resizing
         self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -428,6 +459,11 @@ class MainWindow(QMainWindow, WindowMixin):
         open = action(get_str('openFile'), self.open_file,
                       self.shortcut_config.get('open'), 'open', get_str('openFileDetail'))
 
+        open_video = action(
+            'Open Video…', self.open_video_dialog,
+            self.shortcut_config.get('open_video'), 'file',
+            'Open a local video or LabelImg++ video project')
+
         open_dir = action(get_str('openDir'), self.open_dir_dialog,
                           self.shortcut_config.get('open_dir'), 'open', get_str('openDir'))
 
@@ -446,6 +482,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
         verify = action(get_str('verifyImg'), self.request_verify_image,
                         self.shortcut_config.get('verify'), 'verify', get_str('verifyImgDetail'))
+
+        video_play_pause = action(
+            'Play/Pause Video', self.play_pause_video,
+            self.shortcut_config.get('video_play_pause'), None,
+            'Play or pause the active video without audio', enabled=False)
 
         save = action(get_str('save'), self.request_save_file,
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
@@ -664,6 +705,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._action_map = {
             'quit': quit,
             'open': open,
+            'open_video': open_video,
             'open_dir': open_dir,
             'change_save_dir': change_save_dir,
             'open_annotation': open_annotation,
@@ -671,6 +713,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'open_next_image': open_next_image,
             'open_prev_image': open_prev_image,
             'verify': verify,
+            'video_play_pause': video_play_pause,
             'save': save,
             'save_format': save_format,
             'save_as': save_as,
@@ -705,7 +748,7 @@ class MainWindow(QMainWindow, WindowMixin):
         }
 
         # Store actions for further handling.
-        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
+        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, openVideo=open_video, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, create_polygon=create_polygon,
                               keypoint_mode=keypoint_mode_action,
                               sam_mode=sam_mode_action,
@@ -713,6 +756,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
                               copyAllToClipboard=copy_all_to_clipboard,
                               undo=undo, redo=redo,
+                              videoPlayPause=video_play_pause,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode, galleryMode=gallery_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
@@ -721,7 +765,8 @@ class MainWindow(QMainWindow, WindowMixin):
                               lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
                               lightActions=light_actions,
                               fileMenuActions=(
-                                  open, open_dir, save, save_as, close, reset_all, quit),
+                                  open, open_video, open_dir, save, save_as,
+                                  close, reset_all, quit),
                               beginner=(), advanced=(),
                               editMenu=(undo, redo, None, edit, copy, copy_to_clipboard,
                                         paste_from_clipboard, copy_all_to_clipboard, delete,
@@ -823,7 +868,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.icon_size_group.actions()[-1].setChecked(True)
 
         add_actions(self.menus.file,
-                    (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
+                    (open, open_video, open_dir, change_save_dir,
+                     open_annotation, copy_prev_bounding,
+                     self.menus.recentFiles, save, save_format, save_as,
+                     close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
             self.auto_saving,
@@ -870,6 +918,7 @@ class MainWindow(QMainWindow, WindowMixin):
             None, 'file', get_str('splitDatasetDetail'))
         add_actions(self.menus.tools, (
             check_labels, batch_verify_action, split_dataset_action,
+            None, video_play_pause,
             None, sam_mode_action, sam_settings_action))
 
         # Custom context menu for the canvas widget:
@@ -890,7 +939,7 @@ class MainWindow(QMainWindow, WindowMixin):
         file_dropdown = DropdownToolButton(
             text=get_str('openFile'),
             icon=new_icon('file'),
-            actions=[open, open_dir, change_save_dir]
+            actions=[open, open_video, open_dir, change_save_dir]
         )
 
         self.actions.beginner = (
@@ -1184,6 +1233,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.tools.set_expanded(True)
 
     def set_dirty(self):
+        if self.document_kind == DocumentKind.VIDEO:
+            self.pause_video()
         self._document_revision += 1
         self.dirty = True
         self.actions.save.setEnabled(True)
@@ -1295,12 +1346,23 @@ class MainWindow(QMainWindow, WindowMixin):
                 12 if kind == DocumentKind.VIDEO else 5)
         if hasattr(self, 'file_dock'):
             self.file_dock.setVisible(kind != DocumentKind.VIDEO)
+        if hasattr(self, 'timeline_dock'):
+            self.timeline_dock.setVisible(kind == DocumentKind.VIDEO)
+        if hasattr(self, 'actions') and hasattr(
+                self.actions, 'videoPlayPause'):
+            self.actions.videoPlayPause.setEnabled(
+                kind == DocumentKind.VIDEO)
 
     def _close_video_decoder(self):
+        if hasattr(self, '_video_playback_timer'):
+            self.pause_video()
         decoder = getattr(self, 'video_decoder', None)
         self.video_decoder = None
         snapshot = getattr(self, 'video_snapshot', None)
         self.video_snapshot = None
+        self.current_video_frame_ref = None
+        if hasattr(self, 'video_timeline'):
+            self.video_timeline.set_session(None)
         if decoder is not None:
             decoder.close()
         if (snapshot is not None and snapshot.project_path
@@ -1505,6 +1567,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_drawing_sensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""
+        if drawing and self.document_kind == DocumentKind.VIDEO:
+            self.pause_video()
         self.actions.editMode.setEnabled(not drawing)
         self.actions.create_polygon.setEnabled(not drawing)
         if not drawing and self.beginner():
@@ -2407,7 +2471,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.locked = (
             self.canvas.verified and self.lock_on_verify_option.isChecked())
         self.canvas.load_pixmap(QPixmap.fromImage(first.image))
+        self.current_video_frame_ref = first.frame_ref
         self.frame_cache.put(first)
+        self.video_timeline.set_session(snapshot)
+        self._refresh_video_timeline_markers()
         self.set_clean()
         self.canvas.setEnabled(True)
         self.adjust_scale(initial=True)
@@ -2489,6 +2556,284 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
         self.set_clean()
         return True
+
+    def _refresh_video_timeline_markers(self):
+        if self.video_snapshot is None:
+            return
+        by_track = {}
+        accepted = []
+        pending = []
+        for observation in self.video_observations:
+            by_track.setdefault(observation.track_id, []).append(
+                observation.pts)
+            if (observation.source == 'manual'
+                    and observation.review_state == 'accepted'
+                    and observation.anchor):
+                accepted.append(observation.pts)
+            elif observation.review_state == 'pending':
+                pending.append(observation.pts)
+        spans = tuple(
+            (min(values), max(values)) for values in by_track.values()
+            if values)
+        verified = tuple(
+            state.pts for state in self.video_frame_states if state.verified)
+        self.video_timeline.set_markers(
+            spans=spans, accepted=accepted, pending=pending,
+            verified=verified)
+
+    def _video_step_pts(self):
+        snapshot = self.video_snapshot
+        if snapshot is None:
+            return 1
+        if snapshot.average_rate_num and snapshot.average_rate_den:
+            seconds = (snapshot.average_rate_den /
+                       snapshot.average_rate_num)
+        else:
+            seconds = 1.0 / 30.0
+        return max(1, int(round(
+            seconds * snapshot.time_base_den / snapshot.time_base_num)))
+
+    def request_video_frame(self, frame_ref, playback=False):
+        """Seek by immutable PTS reference with latest-request-wins semantics."""
+        snapshot = self.video_snapshot
+        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
+                or not isinstance(frame_ref, VideoFrameRef)
+                or frame_ref.fingerprint != snapshot.fingerprint
+                or frame_ref.stream_index != snapshot.stream_index):
+            return None
+        if playback and self._video_decode_in_flight:
+            return None
+        if not playback:
+            self.pause_video()
+        cached = self.frame_cache.get(frame_ref)
+        if cached is not None:
+            self._commit_video_frame(cached, playback=playback)
+            return None
+        mode = 'at_or_after' if playback else 'nearest'
+        return self._submit_video_decode(
+            lambda decoder, handle: decoder.seek_pts(
+                frame_ref.pts, mode=mode, cancelled=handle.is_cancelled),
+            playback=playback)
+
+    def _submit_video_decode(self, operation, playback=False):
+        if self.video_decoder is None:
+            return None
+        self._video_frame_request_id += 1
+        request_id = self._video_frame_request_id
+        generation = self._dataset_generation
+        if playback:
+            self._video_decode_in_flight = True
+
+        def decode(handle):
+            handle.check_cancelled()
+            return operation(self.video_decoder, handle)
+
+        handle = self.task_coordinator.submit(
+            'video', decode, priority=JobPriority.IMAGE_LOAD,
+            key='video-frame', latest=True, generation=generation)
+        handle.result.connect(
+            lambda result, rid=request_id, gen=generation, playing=playback:
+            self._on_video_frame_result(result, rid, gen, playing))
+        handle.error.connect(
+            lambda message, rid=request_id:
+            self._on_video_frame_error(message, rid))
+        handle.finished.connect(
+            lambda rid=request_id:
+            self._on_video_decode_finished(rid))
+        return handle
+
+    def _on_video_frame_result(self, result, request_id, generation,
+                               playback=False):
+        snapshot = self.video_snapshot
+        if (request_id != self._video_frame_request_id
+                or generation != self._dataset_generation
+                or snapshot is None):
+            return
+        if result is None:
+            self.pause_video()
+            return
+        if result.frame_ref.fingerprint != snapshot.fingerprint:
+            return
+        self.frame_cache.put(result)
+        self._commit_video_frame(result, playback=playback)
+
+    def _on_video_frame_error(self, message, request_id):
+        if request_id != self._video_frame_request_id:
+            return
+        self.pause_video()
+        self.status('Error decoding video frame: ' + message, delay=10000)
+
+    def _on_video_decode_finished(self, request_id):
+        if request_id == self._video_frame_request_id:
+            self._video_decode_in_flight = False
+
+    def _commit_video_frame(self, result, playback=False):
+        assert QApplication.instance().thread() == self.thread()
+        self.image = result.image
+        self._image_scale_factor = (
+            result.display_width / self.video_snapshot.width
+            if self.video_snapshot.width else 1.0)
+        self._original_image_size = QSize(
+            self.video_snapshot.width, self.video_snapshot.height)
+        self.canvas.load_pixmap(QPixmap.fromImage(result.image))
+        self.current_video_frame_ref = result.frame_ref
+        verified = any(
+            state.pts == result.frame_ref.pts and state.verified
+            for state in self.video_frame_states)
+        self.canvas.verified = verified
+        self.canvas.locked = (
+            verified and self.lock_on_verify_option.isChecked())
+        # Track materialization is installed by the next delivery slice. Until
+        # then a seek must never leak ordinary image shapes across frames.
+        materialize = getattr(self, '_materialize_video_frame', None)
+        if materialize is not None:
+            materialize(result.frame_ref.pts)
+        else:
+            self.items_to_shapes.clear()
+            self.shapes_to_items.clear()
+            self.rect_label_list.clear()
+            self.poly_label_list.clear()
+            self.canvas.load_shapes([])
+        self.undo_stack.clear()
+        self.video_timeline.set_current_frame(result.frame_ref)
+        self.paint_canvas()
+        self.update_status_bar()
+        if not playback:
+            self._schedule_video_prefetch(result.frame_ref)
+
+    def request_next_video_frame(self):
+        if self.current_video_frame_ref is None:
+            return None
+        self.pause_video()
+        self._navigation_direction = 1
+        cached = self.frame_cache.video_neighbor(
+            self.current_video_frame_ref, 1)
+        if cached is not None:
+            self._commit_video_frame(cached)
+            return None
+        return self._submit_video_decode(
+            lambda decoder, handle: decoder.next_frame(
+                cancelled=handle.is_cancelled))
+
+    def request_previous_video_frame(self):
+        if self.current_video_frame_ref is None:
+            return None
+        self.pause_video()
+        self._navigation_direction = -1
+        cached = self.frame_cache.video_neighbor(
+            self.current_video_frame_ref, -1)
+        if cached is not None:
+            self._commit_video_frame(cached)
+            return None
+        current = self.current_video_frame_ref
+        return self._submit_video_decode(
+            lambda decoder, handle: decoder.previous_frame(
+                current, cancelled=handle.is_cancelled))
+
+    def _schedule_video_prefetch(self, frame_ref):
+        snapshot = self.video_snapshot
+        if snapshot is None:
+            return
+        step = self._video_step_pts()
+        offsets = ((-1, -2, 1) if self._navigation_direction < 0
+                   else (1, 2, -1))
+        targets = tuple(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index,
+            frame_ref.pts + offset * step,
+            snapshot.time_base_num, snapshot.time_base_den)
+            for offset in offsets
+            if frame_ref.pts + offset * step >= int(snapshot.start_pts or 0))
+        source_path = snapshot.source_path
+        stream_index = snapshot.stream_index
+        generation = self._dataset_generation
+
+        def prefetch(handle):
+            decoder = VideoDecoderSession(
+                source_path, stream_index=stream_index,
+                cancelled=handle.is_cancelled)
+            results = []
+            try:
+                for target in targets:
+                    handle.check_cancelled()
+                    result = decoder.seek_pts(
+                        target.pts, cancelled=handle.is_cancelled)
+                    if result is not None:
+                        results.append(result)
+                return tuple(results)
+            finally:
+                decoder.close()
+
+        handle = self.task_coordinator.submit(
+            'background', prefetch, priority=JobPriority.BULK,
+            key='video-prefetch', latest=True, generation=generation)
+        self._video_prefetch_handle = handle
+        handle.result.connect(
+            lambda results, gen=generation:
+            self._on_video_prefetch_results(results, gen))
+
+    def _on_video_prefetch_results(self, results, generation):
+        snapshot = self.video_snapshot
+        if generation != self._dataset_generation or snapshot is None:
+            return
+        for result in results:
+            if result.frame_ref.fingerprint == snapshot.fingerprint:
+                self.frame_cache.put(result)
+
+    def play_pause_video(self, _value=False):
+        if self.document_kind != DocumentKind.VIDEO:
+            return
+        if self._video_playback_timer.isActive():
+            self.pause_video()
+            return
+        if self.current_video_frame_ref is None:
+            return
+        self._video_play_started_wall = time.monotonic()
+        self._video_play_started_seconds = \
+            self.current_video_frame_ref.seconds
+        self.video_timeline.set_playing(True)
+        self._video_playback_timer.start()
+
+    def pause_video(self):
+        active = (getattr(self, '_video_decode_in_flight', False)
+                  or (hasattr(self, '_video_playback_timer')
+                      and self._video_playback_timer.isActive()))
+        if hasattr(self, '_video_playback_timer'):
+            self._video_playback_timer.stop()
+        if hasattr(self, 'video_timeline'):
+            self.video_timeline.set_playing(False)
+        self._video_decode_in_flight = False
+        if active and hasattr(self, 'task_coordinator'):
+            self.task_coordinator.cancel_key('video-frame')
+            self._video_frame_request_id += 1
+
+    def _set_video_playback_speed(self, speed):
+        self._video_playback_speed = float(speed)
+        if (hasattr(self, '_video_playback_timer')
+                and self._video_playback_timer.isActive()
+                and self.current_video_frame_ref is not None):
+            self._video_play_started_wall = time.monotonic()
+            self._video_play_started_seconds = \
+                self.current_video_frame_ref.seconds
+
+    def _video_playback_tick(self):
+        snapshot = self.video_snapshot
+        if (snapshot is None or self.current_video_frame_ref is None
+                or self._video_decode_in_flight):
+            return
+        elapsed = time.monotonic() - self._video_play_started_wall
+        target_seconds = (self._video_play_started_seconds
+                          + elapsed * self._video_playback_speed)
+        end_pts = (int(snapshot.start_pts or 0)
+                   + int(snapshot.duration_pts or 0))
+        target_pts = int(round(
+            target_seconds * snapshot.time_base_den /
+            snapshot.time_base_num))
+        if snapshot.duration_pts is not None and target_pts >= end_pts:
+            self.pause_video()
+            return
+        self.request_video_frame(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index, target_pts,
+            snapshot.time_base_num, snapshot.time_base_den), playback=True)
 
     def request_open_file(self, file_path, skip_prompt=False):
         """Load a standalone file transactionally if it is outside the dataset."""
@@ -2698,9 +3043,13 @@ class MainWindow(QMainWindow, WindowMixin):
                       'shapes': len(result.shapes)})
 
     def request_next_image(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.request_next_video_frame()
         return self._request_relative_image(1)
 
     def request_previous_image(self, _value=False):
+        if self.document_kind == DocumentKind.VIDEO:
+            return self.request_previous_video_frame()
         return self._request_relative_image(-1)
 
     def _request_relative_image(self, direction):
@@ -3679,6 +4028,18 @@ class MainWindow(QMainWindow, WindowMixin):
             if isinstance(filename, (tuple, list)):
                 filename = filename[0]
             self.request_open_file(filename)
+
+    def open_video_dialog(self, _value=False):
+        path = os.path.dirname(ustr(self.file_path)) if self.file_path else '.'
+        filters = (
+            'Video and LabelImg++ projects '
+            '(*.mp4 *.mov *.mkv *.avi *.labelimgpp.sqlite);;'
+            'All files (*)')
+        filename, _selected_filter = QFileDialog.getOpenFileName(
+            self, '%s - Choose Video or Project' % __appname__,
+            path, filters)
+        if filename:
+            self.request_open_video(ustr(filename))
 
     def request_save_file(self, _value=False, on_success=None,
                           annotation_base=None):

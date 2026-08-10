@@ -267,3 +267,20 @@ class FrameCache:
     def clear(self):
         self._entries.clear()
         self._bytes = 0
+
+    def video_neighbor(self, frame_ref, direction):
+        """Return the closest cached PTS before/after *frame_ref*."""
+        direction = 1 if direction > 0 else -1
+        candidates = []
+        for entry in self._entries.values():
+            other = getattr(entry, 'frame_ref', None)
+            if other is None:
+                continue
+            if (other.fingerprint != frame_ref.fingerprint
+                    or other.stream_index != frame_ref.stream_index):
+                continue
+            delta = other.pts - frame_ref.pts
+            if delta * direction > 0:
+                candidates.append((abs(delta), entry))
+        return min(candidates, key=lambda item: item[0])[1] \
+            if candidates else None
