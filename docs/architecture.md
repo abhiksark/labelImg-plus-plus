@@ -2,6 +2,37 @@
 
 This document describes the high-level architecture of labelImg++, including component relationships, data flow, and design patterns.
 
+## Runtime and dataset pipeline
+
+Normal UI actions use bounded Qt worker lanes owned by
+`libs/core/task_coordinator.py`. Interactive image work has one or two threads,
+background catalog/thumbnail/bulk work has one to four, and SAM has one
+dedicated thread. Jobs carry cancellation handles, dataset generations, and
+optional latest-request-wins keys. The process-global Qt thread pool is not
+used.
+
+Opening a directory builds an immutable `DatasetSnapshot` in a worker. The
+snapshot owns the sorted paths, an O(1) path index, and an `AnnotationResolver`
+that computes recursive collision-safe annotation stems and directory filename
+sets once. A completed snapshot replaces the visible dataset atomically; a
+failed or cancelled scan leaves the prior dataset intact.
+
+One progressive `AnnotationCatalog` supplies file-list filters, both gallery
+surfaces, statistics, and verification counts. Shared COCO/CreateML documents
+are parsed and indexed once per `(path, mtime_ns, size)` fingerprint.
+
+UI navigation calls `request_load_file()`. Its worker returns an immutable
+`ImageLoadResult` containing a worker-owned `QImage` and raw shape tuples. Only
+the application thread creates `QPixmap`, `Shape`, and widget items. A
+fingerprinted five-frame/128 MiB LRU supports adjacent-image prefetch. The
+historical synchronous `load_file()` remains available to extensions and
+tests.
+
+Menu, shortcut, autosave, navigation, and verification saves create immutable
+`SaveRequest` values. Worker serialization is atomically published with
+`os.replace`; a revision check marks the document clean only if no later edit
+occurred. `save_file()` remains the synchronous compatibility entry point.
+
 ## System Architecture
 
 ```

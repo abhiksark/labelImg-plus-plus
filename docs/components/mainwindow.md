@@ -11,6 +11,13 @@ MainWindow (QMainWindow subclass) is responsible for:
 - Handling user actions (menu, toolbar, keyboard)
 - Managing application state (current file, dirty flag, format)
 - Coordinating between Canvas, LabelFile, and Settings
+- Applying worker results on the Qt application thread
+
+UI actions use `request_import_dir_images()`, `request_load_file()`, and
+`request_save_file()`. These methods are cancellable, generation/revision
+guarded, and keep the current document visible until the replacement is ready.
+The similarly named synchronous `import_dir_images()`, `load_file()`, and
+`save_file()` methods are retained as extension compatibility contracts.
 
 ## Class Hierarchy
 
@@ -165,7 +172,7 @@ action = new_action(
 | `open_dir` | Ctrl+U | `open_dir_dialog` |
 | `change_save_dir` | Ctrl+R | `change_save_dir_dialog` |
 | `open_annotation` | Ctrl+Shift+O | `open_annotation_dialog` |
-| `save` | Ctrl+S | `save_file` |
+| `save` | Ctrl+S | `request_save_file` |
 | `save_as` | Ctrl+Shift+S | `save_file_as` |
 | `close` | Ctrl+W | `close_file` |
 | `quit` | Ctrl+Q | `close` |
@@ -183,9 +190,9 @@ action = new_action(
 
 | Action | Shortcut | Handler |
 |--------|----------|---------|
-| `open_next_image` | D | `open_next_image` |
-| `open_prev_image` | A | `open_prev_image` |
-| `verify` | Space | `verify_image` |
+| `open_next_image` | D | `request_next_image` |
+| `open_prev_image` | A | `request_previous_image` |
+| `verify` | Space | `request_verify_image` |
 
 ## Key Methods
 

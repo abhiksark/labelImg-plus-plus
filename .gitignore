@@ -60,3 +60,9 @@ htmlcov/
 docs/plans/
 docs/specs/
 docs/superpowers/
+
+# Developer-only local performance reports
+.labelimgpp-profile/
+profile-results/
+*.speedscope.json
+*.flamegraph.svg

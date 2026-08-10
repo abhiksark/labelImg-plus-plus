@@ -39,6 +39,11 @@ sam = [
     "numpy",
     "opencv-python-headless",
 ]
+profile = [
+    "psutil",
+    "py-spy",
+    "pytest-benchmark",
+]
 
 [project.urls]
 Homepage = "https://github.com/abhiksark/labelImg-plus-plus"
