@@ -49,6 +49,10 @@ DEFAULT_SHORTCUTS = {
     'create_polygon': 'P',
     'keypoint_mode': 'K',
     'video_add_keyframe': 'Shift+K',
+    'video_track_forward': 'T',
+    'video_track_backward': 'Shift+T',
+    'video_accept_suggestion': 'Shift+Enter',
+    'video_reject_suggestion': 'Backspace',
 }
 
 

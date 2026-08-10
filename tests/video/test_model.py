@@ -95,3 +95,24 @@ def test_save_delta_coalesces_only_mutations_newer_than_completed_revision():
     assert [item.pts for item in second.observations] == [10]
     model.mark_saved(second.target_revision)
     assert not model.dirty
+
+
+def test_rerun_replaces_pending_and_rejected_but_never_accepted_or_manual():
+    model = VideoProjectModel()
+    track = _track(model)
+    pending = ObservationRecord(
+        track.track_id, 10, [1, 1, 11, 11], source='tracker',
+        review_state='pending', anchor=False)
+    model.upsert_tracker(pending)
+    replacement = ObservationRecord(
+        track.track_id, 10, [2, 2, 12, 12], source='tracker',
+        review_state='pending', anchor=False)
+    assert model.upsert_tracker(replacement).geometry == [2, 2, 12, 12]
+    model.review(track.track_id, 10, 'rejected')
+    assert model.upsert_tracker(replacement).review_state == 'pending'
+    model.review(track.track_id, 10, 'accepted')
+    accepted = model.observations[(track.track_id, 10)]
+    assert model.upsert_tracker(pending) == accepted
+    model.upsert_manual(track.track_id, 10, [3, 3, 13, 13])
+    manual = model.observations[(track.track_id, 10)]
+    assert model.upsert_tracker(pending) == manual

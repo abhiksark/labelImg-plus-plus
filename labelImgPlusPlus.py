@@ -87,8 +87,11 @@ from libs.core.video_project import (
     save_project_delta,
 )
 from libs.core.video_model import VideoProjectModel
+from libs.core.video_tracking import track_optical_flow
 from libs.core.video_session import is_video_project, prepare_video_open
-from libs.core.video_types import DocumentKind, VideoFrameRef
+from libs.core.video_types import (
+    DocumentKind, TrackingRequest, VideoFrameRef,
+)
 from libs.integrations import segmentation
 
 # Formats
@@ -224,6 +227,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_playback_speed = 1.0
         self._video_play_started_wall = None
         self._video_play_started_seconds = None
+        self._tracking_request_id = 0
+        self._tracking_handle = None
+        self._active_tracking_request = None
+        self._tracking_run_keys = set()
+        self._applying_tracking_batch = False
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -551,6 +559,26 @@ class MainWindow(QMainWindow, WindowMixin):
             'Delete Track…', self.delete_selected_track,
             None, 'delete', 'Delete the selected track on every frame',
             enabled=False)
+        video_track_forward = action(
+            'Track Forward', self.track_selected_forward,
+            self.shortcut_config.get('video_track_forward'), None,
+            'Propagate the selected rectangle forward with optical flow',
+            enabled=False)
+        video_track_backward = action(
+            'Track Backward', self.track_selected_backward,
+            self.shortcut_config.get('video_track_backward'), None,
+            'Propagate the selected rectangle backward with optical flow',
+            enabled=False)
+        video_accept_suggestion = action(
+            'Accept Current Suggestion', self.accept_current_suggestion,
+            self.shortcut_config.get('video_accept_suggestion'), 'verify',
+            'Accept the pending tracker observation on this frame',
+            enabled=False)
+        video_reject_suggestion = action(
+            'Reject Current Suggestion', self.reject_current_suggestion,
+            self.shortcut_config.get('video_reject_suggestion'), 'close',
+            'Reject the pending tracker observation on this frame',
+            enabled=False)
         sam_mode_action = action(
             'SAM Segment',
             self.toggle_sam_mode,
@@ -771,6 +799,10 @@ class MainWindow(QMainWindow, WindowMixin):
             'edit_label': edit,
             'keypoint_mode': keypoint_mode_action,
             'video_add_keyframe': video_add_keyframe,
+            'video_track_forward': video_track_forward,
+            'video_track_backward': video_track_backward,
+            'video_accept_suggestion': video_accept_suggestion,
+            'video_reject_suggestion': video_reject_suggestion,
         }
 
         # Store actions for further handling.
@@ -779,6 +811,10 @@ class MainWindow(QMainWindow, WindowMixin):
                               keypoint_mode=keypoint_mode_action,
                               videoAddKeyframe=video_add_keyframe,
                               videoDeleteTrack=video_delete_track,
+                              videoTrackForward=video_track_forward,
+                              videoTrackBackward=video_track_backward,
+                              videoAcceptSuggestion=video_accept_suggestion,
+                              videoRejectSuggestion=video_reject_suggestion,
                               sam_mode=sam_mode_action,
                               delete=delete, edit=edit, copy=copy,
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
@@ -948,6 +984,8 @@ class MainWindow(QMainWindow, WindowMixin):
         add_actions(self.menus.tools, (
             check_labels, batch_verify_action, split_dataset_action,
             None, video_play_pause, video_add_keyframe,
+            video_track_forward, video_track_backward,
+            video_accept_suggestion, video_reject_suggestion,
             video_delete_track,
             None, sam_mode_action, sam_settings_action))
 
@@ -1403,10 +1441,16 @@ class MainWindow(QMainWindow, WindowMixin):
                 kind == DocumentKind.VIDEO)
             self.actions.videoAddKeyframe.setEnabled(False)
             self.actions.videoDeleteTrack.setEnabled(False)
+            self.actions.videoTrackForward.setEnabled(False)
+            self.actions.videoTrackBackward.setEnabled(False)
+            self.actions.videoAcceptSuggestion.setEnabled(False)
+            self.actions.videoRejectSuggestion.setEnabled(False)
 
     def _close_video_decoder(self):
         if hasattr(self, '_video_playback_timer'):
             self.pause_video()
+        if hasattr(self, '_tracking_handle'):
+            self.cancel_video_tracking()
         decoder = getattr(self, 'video_decoder', None)
         self.video_decoder = None
         snapshot = getattr(self, 'video_snapshot', None)
@@ -2798,6 +2842,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_classes = tuple(model.classes)
 
     def _on_video_model_mutation(self):
+        if (self._active_tracking_request is not None
+                and not self._applying_tracking_batch):
+            self.cancel_video_tracking()
         self.pause_video()
         self._sync_video_model_views()
         self._document_revision = self.video_model.revision
@@ -2895,6 +2942,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas.select_shape(match)
         self._refresh_video_track_list()
         self.update_box_count()
+        has_pending = any(
+            item.pts == int(pts) and item.review_state == 'pending'
+            for item in model.observations.values())
+        self.actions.videoAcceptSuggestion.setEnabled(has_pending)
+        self.actions.videoRejectSuggestion.setEnabled(has_pending)
 
     def _refresh_video_track_list(self):
         model = self.video_model
@@ -2938,6 +2990,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self._selected_video_track_id = track_id
         self.actions.videoAddKeyframe.setEnabled(True)
         self.actions.videoDeleteTrack.setEnabled(True)
+        track = self.video_model.tracks.get(track_id)
+        can_track = track is not None and track.shape_type == 'rectangle'
+        self.actions.videoTrackForward.setEnabled(can_track)
+        self.actions.videoTrackBackward.setEnabled(can_track)
         shape = next((item for item in self.canvas.shapes
                       if getattr(item, 'video_track_id', None) == track_id),
                      None)
@@ -2989,6 +3045,202 @@ class MainWindow(QMainWindow, WindowMixin):
             self, before, after, 'Delete video track'))
         self._on_video_model_mutation()
         self._materialize_video_frame(self.current_video_frame_ref.pts)
+
+    def track_selected_forward(self):
+        return self._request_video_tracking(1)
+
+    def track_selected_backward(self):
+        return self._request_video_tracking(-1)
+
+    def _tracking_endpoint(self, track_id, start_pts, direction):
+        anchors = sorted(
+            item.pts for item in self.video_model.observations.values()
+            if item.track_id == track_id and item.source == 'manual'
+            and item.review_state == 'accepted' and item.anchor
+            and (item.pts - start_pts) * direction > 0)
+        if anchors:
+            return anchors[0] if direction > 0 else anchors[-1]
+        snapshot = self.video_snapshot
+        five_seconds = int(round(
+            5 * snapshot.time_base_den / snapshot.time_base_num))
+        endpoint = start_pts + direction * five_seconds
+        lower = int(snapshot.start_pts or 0)
+        upper = lower + int(snapshot.duration_pts or five_seconds)
+        return max(lower, min(upper, endpoint))
+
+    def _request_video_tracking(self, direction):
+        model = self.video_model
+        frame_ref = self.current_video_frame_ref
+        track_id = self._selected_video_track_id
+        if model is None or frame_ref is None or track_id is None:
+            self.status('Select a rectangle track before tracking')
+            return None
+        track = model.tracks.get(track_id)
+        seed = model.observations.get((track_id, frame_ref.pts))
+        if (track is None or track.shape_type != 'rectangle'
+                or seed is None or not seed.present
+                or seed.review_state != 'accepted'):
+            self.status(
+                'Tracking must start from an accepted exact rectangle')
+            return None
+        endpoint = self._tracking_endpoint(
+            track_id, frame_ref.pts, direction)
+        if endpoint == frame_ref.pts:
+            self.status('No tracking range is available in that direction')
+            return None
+        self.cancel_video_tracking()
+        self._tracking_request_id += 1
+        request = TrackingRequest(
+            request_id=self._tracking_request_id,
+            generation=self._dataset_generation,
+            source_path=self.video_snapshot.source_path,
+            stream_index=self.video_snapshot.stream_index,
+            start_ref=frame_ref, end_pts=endpoint, direction=direction,
+            track=track, seed=seed,
+            seed_track_revision=track.revision,
+            document_revision=model.revision)
+        self._active_tracking_request = request
+        self._tracking_run_keys = set()
+
+        def propagate(handle):
+            return track_optical_flow(request, handle)
+
+        handle = self.task_coordinator.submit(
+            'background', propagate, priority=JobPriority.BULK,
+            key='video-tracking', latest=True,
+            generation=self._dataset_generation)
+        self._tracking_handle = handle
+        handle.progress.connect(self._on_tracking_batch)
+        handle.result.connect(self._on_tracking_result)
+        handle.error.connect(self._on_tracking_error)
+        handle.finished.connect(self._on_tracking_finished)
+        self.status('Tracking %s…' % (
+            'forward' if direction > 0 else 'backward'))
+        return handle
+
+    def _tracking_batch_is_current(self, batch):
+        request = self._active_tracking_request
+        if request is None or self.video_model is None:
+            return False
+        track = self.video_model.tracks.get(batch.track_id)
+        return (
+            batch.request_id == request.request_id
+            and batch.generation == self._dataset_generation
+            and batch.track_id == request.track.track_id
+            and batch.seed_track_revision == request.seed_track_revision
+            and batch.document_revision == request.document_revision
+            and track is not None
+            and track.revision == request.seed_track_revision
+        )
+
+    def _on_tracking_batch(self, batch):
+        if not self._tracking_batch_is_current(batch):
+            return
+        changed = False
+        self._applying_tracking_batch = True
+        try:
+            for observation in batch.observations:
+                value = self.video_model.upsert_tracker(observation)
+                if value.review_state == 'pending':
+                    self._tracking_run_keys.add(
+                        (value.track_id, value.pts))
+                changed = changed or value is not observation \
+                    or value.revision != observation.revision
+            if batch.observations:
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+        finally:
+            self._applying_tracking_batch = False
+        if batch.observations:
+            self.status('Tracking: %s to %s PTS' % (
+                batch.start_pts, batch.end_pts))
+        return changed
+
+    def _on_tracking_result(self, batch):
+        if not self._tracking_batch_is_current(batch):
+            return
+        self._on_tracking_batch(batch)
+        self.status('Tracking stopped: %s' % (
+            batch.stop_reason or 'range complete'))
+
+    def _on_tracking_error(self, message):
+        self.status('Video tracking failed: ' + message, delay=10000)
+
+    def _on_tracking_finished(self):
+        self._tracking_handle = None
+        self._active_tracking_request = None
+
+    def cancel_video_tracking(self):
+        handle = getattr(self, '_tracking_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._tracking_handle = None
+        self._active_tracking_request = None
+
+    def _current_pending_keys(self):
+        if self.video_model is None or self.current_video_frame_ref is None:
+            return ()
+        pts = self.current_video_frame_ref.pts
+        values = [
+            key for key, item in self.video_model.observations.items()
+            if item.pts == pts and item.review_state == 'pending']
+        if self._selected_video_track_id is not None:
+            preferred = (self._selected_video_track_id, pts)
+            if preferred in values:
+                return (preferred,)
+        return tuple(values[:1])
+
+    def _review_video_keys(self, keys, review_state, description):
+        keys = tuple(
+            key for key in keys
+            if key in self.video_model.observations
+            and self.video_model.observations[key].review_state == 'pending')
+        if not keys:
+            return False
+        self.cancel_video_tracking()
+        before = self.video_model.snapshot_state()
+        for track_id, pts in keys:
+            self.video_model.review(track_id, pts, review_state)
+        after = self.video_model.snapshot_state()
+        self.undo_stack.push(VideoModelCommand(
+            self, before, after, description))
+        self._on_video_model_mutation()
+        self._materialize_video_frame(self.current_video_frame_ref.pts)
+        return True
+
+    def accept_current_suggestion(self):
+        return self._review_video_keys(
+            self._current_pending_keys(), 'accepted',
+            'Accept tracker suggestion')
+
+    def reject_current_suggestion(self):
+        return self._review_video_keys(
+            self._current_pending_keys(), 'rejected',
+            'Reject tracker suggestion')
+
+    def review_visible_suggestions(self, review_state, start_pts=None,
+                                   end_pts=None):
+        if self.video_model is None:
+            return False
+        if start_pts is None or end_pts is None:
+            center = self.current_video_frame_ref.pts
+            radius = int(round(
+                2.5 * self.video_snapshot.time_base_den /
+                self.video_snapshot.time_base_num))
+            start_pts, end_pts = center - radius, center + radius
+        keys = tuple(
+            key for key, item in self.video_model.observations.items()
+            if start_pts <= item.pts <= end_pts
+            and item.review_state == 'pending')
+        return self._review_video_keys(
+            keys, review_state,
+            '%s visible tracker suggestions' % review_state.title())
+
+    def review_full_propagation(self, review_state):
+        return self._review_video_keys(
+            tuple(self._tracking_run_keys), review_state,
+            '%s full tracker propagation' % review_state.title())
 
     def _video_step_pts(self):
         snapshot = self.video_snapshot
