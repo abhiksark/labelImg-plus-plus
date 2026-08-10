@@ -60,6 +60,7 @@ from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
 from libs.widgets.videoTimelineWidget import VideoTimelineWidget
+from libs.widgets.videoExportDialog import VideoExportDialog
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -87,11 +88,13 @@ from libs.core.video_project import (
     save_project_delta,
 )
 from libs.core.video_model import VideoProjectModel
+from libs.core.video_export import export_video_frames
 from libs.core.video_tracking import track_optical_flow
 from libs.core.video_session import is_video_project, prepare_video_open
 from libs.core.video_types import (
-    DocumentKind, TrackingRequest, VideoFrameRef,
+    DocumentKind, TrackingRequest, VideoExportRequest, VideoFrameRef,
 )
+from libs.widgets.videoTimelineWidget import parse_timecode
 from libs.integrations import segmentation
 
 # Formats
@@ -232,6 +235,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._active_tracking_request = None
         self._tracking_run_keys = set()
         self._applying_tracking_batch = False
+        self._video_export_handle = None
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -579,6 +583,11 @@ class MainWindow(QMainWindow, WindowMixin):
             self.shortcut_config.get('video_reject_suggestion'), 'close',
             'Reject the pending tracker observation on this frame',
             enabled=False)
+        video_export = action(
+            'Export Video Frames…', self.open_video_export_dialog,
+            None, 'save-as',
+            'Export accepted tracked frames to the selected image format',
+            enabled=False)
         sam_mode_action = action(
             'SAM Segment',
             self.toggle_sam_mode,
@@ -815,6 +824,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               videoTrackBackward=video_track_backward,
                               videoAcceptSuggestion=video_accept_suggestion,
                               videoRejectSuggestion=video_reject_suggestion,
+                              videoExport=video_export,
                               sam_mode=sam_mode_action,
                               delete=delete, edit=edit, copy=copy,
                               copyToClipboard=copy_to_clipboard, pasteFromClipboard=paste_from_clipboard,
@@ -986,7 +996,7 @@ class MainWindow(QMainWindow, WindowMixin):
             None, video_play_pause, video_add_keyframe,
             video_track_forward, video_track_backward,
             video_accept_suggestion, video_reject_suggestion,
-            video_delete_track,
+            video_delete_track, video_export,
             None, sam_mode_action, sam_settings_action))
 
         # Custom context menu for the canvas widget:
@@ -1439,6 +1449,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.actions, 'videoPlayPause'):
             self.actions.videoPlayPause.setEnabled(
                 kind == DocumentKind.VIDEO)
+            self.actions.videoExport.setEnabled(
+                kind == DocumentKind.VIDEO)
             self.actions.videoAddKeyframe.setEnabled(False)
             self.actions.videoDeleteTrack.setEnabled(False)
             self.actions.videoTrackForward.setEnabled(False)
@@ -1451,6 +1463,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.pause_video()
         if hasattr(self, '_tracking_handle'):
             self.cancel_video_tracking()
+        if hasattr(self, '_video_export_handle'):
+            self.cancel_video_export()
         decoder = getattr(self, 'video_decoder', None)
         self.video_decoder = None
         snapshot = getattr(self, 'video_snapshot', None)
@@ -3241,6 +3255,123 @@ class MainWindow(QMainWindow, WindowMixin):
         return self._review_video_keys(
             tuple(self._tracking_run_keys), review_state,
             '%s full tracker propagation' % review_state.title())
+
+    def _video_export_frame_refs(self, values):
+        snapshot = self.video_snapshot
+        selection = values['selection']
+        if selection == 'current':
+            pts_values = [self.current_video_frame_ref.pts]
+        elif selection == 'annotated':
+            pts_values = sorted({
+                item.pts for item in self.video_model.observations.values()
+                if item.present and item.review_state == 'accepted'})
+        elif selection == 'verified':
+            pts_values = sorted({
+                item.pts for item in self.video_model.frame_states.values()
+                if item.verified})
+        else:
+            start_seconds = parse_timecode(values['start_time'])
+            end_seconds = parse_timecode(values['end_time'])
+            if end_seconds < start_seconds:
+                raise ValueError('export range end precedes its start')
+            start_pts = int(snapshot.start_pts or 0) + int(round(
+                start_seconds * snapshot.time_base_den /
+                snapshot.time_base_num))
+            end_pts = int(snapshot.start_pts or 0) + int(round(
+                end_seconds * snapshot.time_base_den /
+                snapshot.time_base_num))
+            media_end = int(snapshot.start_pts or 0) + int(
+                snapshot.duration_pts or max(0, end_pts - start_pts))
+            start_pts = max(int(snapshot.start_pts or 0), start_pts)
+            end_pts = min(media_end, end_pts)
+            if values['sample_unit'] == 'seconds':
+                step = max(1, int(round(
+                    values['sample_seconds'] * snapshot.time_base_den /
+                    snapshot.time_base_num)))
+            else:
+                step = self._video_step_pts() * values['sample_frames']
+            pts_values = list(range(start_pts, end_pts + 1, step))
+        return tuple(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index, int(pts),
+            snapshot.time_base_num, snapshot.time_base_den)
+            for pts in pts_values)
+
+    def open_video_export_dialog(self):
+        if self.document_kind != DocumentKind.VIDEO:
+            return None
+        dialog = VideoExportDialog(self.label_file_format, self)
+        stem = os.path.splitext(
+            os.path.basename(self.video_snapshot.source_path))[0]
+        dialog.destination.setText(os.path.join(
+            os.path.dirname(self.video_snapshot.source_path),
+            stem + '-export'))
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        values = dialog.values()
+        if not values['destination']:
+            self.status('Choose an export destination')
+            return None
+        try:
+            frame_refs = self._video_export_frame_refs(values)
+        except ValueError as exc:
+            self.status('Invalid video export selection: %s' % exc)
+            return None
+        if not frame_refs:
+            self.status('The selected video export contains no frames')
+            return None
+        state = self.video_model.snapshot_state()
+        request = VideoExportRequest(
+            source_path=self.video_snapshot.source_path,
+            project_path=self.video_snapshot.project_path,
+            destination=os.path.abspath(values['destination']),
+            stream_index=self.video_snapshot.stream_index,
+            frame_refs=frame_refs, observations=state.observations,
+            tracks=state.tracks, frame_states=state.frame_states,
+            annotation_format=values['annotation_format'],
+            image_format=values['image_format'],
+            jpeg_quality=values['jpeg_quality'],
+            class_order=state.classes)
+        return self.request_export_video(request)
+
+    def request_export_video(self, export_request):
+        """Run one cancellable atomic export on an independent decoder."""
+        if not isinstance(export_request, VideoExportRequest):
+            raise TypeError('export_request must be a VideoExportRequest')
+        self.cancel_video_export()
+        generation = self._dataset_generation
+
+        def export(handle):
+            return export_video_frames(export_request, handle)
+
+        handle = self.task_coordinator.submit(
+            'background', export, priority=JobPriority.BULK,
+            key='video-export', latest=True, generation=generation)
+        self._video_export_handle = handle
+        handle.progress.connect(
+            lambda value, gen=generation:
+            self.status('Exporting video frame %s / %s: %s' % value)
+            if gen == self._dataset_generation else None)
+        handle.result.connect(
+            lambda destination, gen=generation:
+            self.status('Exported video frames to %s' % destination)
+            if gen == self._dataset_generation else None)
+        handle.error.connect(
+            lambda message, gen=generation:
+            self.status('Video export failed: ' + message, delay=10000)
+            if gen == self._dataset_generation else None)
+        handle.finished.connect(
+            lambda current=handle: self._clear_video_export_handle(current))
+        return handle
+
+    def _clear_video_export_handle(self, handle):
+        if self._video_export_handle is handle:
+            self._video_export_handle = None
+
+    def cancel_video_export(self):
+        handle = getattr(self, '_video_export_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._video_export_handle = None
 
     def _video_step_pts(self):
         snapshot = self.video_snapshot
