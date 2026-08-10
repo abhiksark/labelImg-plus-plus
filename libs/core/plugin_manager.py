@@ -67,9 +67,15 @@ class PluginRecord:
 
 
 class _NullCommandHost:
-    def commit(self, plugin_id, commands, invoke):
-        del plugin_id, commands, invoke
+    def commit(self, plugin_id, commands, invoke, enabled):
+        del plugin_id, commands, invoke, enabled
         return lambda: None
+
+    def refresh_enablement(self):
+        pass
+
+    def forget(self, plugin_id):
+        del plugin_id
 
 
 class _ValidationFailure(Exception):
@@ -97,7 +103,20 @@ class PluginManager(QObject):
         self._document = DocumentDescriptor()
         self._records = []
         if not self.safe_mode:
-            discovered = tuple(candidates) if candidates is not None else discovery()
+            try:
+                discovered = (
+                    tuple(candidates) if candidates is not None
+                    else discovery())
+            except Exception as exc:
+                record = PluginRecord(
+                    id="<discovery>",
+                    state=PluginState.FAILED,
+                    enabled=False,
+                )
+                self._record_exception(
+                    record, "discovery", "discovery_failed", exc)
+                self._records.append(record)
+                return
             discovered = tuple(sorted(
                 discovered,
                 key=lambda item: (
@@ -181,6 +200,9 @@ class PluginManager(QObject):
             except Exception as exc:
                 self._record_exception(
                     record, "callback", "document_callback_failed", exc)
+        refresh = getattr(self.command_host, "refresh_enablement", None)
+        if callable(refresh):
+            refresh()
 
     def set_enabled(self, plugin_id, enabled):
         enabled_ids = set(self._enabled_ids())
@@ -199,6 +221,7 @@ class PluginManager(QObject):
         if any(record.id == plugin_id and record.is_active
                for record in self._records):
             raise RuntimeError("active plugins can only be forgotten after restart")
+        settings_before = deepcopy(self.settings.data)
         plugins = self._plugins_settings_copy()
         plugins["enabled"] = [
             item for item in plugins.get("enabled", ()) if item != plugin_id]
@@ -206,9 +229,23 @@ class PluginManager(QObject):
             values = plugins.get(section)
             if isinstance(values, dict):
                 values.pop(plugin_id, None)
-        self._replace_plugins_settings(plugins)
+        self.settings["plugins"] = plugins
+        forget_shortcuts = getattr(self.command_host, "forget", None)
+        try:
+            saved = (
+                forget_shortcuts(plugin_id)
+                if callable(forget_shortcuts) else None)
+            if saved is None:
+                saved = self.settings.save()
+        except Exception:
+            self.settings.data = settings_before
+            raise
+        if not saved:
+            self.settings.data = settings_before
+            return False
         self._records = [record for record in self._records
                          if record.id != plugin_id or record.candidate is not None]
+        return True
 
     def shutdown(self):
         if self._shutting_down:
@@ -258,6 +295,7 @@ class PluginManager(QObject):
                 state=state,
                 enabled=candidate.id in enabled,
                 candidate=candidate,
+                metadata=self._cached_metadata(candidate.id),
                 diagnostics=list(candidate.diagnostics),
             ))
         configured = set(enabled)
@@ -269,6 +307,7 @@ class PluginManager(QObject):
                 id=plugin_id,
                 state=PluginState.UNAVAILABLE,
                 enabled=plugin_id in enabled,
+                metadata=self._cached_metadata(plugin_id),
             ))
 
     def _activate(self, record):
@@ -319,7 +358,8 @@ class PluginManager(QObject):
                         "Command ID already registered: %s" % command_id)
                 staged[command_id] = command
             host_cleanup = self.command_host.commit(
-                record.id, dict(staged), self.invoke_command)
+                record.id, dict(staged), self.invoke_command,
+                self.command_enabled)
             if not callable(host_cleanup):
                 raise _ValidationFailure(
                     "invalid_command_host", "Command host did not return cleanup.")
@@ -332,6 +372,10 @@ class PluginManager(QObject):
             record.command_cleanup = host_cleanup
             record.state = PluginState.ACTIVE
             self._activation_order.append(record)
+            self._cache_metadata(record)
+            refresh = getattr(self.command_host, "refresh_enablement", None)
+            if callable(refresh):
+                refresh()
         except _ValidationFailure as exc:
             self.settings.data = settings_before
             if host_cleanup is not None:
@@ -343,6 +387,7 @@ class PluginManager(QObject):
             record.state = exc.state
             self._record_diagnostic(
                 record, "validation", exc.code, str(exc))
+            self._cache_metadata(record)
         except Exception as exc:
             self.settings.data = settings_before
             if host_cleanup is not None:
@@ -354,6 +399,7 @@ class PluginManager(QObject):
             record.state = PluginState.FAILED
             phase = "activation" if plugin is not None else "factory"
             self._record_exception(record, phase, "%s_failed" % phase, exc)
+            self._cache_metadata(record)
 
     def _validate_plugin(self, record, plugin, metadata_value):
         if not callable(getattr(plugin, "activate", None)):
@@ -487,6 +533,61 @@ class PluginManager(QObject):
     def _plugins_settings_copy(self):
         plugins = self.settings.get("plugins", {})
         return deepcopy(plugins) if isinstance(plugins, dict) else {}
+
+    def _cached_metadata(self, plugin_id):
+        cached = self._plugins_settings_copy().get("metadata", {})
+        value = cached.get(plugin_id) if isinstance(cached, dict) else None
+        if not isinstance(value, dict):
+            return None
+        try:
+            capabilities = tuple(
+                PluginCapability(item) for item in value["capabilities"])
+            return PluginMetadata(
+                id=plugin_id,
+                display_name=value["display_name"],
+                version=value["version"],
+                api_major=int(value["api_major"]),
+                capabilities=capabilities,
+                description=value.get("description", ""),
+                homepage=value.get("homepage", ""),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _cache_metadata(self, record):
+        value = record.metadata
+        if not isinstance(value, PluginMetadata) \
+                or value.id != record.id \
+                or not is_valid_plugin_id(value.id) \
+                or type(value.api_major) is not int \
+                or not isinstance(value.display_name, str) \
+                or not value.display_name.strip() \
+                or not isinstance(value.version, str) \
+                or not value.version.strip() \
+                or not isinstance(value.description, str) \
+                or not isinstance(value.homepage, str) \
+                or not isinstance(value.capabilities, tuple) \
+                or any(not isinstance(item, PluginCapability)
+                       for item in value.capabilities):
+            return
+        plugins = self._plugins_settings_copy()
+        cached = plugins.setdefault("metadata", {})
+        if not isinstance(cached, dict):
+            cached = {}
+            plugins["metadata"] = cached
+        cached[record.id] = {
+            "display_name": value.display_name,
+            "version": value.version,
+            "api_major": value.api_major,
+            "capabilities": [item.value for item in value.capabilities],
+            "description": value.description,
+            "homepage": value.homepage,
+        }
+        try:
+            self._replace_plugins_settings(plugins)
+        except Exception as exc:
+            self._record_exception(
+                record, "settings", "metadata_cache_failed", exc)
 
     def _replace_plugins_settings(self, plugins):
         before = deepcopy(self.settings.data)

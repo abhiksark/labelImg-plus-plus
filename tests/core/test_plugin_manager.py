@@ -494,3 +494,31 @@ def test_unavailable_config_is_retained_until_forget(tmp_path):
         assert "gone.plugin" not in settings.get("plugins")["config"]
     finally:
         _shutdown(manager, coordinator)
+
+
+def test_validated_metadata_is_cached_without_reloading_disabled_plugin(tmp_path):
+    plugin_id = "com.example.cached"
+    plugin = _Plugin(plugin_id)
+    settings, coordinator, manager = _host(
+        tmp_path, [plugin_id], [_candidate(plugin_id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+        cached = settings.get("plugins")["metadata"][plugin_id]
+        assert cached["api_major"] == 1
+        assert cached["capabilities"] == ["commands"]
+        manager.set_enabled(plugin_id, False)
+    finally:
+        _shutdown(manager, coordinator)
+
+    second_coordinator = TaskCoordinator(logical_cpus=1)
+    loads = []
+    second = PluginManager(
+        settings, second_coordinator,
+        candidates=[_candidate(plugin_id, lambda: loads.append(True))])
+    try:
+        record = second.record_for(plugin_id)
+        assert record.state == PluginState.DISABLED
+        assert record.metadata == plugin.metadata
+        assert loads == []
+    finally:
+        _shutdown(second, second_coordinator)
