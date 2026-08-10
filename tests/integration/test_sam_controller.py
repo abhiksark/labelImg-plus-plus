@@ -3,7 +3,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import pytest
-from PyQt5.QtCore import QPointF, QThreadPool
+from PyQt5.QtCore import QPointF
 from PyQt5.QtWidgets import QApplication
 
 from libs.core.sam_controller import SamController
@@ -77,7 +77,7 @@ def test_happy_path_commits_polygon():
     ctrl.backend = _FakeBackend()
     ctrl._embedded_key = mw.file_path          # skip embedding (rgb None)
     ctrl.segment_at(QPointF(50, 50))
-    QThreadPool.globalInstance().waitForDone(3000)
+    ctrl._standalone_pool.waitForDone(3000)
     app.processEvents()
     assert len(mw.canvas.committed) == 1
     assert len(mw.canvas.committed[0]) >= 3
@@ -153,7 +153,7 @@ def test_first_click_loads_model_in_worker(monkeypatch):
     ctrl = SamController(mw)
     assert ctrl.backend is None
     ctrl.segment_at(QPointF(32, 32))
-    QThreadPool.globalInstance().waitForDone(3000)
+    ctrl._standalone_pool.waitForDone(3000)
     app.processEvents()
 
     assert ctrl.backend is fake                 # loaded backend stored on main thread

@@ -5,11 +5,11 @@
 from enum import Enum
 
 try:
-    from PyQt5.QtGui import QColor, QPen, QPainterPath, QFont, QFontMetrics
-    from PyQt5.QtCore import Qt, QPointF
+    from PyQt5.QtGui import QColor, QPen, QPainterPath, QFont
+    from PyQt5.QtCore import QPointF
 except ImportError:
-    from PyQt4.QtGui import QColor, QPen, QPainterPath, QFont, QFontMetrics
-    from PyQt4.QtCore import Qt, QPointF
+    from PyQt4.QtGui import QColor, QPen, QPainterPath, QFont
+    from PyQt4.QtCore import QPointF
 
 from libs.utils import distance
 import sys
@@ -53,7 +53,12 @@ class Shape(object):
     def __init__(self, label=None, line_color=None, difficult=False,
                  paint_label=False, shape_type=ShapeType.RECTANGLE):
         self.label = label
-        self.points = []
+        self._points = []
+        self._geometry_revision = 0
+        self._cached_path = None
+        self._cached_closed_path = None
+        self._cached_bounding_rect = None
+        self._cached_top_left = None
         self.fill = False
         self.selected = False
         self.difficult = difficult
@@ -78,6 +83,7 @@ class Shape(object):
 
     def close(self):
         self._closed = True
+        self._invalidate_geometry()
 
     def reach_max_points(self):
         """Return True when the shape has reached its maximum allowed vertices."""
@@ -88,10 +94,13 @@ class Shape(object):
     def add_point(self, point):
         if not self.reach_max_points():
             self.points.append(point)
+            self._invalidate_geometry()
 
     def pop_point(self):
         if self.points:
-            return self.points.pop()
+            point = self.points.pop()
+            self._invalidate_geometry()
+            return point
         return None
 
     def remove_point(self, index):
@@ -110,6 +119,7 @@ class Shape(object):
         if len(self.points) <= 3:
             return False
         self.points.pop(index)
+        self._invalidate_geometry()
         return True
 
     def insert_point(self, index, point):
@@ -122,6 +132,7 @@ class Shape(object):
         if self.shape_type != ShapeType.POLYGON:
             return
         self.points.insert(index, point)
+        self._invalidate_geometry()
 
     def midpoint_of_edge(self, i):
         """Return the midpoint between vertex i and the next vertex.
@@ -174,6 +185,28 @@ class Shape(object):
 
     def set_open(self):
         self._closed = False
+        self._invalidate_geometry()
+
+    @property
+    def points(self):
+        return self._points
+
+    @points.setter
+    def points(self, value):
+        self._points = list(value)
+        if hasattr(self, '_geometry_revision'):
+            self._invalidate_geometry()
+
+    @property
+    def geometry_revision(self):
+        return self._geometry_revision
+
+    def _invalidate_geometry(self):
+        self._geometry_revision += 1
+        self._cached_path = None
+        self._cached_closed_path = None
+        self._cached_bounding_rect = None
+        self._cached_top_left = None
 
     def paint(self, painter):
         if not self.points:
@@ -191,18 +224,21 @@ class Shape(object):
 
     def _build_paths(self):
         """Build the line and vertex paths for drawing."""
-        line_path = QPainterPath()
+        line_path = self._paint_path()
         vertex_path = QPainterPath()
-
-        line_path.moveTo(self.points[0])
-        for i, p in enumerate(self.points):
-            line_path.lineTo(p)
+        for i in range(len(self.points)):
             self.draw_vertex(vertex_path, i)
-
-        if self.is_closed():
-            line_path.lineTo(self.points[0])
-
         return line_path, vertex_path
+
+    def _paint_path(self):
+        if self._cached_closed_path is None:
+            path = QPainterPath(self.points[0])
+            for point in self.points[1:]:
+                path.lineTo(point)
+            if self.is_closed():
+                path.lineTo(self.points[0])
+            self._cached_closed_path = path
+        return self._cached_closed_path
 
     def _draw_shape(self, painter, line_path, vertex_path):
         """Draw the shape outline and vertices."""
@@ -235,12 +271,15 @@ class Shape(object):
 
     def _get_top_left_corner(self):
         """Get the top-left corner coordinates of the shape."""
+        if self._cached_top_left is not None:
+            return self._cached_top_left
         min_x = sys.maxsize
         min_y = sys.maxsize
         for point in self.points:
             min_x = min(min_x, point.x())
             min_y = min(min_y, point.y())
-        return min_x, min_y
+        self._cached_top_left = (min_x, min_y)
+        return self._cached_top_left
 
     def draw_vertex(self, path, i):
         d = self.point_size / self.scale
@@ -273,13 +312,17 @@ class Shape(object):
         return self.make_path().contains(point)
 
     def make_path(self):
-        path = QPainterPath(self.points[0])
-        for p in self.points[1:]:
-            path.lineTo(p)
-        return path
+        if self._cached_path is None:
+            path = QPainterPath(self.points[0])
+            for point in self.points[1:]:
+                path.lineTo(point)
+            self._cached_path = path
+        return self._cached_path
 
     def bounding_rect(self):
-        return self.make_path().boundingRect()
+        if self._cached_bounding_rect is None:
+            self._cached_bounding_rect = self.make_path().boundingRect()
+        return self._cached_bounding_rect
 
     def move_by(self, offset):
         self.points = [p + offset for p in self.points]
@@ -292,6 +335,7 @@ class Shape(object):
 
     def move_vertex_by(self, i, offset):
         self.points[i] = self.points[i] + offset
+        self._invalidate_geometry()
 
     def highlight_vertex(self, i, action):
         self._highlight_index = i
@@ -323,3 +367,4 @@ class Shape(object):
 
     def __setitem__(self, key, value):
         self.points[key] = value
+        self._invalidate_geometry()
