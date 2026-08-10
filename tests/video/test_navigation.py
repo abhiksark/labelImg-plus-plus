@@ -1,4 +1,6 @@
+import threading
 import time
+from unittest.mock import patch
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_types import VideoFrameRef
@@ -102,6 +104,41 @@ def test_image_video_mode_transitions_reconfigure_docks_and_cache(
         assert not window.timeline_dock.isVisible()
         assert window.file_dock.isVisible()
         assert window.frame_cache.max_images == 5
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_shutdown_waits_for_video_lane_before_closing_session_decoder(
+        tmp_path, make_video):
+    _app, window = get_main_app()
+    video = make_video(tmp_path / 'shutdown.mp4')
+    started = threading.Event()
+    finished = threading.Event()
+    closed = []
+    try:
+        assert window.open_video(video)
+        decoder = window.video_decoder
+        original_close = decoder.close
+
+        def cancellable_decode(cancelled=None):
+            started.set()
+            while cancelled is None or not cancelled():
+                time.sleep(.001)
+            finished.set()
+            return None
+
+        def observed_close():
+            closed.append(finished.is_set())
+            return original_close()
+
+        with patch.object(decoder, 'next_frame', cancellable_decode), \
+                patch.object(decoder, 'close', observed_close):
+            window.request_next_video_frame()
+            assert started.wait(1)
+            window._shutdown_workers()
+        assert finished.is_set()
+        assert closed == [True]
     finally:
         window.dirty = False
         window.close()

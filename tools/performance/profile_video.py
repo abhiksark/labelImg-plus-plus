@@ -24,7 +24,7 @@ if REPOSITORY_ROOT not in sys.path:
 if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QEventLoop, QTimer  # noqa: E402
+from PyQt5.QtCore import QEventLoop, QPointF, QTimer  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from libs.core.image_pipeline import (  # noqa: E402
@@ -201,6 +201,110 @@ def _event_loop_latency(application, path):
         decoder.close()
 
 
+def _gui_workflow_metrics(application, path):
+    """Exercise open, scrub, playback, timeline, canvas, and drawing in Qt."""
+    from labelImgPlusPlus import DocumentKind, MainWindow
+    from libs.core.shape import Shape, ShapeType
+
+    latencies = []
+    interval = .010
+    last_tick = [time.perf_counter()]
+    timer = QTimer()
+    timer.setInterval(int(interval * 1000))
+
+    def tick():
+        now = time.perf_counter()
+        latencies.append(max(0.0, now - last_tick[0] - interval) * 1000)
+        last_tick[0] = now
+
+    timer.timeout.connect(tick)
+    window = MainWindow()
+    window.show()
+    application.processEvents()
+    try:
+        with tempfile.TemporaryDirectory(
+                prefix='labelimgpp-video-gui-profile-') as root:
+            project = os.path.join(root, 'profile.labelimgpp.sqlite')
+            last_tick[0] = time.perf_counter()
+            timer.start()
+            started = time.perf_counter()
+            window.request_open_video(
+                path, project_path=project, skip_prompt=True)
+            _wait_for(
+                application,
+                lambda: window.document_kind == DocumentKind.VIDEO)
+            first_frame_ms = (time.perf_counter() - started) * 1000
+
+            scrub_started = time.perf_counter()
+            window.video_timeline._slider_pressed()
+            window.video_timeline.slider.setValue(600_000)
+            window.video_timeline._slider_released()
+            _wait_for(
+                application,
+                lambda: not window.task_coordinator.queue_depths()['video'])
+            application.processEvents()
+            scrub_seek_ms = (time.perf_counter() - scrub_started) * 1000
+
+            playback_start = window.current_video_frame_ref.pts
+            playback_started = time.perf_counter()
+            window.play_pause_video()
+            _wait_for(
+                application,
+                lambda: (window.current_video_frame_ref is not None
+                         and window.current_video_frame_ref.pts
+                         > playback_start),
+                timeout=5.0)
+            playback_advance_ms = (
+                time.perf_counter() - playback_started) * 1000
+            window.pause_video()
+
+            timeline_started = time.perf_counter()
+            window.video_timeline.repaint()
+            application.processEvents()
+            timeline_paint_ms = (
+                time.perf_counter() - timeline_started) * 1000
+
+            width = max(8, window.video_snapshot.width)
+            height = max(8, window.video_snapshot.height)
+            shape = Shape(label='profile-object',
+                          shape_type=ShapeType.RECTANGLE)
+            left, top = width * .1, height * .1
+            right, bottom = width * .3, height * .3
+            for x, y in ((left, top), (right, top),
+                         (right, bottom), (left, bottom)):
+                shape.add_point(QPointF(x, y))
+            shape.close()
+            drawing_started = time.perf_counter()
+            window._store_video_shape_as_manual(shape)
+            window._on_video_model_mutation()
+            window._materialize_video_frame(
+                window.current_video_frame_ref.pts)
+            application.processEvents()
+            drawing_commit_ms = (
+                time.perf_counter() - drawing_started) * 1000
+
+            canvas_started = time.perf_counter()
+            window.canvas.repaint()
+            application.processEvents()
+            canvas_paint_ms = (time.perf_counter() - canvas_started) * 1000
+            timer.stop()
+            return {
+                'first_frame_ms': first_frame_ms,
+                'event_loop_latency_p95_ms': percentile(latencies, .95),
+                'event_loop_latency_max_ms': max(latencies or (0.0,)),
+                'scrub_seek_ms': scrub_seek_ms,
+                'playback_advance_ms': playback_advance_ms,
+                'timeline_paint_ms': timeline_paint_ms,
+                'drawing_commit_ms': drawing_commit_ms,
+                'canvas_paint_ms': canvas_paint_ms,
+            }
+    finally:
+        timer.stop()
+        window.dirty = False
+        window.close()
+        application.processEvents()
+
+
 class _TrackingHandle:
     def __init__(self):
         self.cancelled = threading.Event()
@@ -328,9 +432,8 @@ def measured_run(video_root, application, iteration):
 
     gc.collect()
     rss_before = _rss_bytes()
-    first_frame_ms, _first = _timed_decode(cfr)
+    gui = _gui_workflow_metrics(application, cfr)
     cold, prefetched, cache_bytes, combined = _seek_metrics(long_gop)
-    event_p95, event_max = _event_loop_latency(application, cfr)
     progress_gap, cancellation = _tracking_metrics(tracking)
     image_switch_ms = _image_switch_metric(switch_image)
     export_ms = _export_metric(cfr)
@@ -339,11 +442,16 @@ def measured_run(video_root, application, iteration):
     gc.collect()
     return {
         'iteration': iteration,
-        'first_frame_ms': first_frame_ms,
+        'first_frame_ms': gui['first_frame_ms'],
         'cold_seek_p95_ms': cold,
         'prefetched_seek_p95_ms': prefetched,
-        'event_loop_latency_p95_ms': event_p95,
-        'event_loop_latency_max_ms': event_max,
+        'event_loop_latency_p95_ms': gui['event_loop_latency_p95_ms'],
+        'event_loop_latency_max_ms': gui['event_loop_latency_max_ms'],
+        'scrub_seek_ms': gui['scrub_seek_ms'],
+        'playback_advance_ms': gui['playback_advance_ms'],
+        'timeline_paint_ms': gui['timeline_paint_ms'],
+        'drawing_commit_ms': gui['drawing_commit_ms'],
+        'canvas_paint_ms': gui['canvas_paint_ms'],
         'progress_gap_max_ms': progress_gap,
         'cancellation_ack_ms': cancellation,
         'video_cache_occupancy_bytes': cache_bytes,

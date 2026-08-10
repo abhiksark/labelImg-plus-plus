@@ -204,8 +204,10 @@ jobs:
           pip install '.[video]' pytest
 
       - name: Run decoder and persistence smoke tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
-          python -m pytest tests/video/test_decoder.py tests/video/test_project.py tests/video/test_model.py tests/video/test_tracking.py tests/video/test_export.py -v
+          python -m pytest tests/video/test_decoder.py tests/video/test_project.py tests/video/test_model.py tests/video/test_tracking.py tests/video/test_export.py tests/video/test_opening.py tests/video/test_navigation.py tests/video/test_timeline.py -v
 
   build-release:
     needs: [test, sam-test, video-test, sam-video-test, video-platform-smoke]

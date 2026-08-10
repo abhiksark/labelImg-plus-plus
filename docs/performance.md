@@ -59,11 +59,14 @@ profile with reduced dimensions is available for tests. Media content is
 generated with PyAV; when the `ffmpeg` executable is present it attaches a real
 MOV display matrix for the rotation fixture.
 
-The video profiler performs one warm-up and five measured repetitions. It
-checks first-frame decode below one second, cold seek below 500 ms p95,
-prefetched lookup below 100 ms p95, event-loop latency below 50 ms p95 with no
-pause over 100 ms, progress within 250 ms, cancellation within 500 ms, the
-128 MiB combined cache ceiling, and less than 10 percent steady-state RSS
-growth across navigation, tracking, image-switch, and atomic-export cycles. It
-writes `summary.json`, `resources.csv`, cProfile output, and a
-Markdown comparison and exits nonzero on a failed gate.
+The video profiler performs one warm-up and five measured repetitions. Each
+repetition opens the video through the real `MainWindow`, scrubs through the
+timeline, advances playback, paints the timeline and canvas, and commits a
+drawn track while a Qt timer measures event-loop stalls. It also checks cold
+seek below 500 ms p95, prefetched lookup below 100 ms p95, first-frame open
+below one second, event-loop latency below 50 ms p95 with no pause over 100 ms,
+progress within 250 ms, cancellation within 500 ms, the 128 MiB combined cache
+ceiling, and less than 10 percent steady-state RSS growth across navigation,
+tracking, image-switch, and atomic-export cycles. It writes `summary.json`,
+`resources.csv`, cProfile output, and a Markdown comparison and exits nonzero
+on a failed gate.

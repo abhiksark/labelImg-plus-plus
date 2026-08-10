@@ -86,11 +86,24 @@ def _coco_document(frames, classes):
                 annotation['keypoints'] = flat
                 annotation['num_keypoints'] = count
             annotations.append(annotation)
+    has_keypoints = any(
+        observation.keypoints is not None
+        for frame in frames
+        for _track, observation in frame['accepted'])
+    categories = [
+        {'id': category_ids[name], 'name': name} for name in classes]
+    if has_keypoints:
+        from libs.core.keypoint_config import COCO_KEYPOINT_NAMES, COCO_SKELETON
+        for category in categories:
+            if category['name'].lower() == 'person':
+                category['keypoints'] = list(COCO_KEYPOINT_NAMES)
+                category['skeleton'] = [
+                    [start + 1, end + 1]
+                    for start, end in COCO_SKELETON]
     return {
         'images': images,
         'annotations': annotations,
-        'categories': [
-            {'id': category_ids[name], 'name': name} for name in classes],
+        'categories': categories,
     }
 
 
@@ -129,6 +142,41 @@ def _validate_destination(destination):
                 'export destination must be new or empty')
 
 
+def _requested_frames(decoder, request, handle):
+    """Yield exact decoded frames for the immutable export selection."""
+    every = request.sample_every_frames
+    if every is not None:
+        every = int(every)
+        if every <= 0:
+            raise VideoExportError('frame sampling interval must be positive')
+        if (request.range_start_pts is None
+                or request.range_end_pts is None):
+            raise VideoExportError(
+                'frame sampling requires a PTS range')
+        start_pts = int(request.range_start_pts)
+        end_pts = int(request.range_end_pts)
+        if end_pts < start_pts:
+            raise VideoExportError(
+                'frame sampling range end precedes its start')
+        result = decoder.seek_pts(
+            start_pts, mode='at_or_after', cancelled=handle.is_cancelled)
+        frame_index = 0
+        while result is not None and result.frame_ref.pts <= end_pts:
+            handle.check_cancelled()
+            if frame_index % every == 0:
+                yield result
+            frame_index += 1
+            result = decoder.next_frame(cancelled=handle.is_cancelled)
+        return
+
+    for frame_ref in request.frame_refs:
+        handle.check_cancelled()
+        result = decoder.seek_pts(
+            frame_ref.pts, mode='nearest', cancelled=handle.is_cancelled)
+        if result is not None:
+            yield result
+
+
 def export_video_frames(request, handle):
     """Stage all output and publish only after every frame succeeds."""
     destination = os.path.abspath(request.destination)
@@ -160,13 +208,11 @@ def export_video_frames(request, handle):
                      else 'jpg')
         staged_frames = []
         seen_pts = set()
-        total = len(request.frame_refs)
-        for index, frame_ref in enumerate(request.frame_refs, 1):
-            handle.check_cancelled()
-            result = decoder.seek_pts(
-                frame_ref.pts, mode='nearest',
-                cancelled=handle.is_cancelled)
-            if result is None or result.frame_ref.pts in seen_pts:
+        total = ('?' if request.sample_every_frames is not None
+                 else len(request.frame_refs))
+        for index, result in enumerate(
+                _requested_frames(decoder, request, handle), 1):
+            if result.frame_ref.pts in seen_pts:
                 continue
             seen_pts.add(result.frame_ref.pts)
             name = frame_export_name(
@@ -226,11 +272,9 @@ def export_video_frames(request, handle):
             'schema_version': 1,
             'source': {
                 'path': os.path.basename(request.source_path),
-                'size': request.frame_refs[0].fingerprint.size
-                if request.frame_refs else 0,
-                'sampled_sha256': (
-                    request.frame_refs[0].fingerprint.sampled_sha256
-                    if request.frame_refs else None),
+                'size': decoder.fingerprint.size,
+                'mtime_ns': decoder.fingerprint.mtime_ns,
+                'sampled_sha256': decoder.fingerprint.sampled_sha256,
                 'stream_index': request.stream_index,
             },
             'frames': [{

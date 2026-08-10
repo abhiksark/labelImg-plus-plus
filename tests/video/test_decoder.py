@@ -92,6 +92,28 @@ def test_vfr_seek_selects_nearest_presentation_timestamp(
         decoder.close()
 
 
+def test_next_frame_after_nearest_seek_returns_unconsumed_successor(
+        tmp_path, make_video):
+    path = make_video(
+        tmp_path / 'vfr-next.mkv', container_format='matroska',
+        variable_rate=True)
+    decoder = VideoDecoderSession(path)
+    try:
+        decoded = [decoder.decode_first().frame_ref.pts]
+        while True:
+            result = decoder.next_frame()
+            if result is None:
+                break
+            decoded.append(result.frame_ref.pts)
+
+        target = (decoded[6] + decoded[7]) // 2
+        sought = decoder.seek_pts(target)
+        expected_index = decoded.index(sought.frame_ref.pts) + 1
+        assert decoder.next_frame().frame_ref.pts == decoded[expected_index]
+    finally:
+        decoder.close()
+
+
 def test_display_matrix_rotation_overrides_stream_metadata():
     stream = SimpleNamespace(
         metadata={'rotate': '180'}, side_data={'DISPLAYMATRIX': 90.0})

@@ -202,9 +202,11 @@ class TaskCoordinator(QObject):
     def shutdown(self, wait_ms=500):
         self._shutting_down = True
         self.cancel_all()
+        all_done = True
         for lane in self._lanes.values():
             lane.pool.clear()
-            lane.pool.waitForDone(wait_ms)
+            all_done = lane.pool.waitForDone(wait_ms) and all_done
+        return all_done
 
     def _drop_cancelled(self, lane):
         if not lane.pending:

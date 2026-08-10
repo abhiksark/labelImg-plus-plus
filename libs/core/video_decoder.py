@@ -177,6 +177,7 @@ class VideoDecoderSession:
             self.average_rate_num = self.average_rate_den = None
         self._iterator = iter(self.container.decode(self.stream))
         self._history = []
+        self._lookahead = []
         self._closed = False
 
     def _result(self, frame):
@@ -218,6 +219,10 @@ class VideoDecoderSession:
         raise VideoDecodeError('video stream contains no decodable frames')
 
     def next_frame(self, cancelled=None):
+        if self._lookahead:
+            if cancelled is not None and cancelled():
+                return None
+            return self._lookahead.pop(0)
         for frame in self._iterator:
             if cancelled is not None and cancelled():
                 return None
@@ -228,6 +233,7 @@ class VideoDecoderSession:
     def seek_pts(self, target_pts, mode='nearest', cancelled=None):
         """Seek to a stream PTS and decode forward from a keyframe."""
         target_pts = int(target_pts)
+        self._lookahead = []
         self.container.seek(
             target_pts, stream=self.stream, backward=True, any_frame=False)
         self._iterator = iter(self.container.decode(self.stream))
@@ -247,6 +253,10 @@ class VideoDecoderSession:
                     return result
                 if abs(previous.frame_ref.pts - target_pts) <= abs(
                         pts - target_pts):
+                    # Decoding the right-hand candidate advanced PyAV's
+                    # iterator. Preserve it so sequential Next returns the
+                    # actual successor of the frame selected by this seek.
+                    self._lookahead.append(result)
                     return previous
                 return result
             previous = result
@@ -296,5 +306,6 @@ class VideoDecoderSession:
         container = getattr(self, 'container', None)
         self.container = None
         self._iterator = iter(())
+        self._lookahead = []
         if container is not None:
             container.close()

@@ -1,7 +1,9 @@
+import threading
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PyQt5.QtCore import QPointF
+from PyQt5.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_project import load_project
@@ -160,7 +162,6 @@ def test_verify_and_explicit_save_are_durable(tmp_path, make_video):
 
 def test_mutation_during_async_save_is_chained_into_next_delta(
         tmp_path, make_video):
-    import threading
     app, window = get_main_app()
     video = make_video(tmp_path / 'clip.mp4')
     gate = threading.Event()
@@ -214,5 +215,45 @@ def test_async_save_failure_retains_overlay_and_dirty_state(
         assert window.actions.save.isEnabled()
         assert 'disk unavailable' in window.statusBar().currentMessage()
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_close_with_save_ignores_first_event_until_async_commit_finishes(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'close-save.mp4')
+    gate = threading.Event()
+    started = threading.Event()
+    from libs.core.video_project import save_project_delta
+
+    def delayed(request, cancelled=None, begin_commit=None):
+        started.set()
+        gate.wait(2)
+        return save_project_delta(
+            request, cancelled=cancelled, begin_commit=begin_commit)
+
+    event = MagicMock()
+    try:
+        assert window.open_video(video)
+        _seed_track(window)
+        with patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch(
+                'labelImgPlusPlus.save_project_delta', delayed), patch.object(
+                window, 'close', return_value=True) as close:
+            window.closeEvent(event)
+            assert started.wait(1)
+            event.ignore.assert_called_once_with()
+            event.accept.assert_not_called()
+            assert window._video_close_save_pending is True
+            assert window.task_coordinator.is_shutting_down is False
+
+            gate.set()
+            assert _wait(app, lambda: close.called)
+            assert window._video_close_save_pending is False
+            assert window.dirty is False
+    finally:
+        gate.set()
         window.dirty = False
         window.close()

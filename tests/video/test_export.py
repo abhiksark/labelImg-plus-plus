@@ -7,7 +7,7 @@ import pytest
 from libs.core.task_coordinator import JobCancelled
 from libs.core.video_decoder import VideoDecoderSession
 from libs.core.video_export import (
-    VideoExportError, export_video_frames, frame_export_name,
+    VideoExportError, _coco_document, export_video_frames, frame_export_name,
 )
 from libs.core.video_types import (
     FrameStateRecord, ObservationRecord, TrackRecord, VideoExportRequest,
@@ -143,3 +143,55 @@ def test_cancel_removes_only_owned_staging_tree(tmp_path, make_video):
              if path.name.startswith('.labelimgpp-export-')
              and path != unrelated]
     assert owned == []
+
+
+def test_vfr_every_n_frames_samples_decoded_sequence_not_average_rate(
+        tmp_path, make_video):
+    source = make_video(
+        tmp_path / 'vfr.mkv', container_format='matroska',
+        variable_rate=True)
+    decoder = VideoDecoderSession(source)
+    try:
+        results = [decoder.decode_first()]
+        while True:
+            result = decoder.next_frame()
+            if result is None:
+                break
+            results.append(result)
+    finally:
+        decoder.close()
+
+    request = VideoExportRequest(
+        source_path=source, project_path='',
+        destination=str(tmp_path / 'vfr-export'), stream_index=0,
+        frame_refs=(results[0].frame_ref, results[-1].frame_ref),
+        observations=(), tracks=(), frame_states=(),
+        annotation_format=LabelFileFormat.PASCAL_VOC,
+        range_start_pts=results[0].frame_ref.pts,
+        range_end_pts=results[-1].frame_ref.pts,
+        sample_every_frames=2)
+    export_video_frames(request, _Handle())
+    manifest = json.loads((tmp_path / 'vfr-export' /
+                           'video_export_manifest.json').read_text())
+    assert [item['pts'] for item in manifest['frames']] == [
+        result.frame_ref.pts for result in results[::2]]
+    assert manifest['source']['mtime_ns'] == \
+        results[0].frame_ref.fingerprint.mtime_ns
+
+
+def test_video_coco_keypoints_preserve_person_category_schema():
+    from libs.core.keypoint_config import COCO_KEYPOINT_NAMES, COCO_SKELETON
+
+    track = TrackRecord(
+        'person-1', 'person', 'rectangle', (0, 255, 0, 255))
+    observation = ObservationRecord(
+        track.track_id, 0, [1, 2, 20, 30],
+        keypoints=[[index, index + 1, 2] for index in range(17)])
+    document = _coco_document([{
+        'name': 'frame.jpg', 'width': 64, 'height': 48,
+        'accepted': ((track, observation),), 'verified': False,
+    }], ('person',))
+    category = document['categories'][0]
+    assert category['keypoints'] == list(COCO_KEYPOINT_NAMES)
+    assert category['skeleton'] == [
+        [start + 1, end + 1] for start, end in COCO_SKELETON]

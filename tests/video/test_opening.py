@@ -185,3 +185,48 @@ def test_changed_source_can_create_a_separate_project(
     finally:
         window.dirty = False
         window.close()
+
+
+def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
+        tmp_path, make_video):
+    _app, window = get_main_app()
+    video = make_video(tmp_path / 'read-only.mp4')
+    try:
+        assert window.open_video(video)
+        pts = window.current_video_frame_ref.pts
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_manual(
+            track.track_id, pts, [2, 3, 22, 23])
+        window._on_video_model_mutation()
+        assert window.save_video_project()
+        project = window.video_snapshot.project_path
+
+        with patch.object(
+                window, '_video_project_target', return_value=(project, True)):
+            assert window.open_video(video)
+        before = window.video_model.snapshot_state()
+        shape = window.canvas.shapes[0]
+        item = window.shapes_to_items[shape]
+        window.canvas.select_shape(shape)
+
+        assert window.video_snapshot.read_only is True
+        assert window.canvas.locked is True
+        assert not window.actions.verify.isEnabled()
+        assert not window.actions.delete.isEnabled()
+        assert not window.actions.videoAddKeyframe.isEnabled()
+        assert window.request_verify_image() is None
+        window.delete_selected_shape()
+        window.add_track_keyframe()
+        item.setText('changed')
+        window.copy_to_clipboard()
+        window.set_dirty()
+
+        assert window.video_model.snapshot_state() == before
+        assert item.text() == 'car'
+        assert not window.actions.pasteFromClipboard.isEnabled()
+        assert window.dirty is False
+        assert window.request_save_video_project() is None
+    finally:
+        window.dirty = False
+        window.close()

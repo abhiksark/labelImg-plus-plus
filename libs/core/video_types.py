@@ -177,4 +177,6 @@ class VideoExportRequest:
     image_format: str = 'jpg'
     jpeg_quality: int = 95
     class_order: tuple = ()
-
+    range_start_pts: object = None
+    range_end_pts: object = None
+    sample_every_frames: object = None
