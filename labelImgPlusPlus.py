@@ -6,6 +6,7 @@ import os.path
 import platform
 import shutil
 import sys
+import threading
 import webbrowser as wb
 from functools import partial
 
@@ -13,13 +14,13 @@ try:
     from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
     from PyQt5.QtCore import (
         Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
-        QVariant, QObject, QRunnable, pyqtSignal
+        QVariant
     )
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
         QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
-        QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-        QProgressDialog, QScrollArea, QTabWidget, QToolButton,
+        QListWidget, QMainWindow, QMenu, QMessageBox,
+        QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
 except ImportError:
@@ -33,13 +34,13 @@ except ImportError:
     from PyQt4.QtGui import (
         QColor, QCursor, QImage, QImageReader, QPixmap,
         QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
-        QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-        QMainWindow, QMenu, QMessageBox, QProgressDialog, QScrollArea,
+        QFileDialog, QHBoxLayout, QLabel, QListWidget,
+        QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
     from PyQt4.QtCore import (
         Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
-        QVariant, QObject, QRunnable, pyqtSignal
+        QVariant
     )
 
 # Widgets
@@ -56,8 +57,6 @@ from libs.widgets.statsWidget import StatsWidget
 from libs.widgets.labelCheckerDialog import LabelCheckerDialog
 from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
-from libs.widgets.stats_controller import StatsController
-from libs.widgets.gallery_status_controller import GalleryStatusController
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -68,6 +67,16 @@ from libs.core.commands import (
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.sam_controller import SamController
+from libs.core.annotation_catalog import AnnotationCatalog
+from libs.core.dataset import DatasetSnapshot
+from libs.core.image_pipeline import FrameCache, load_image_result
+from libs.core.save_pipeline import (
+    SaveRequest, target_path as annotation_target_path, write_save_request,
+)
+from libs.core.task_coordinator import JobPriority, TaskCoordinator
+from libs.core.profiling import (
+    hash_path, recorder as trace_recorder, trace_span,
+)
 from libs.integrations import segmentation
 
 # Formats
@@ -108,7 +117,7 @@ from libs.utils.ustr import ustr
 from libs.utils.hashableQListWidgetItem import HashableQListWidgetItem
 
 # Resources
-from libs.resources import *
+from libs.resources import *  # noqa: F403
 
 __appname__ = 'labelImgPlusPlus'
 
@@ -132,152 +141,15 @@ class WindowMixin(object):
         return toolbar
 
 
-def _probe_status(image_path, save_dir, image_list=None):
+def _probe_status(image_path, save_dir, image_list=None, resolver=None):
     """Map the shared annotation probe to an AnnotationStatus enum value."""
-    info = probe_annotation(image_path, save_dir, image_list=image_list)
+    info = probe_annotation(
+        image_path, save_dir, image_list=image_list, resolver=resolver)
     if info.verified:
         return AnnotationStatus.VERIFIED
     if info.has_labels:
         return AnnotationStatus.HAS_LABELS
     return AnnotationStatus.NO_LABELS
-
-
-class StatisticsWorkerSignals(QObject):
-    """Thread-safe signals for statistics worker."""
-    progress = pyqtSignal(int, int, int, dict)  # total, annotated, verified, label_counts
-    finished = pyqtSignal()
-    error = pyqtSignal(str)  # Error reporting
-
-
-class StatisticsWorker(QRunnable):
-    """Thread-safe worker for background statistics computation."""
-
-    def __init__(self, image_list, save_dir=None):
-        super().__init__()
-        self.setAutoDelete(True)  # Explicit cleanup by Qt
-
-        # Copy all data to avoid shared state issues
-        self.image_list = list(image_list)
-        self.save_dir = save_dir  # Snapshot of value
-
-        self.signals = StatisticsWorkerSignals()
-        self._cancel_event = __import__('threading').Event()  # Thread-safe cancellation
-
-    def cancel(self):
-        """Thread-safe cancellation."""
-        self._cancel_event.set()
-
-    def is_cancelled(self):
-        """Check cancellation state."""
-        return self._cancel_event.is_set()
-
-    def run(self):
-        """Compute statistics with proper error handling."""
-        error_occurred = False
-        try:
-            total = len(self.image_list)
-            annotated = 0
-            verified = 0
-            label_counts = {}
-
-            for i, img_path in enumerate(self.image_list):
-                if self.is_cancelled():
-                    return  # Clean exit on cancel
-
-                try:
-                    # Use stateless computation (no cache access)
-                    status = self._compute_status(img_path)
-                    if status != AnnotationStatus.NO_LABELS:
-                        annotated += 1
-                    if status == AnnotationStatus.VERIFIED:
-                        verified += 1
-
-                    labels = self._compute_labels(img_path)
-                    for label in labels:
-                        label_counts[label] = label_counts.get(label, 0) + 1
-                except Exception:
-                    # Log but continue processing other images
-                    pass
-
-                # Emit progress every 50 images
-                if (i + 1) % 50 == 0 or i == total - 1:
-                    self.signals.progress.emit(total, annotated, verified, label_counts.copy())
-
-        except Exception as e:
-            error_occurred = True
-            self.signals.error.emit(str(e))
-        finally:
-            if not error_occurred and not self.is_cancelled():
-                self.signals.finished.emit()
-
-    def _compute_status(self, image_path):
-        """Thread-safe annotation status check (no shared state)."""
-        return _probe_status(image_path, self.save_dir, self.image_list)
-
-    def _compute_labels(self, img_path):
-        """Thread-safe label extraction (no shared state)."""
-        return probe_annotation(
-            img_path, self.save_dir, want_labels=True,
-            image_list=self.image_list).labels
-
-
-class StatusRefreshWorkerSignals(QObject):
-    """Signals for status refresh worker."""
-    batch_ready = pyqtSignal(dict)  # {path: AnnotationStatus} batch
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-
-class StatusRefreshWorker(QRunnable):
-    """Async worker for computing annotation statuses in background."""
-
-    def __init__(self, image_list, save_dir=None, batch_size=100):
-        super().__init__()
-        self.setAutoDelete(True)
-        self.image_list = list(image_list)
-        self.save_dir = save_dir
-        self.batch_size = batch_size
-        self.signals = StatusRefreshWorkerSignals()
-        self._cancel_event = __import__('threading').Event()
-
-    def cancel(self):
-        """Thread-safe cancellation."""
-        self._cancel_event.set()
-
-    def is_cancelled(self):
-        """Check cancellation state."""
-        return self._cancel_event.is_set()
-
-    def run(self):
-        """Compute statuses with proper error handling."""
-        error_occurred = False
-        try:
-            batch = {}
-            for img_path in self.image_list:
-                if self.is_cancelled():
-                    return
-
-                status = self._compute_status(img_path)
-                batch[img_path] = status
-
-                if len(batch) >= self.batch_size:
-                    self.signals.batch_ready.emit(batch.copy())
-                    batch.clear()
-
-            # Emit remaining batch
-            if batch and not self.is_cancelled():
-                self.signals.batch_ready.emit(batch)
-
-        except Exception as e:
-            error_occurred = True
-            self.signals.error.emit(str(e))
-        finally:
-            if not error_occurred and not self.is_cancelled():
-                self.signals.finished.emit()
-
-    def _compute_status(self, image_path):
-        """Thread-safe annotation status check (no shared state)."""
-        return _probe_status(image_path, self.save_dir, self.image_list)
 
 
 class MainWindow(QMainWindow, WindowMixin):
@@ -300,7 +172,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Load string bundle for i18n
         self.string_bundle = StringBundle.get_bundle()
-        get_str = lambda str_id: self.string_bundle.get_string(str_id)
+        def get_str(str_id):
+            return self.string_bundle.get_string(str_id)
 
         # Save as Pascal voc xml
         self.default_save_dir = default_save_dir
@@ -310,6 +183,23 @@ class MainWindow(QMainWindow, WindowMixin):
         self.m_img_list = []
         self._path_to_idx = {}  # O(1) lookup: path -> index
         self._annotation_status_cache = {}  # Cache: path -> status (reduces I/O)
+        self.task_coordinator = TaskCoordinator(parent=self)
+        self._dataset_generation = 0
+        self.dataset_snapshot = DatasetSnapshot.from_images(
+            (), save_dir=default_save_dir, generation=0)
+        # Reserve the remaining cache budget for the dock and full-screen
+        # thumbnail galleries (16 MiB each): 96 + 16 + 16 = 128 MiB total.
+        self.frame_cache = FrameCache(
+            max_images=5, max_bytes=96 * 1024 * 1024)
+        self._load_request_id = 0
+        self._pending_navigation_index = None
+        self._prefetch_handles = {}
+        self._navigation_direction = 0
+        self._navigation_streak = 0
+        self._document_revision = 0
+        self._save_handle = None
+        self._save_locks = {}
+        self._loading_veil = None
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -332,27 +222,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self._beginner = True
         self.gallery_mode_enabled = False
         self._gallery_batch_id = 0  # For cancelling pending batch processing
-        # Gallery annotation-status refresh runs through controllers that
-        # share the status cache; the full-screen and dock galleries each get
-        # one. (Replaces the duplicated _status_worker / _dock_status_worker
-        # flows and their generation counters.)
-        self._full_status_controller = GalleryStatusController(
-            widget_getter=lambda: getattr(self, 'full_gallery', None),
-            cache=self._annotation_status_cache,
-            worker_factory=StatusRefreshWorker,
-            label='Status refresh')
-        self._dock_status_controller = GalleryStatusController(
-            widget_getter=lambda: getattr(self, 'gallery_widget', None),
-            cache=self._annotation_status_cache,
-            worker_factory=StatusRefreshWorker,
-            label='Dock status')
-        # Statistics orchestration lives in its own controller; the stats
-        # widget is read lazily because the gallery panel is created on demand.
-        self.stats_controller = StatsController(
-            stats_widget_getter=lambda: getattr(self, 'gallery_stats', None),
-            worker_factory=StatisticsWorker)
-        self.stats_controller.current_image_refresh_requested.connect(
-            self._update_current_image_stats)
+        self.annotation_catalog = AnnotationCatalog(
+            self.task_coordinator, parent=self)
+        self.annotation_catalog.batch_ready.connect(
+            self._on_catalog_batch)
+        self.annotation_catalog.statistics_ready.connect(
+            self._on_catalog_statistics)
+        self.annotation_catalog.error.connect(
+            lambda message: self.status('Annotation catalog: ' + message))
         self._normal_central_widget = None
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
@@ -438,7 +315,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.itemClicked.connect(self.file_item_clicked)
 
         # Gallery widget (new thumbnail view)
-        self.gallery_widget = GalleryWidget()
+        self.gallery_widget = GalleryWidget(
+            coordinator=self.task_coordinator)
         self.gallery_widget.image_selected.connect(
             lambda path: self.gallery_image_selected(path, source='dock'))
         self.gallery_widget.image_activated.connect(self.gallery_image_activated)
@@ -514,9 +392,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Configure dock features - all docks are movable for resizing
         # DockWidgetMovable enables drag-to-rearrange and proper splitter resizing
-        dock_features_all = (QDockWidget.DockWidgetMovable |
-                             QDockWidget.DockWidgetFloatable |
-                             QDockWidget.DockWidgetClosable)
         self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
 
         # Set minimum sizes for better resize UX
@@ -548,16 +423,16 @@ class MainWindow(QMainWindow, WindowMixin):
                                  self.shortcut_config.get('open_annotation'), 'open', get_str('openAnnotationDetail'))
         copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, self.shortcut_config.get('copy_prev_bounding'), 'copy', get_str('copyPrevBounding'))
 
-        open_next_image = action(get_str('nextImg'), self.open_next_image,
+        open_next_image = action(get_str('nextImg'), self.request_next_image,
                                  self.shortcut_config.get('open_next_image'), 'next', get_str('nextImgDetail'))
 
-        open_prev_image = action(get_str('prevImg'), self.open_prev_image,
+        open_prev_image = action(get_str('prevImg'), self.request_previous_image,
                                  self.shortcut_config.get('open_prev_image'), 'prev', get_str('prevImgDetail'))
 
-        verify = action(get_str('verifyImg'), self.verify_image,
+        verify = action(get_str('verifyImg'), self.request_verify_image,
                         self.shortcut_config.get('verify'), 'verify', get_str('verifyImgDetail'))
 
-        save = action(get_str('save'), self.save_file,
+        save = action(get_str('save'), self.request_save_file,
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
 
         current_format_meta = format_metadata.meta_for_enum(self.label_file_format)
@@ -566,7 +441,7 @@ class MainWindow(QMainWindow, WindowMixin):
                              current_format_meta.icon,
                              get_str('changeSaveFormat'), enabled=True)
 
-        save_as = action(get_str('saveAs'), self.save_file_as,
+        save_as = action(get_str('saveAs'), self.request_save_file_as,
                          self.shortcut_config.get('save_as'), 'save-as', get_str('saveAsDetail'), enabled=False)
 
         close = action(get_str('closeCur'), self.close_file, self.shortcut_config.get('close'), 'close', get_str('closeCurDetail'))
@@ -861,7 +736,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Auto-save timer (Issue #13)
         self.auto_save_timer = QTimer(self)
-        self.auto_save_timer.timeout.connect(self._auto_save_triggered)
+        self.auto_save_timer.timeout.connect(self._request_auto_save_triggered)
 
         # Auto-save enabled toggle
         self.auto_save_enabled = QAction(get_str('autoSaveEnabled'), self)
@@ -1081,9 +956,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Since loading the file may take some time, make sure it runs in the background.
         if self.file_path and os.path.isdir(self.file_path):
-            self.queue_event(partial(self.import_dir_images, self.file_path or ""))
+            self.queue_event(partial(
+                self.request_import_dir_images, self.file_path or ""))
         elif self.file_path:
-            self.queue_event(partial(self.load_file, self.file_path or ""))
+            self.queue_event(partial(
+                self.request_open_file, self.file_path or ""))
 
         # Callbacks:
         self.zoom_widget.valueChanged.connect(self.paint_canvas)
@@ -1116,10 +993,6 @@ class MainWindow(QMainWindow, WindowMixin):
         # Display cursor coordinates at the right of status bar
         self.label_coordinates = QLabel('')
         self.statusBar().addPermanentWidget(self.label_coordinates)
-
-        # Open Dir if default file
-        if self.file_path and os.path.isdir(self.file_path):
-            self.open_dir_dialog(dir_path=self.file_path, silent=True)
 
         # Start auto-save timer if enabled (Issue #13)
         if self.auto_save_enabled.isChecked():
@@ -1200,9 +1073,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _cleanup_existing_gallery(self):
         """Clean up any existing gallery resources."""
-        # Cancel any running workers with proper cleanup
-        self._cleanup_stats_worker()
-        self._cleanup_status_worker()
         if hasattr(self, 'full_gallery') and self.full_gallery:
             try:
                 self.full_gallery.image_selected.disconnect()
@@ -1232,14 +1102,15 @@ class MainWindow(QMainWindow, WindowMixin):
         layout.setSpacing(0)
 
         # Gallery widget (main area)
-        self.full_gallery = GalleryWidget(show_size_slider=True)
+        self.full_gallery = GalleryWidget(
+            show_size_slider=True, coordinator=self.task_coordinator)
         # Apply current theme to full gallery
         if hasattr(self, '_current_theme'):
             self.full_gallery.apply_theme(self._current_theme)
         self.full_gallery.set_save_dir(self.default_save_dir)
         self.full_gallery.set_status_filter(
             self.status_filter_combo.currentIndex())
-        self.full_gallery.set_image_list(self.m_img_list)
+        self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
         self.full_gallery.image_selected.connect(
             lambda path: self.gallery_image_selected(path, source='full'))
         self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
@@ -1261,13 +1132,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.gallery_image_activated(image_path)
 
     def _refresh_full_gallery_statuses(self):
-        """Update statuses for the full-screen gallery via async worker."""
-        self._full_status_controller.refresh(
-            self.m_img_list, self.default_save_dir)
-
-    def _cleanup_status_worker(self):
-        """Cancel the full-screen gallery status worker."""
-        self._full_status_controller.cleanup()
+        """Apply the shared progressive catalog to the full gallery."""
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.update_all_statuses(
+                self._annotation_status_cache)
+        self._ensure_annotation_catalog()
 
     def populate_mode_actions(self):
         if self.beginner():
@@ -1300,6 +1169,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.tools.set_expanded(True)
 
     def set_dirty(self):
+        self._document_revision += 1
         self.dirty = True
         self.actions.save.setEnabled(True)
         self.update_save_status(saved=False)
@@ -1379,6 +1249,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._update_save_status_style(saved)
 
     def reset_state(self):
+        self._restart_workers_if_needed()
         self.items_to_shapes.clear()
         self.shapes_to_items.clear()
         self.rect_label_list.clear()
@@ -1395,6 +1266,26 @@ class MainWindow(QMainWindow, WindowMixin):
         # Reset status bar widgets
         self.label_box_count.setText('Boxes: 0')
         self.update_save_status(saved=True)
+
+    def _restart_workers_if_needed(self):
+        coordinator = getattr(self, 'task_coordinator', None)
+        if coordinator is None or not coordinator.is_shutting_down:
+            return
+        self.task_coordinator = TaskCoordinator(parent=self)
+        old_catalog = self.annotation_catalog
+        self.annotation_catalog = AnnotationCatalog(
+            self.task_coordinator, parent=self)
+        self.annotation_catalog.batch_ready.connect(
+            self._on_catalog_batch)
+        self.annotation_catalog.statistics_ready.connect(
+            self._on_catalog_statistics)
+        self.annotation_catalog.error.connect(
+            lambda message: self.status('Annotation catalog: ' + message))
+        old_catalog.deleteLater()
+        if hasattr(self, 'gallery_widget'):
+            self.gallery_widget.set_task_coordinator(self.task_coordinator)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_task_coordinator(self.task_coordinator)
 
     def current_item(self):
         """Return the currently selected item from either label list."""
@@ -1503,8 +1394,10 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if self.canvas.mode == self.canvas.CREATE_SAM:
             self.canvas.set_editing(True)
+            self.sam_controller.set_enabled(False)
             return
         self.canvas.set_sam_mode(True)
+        self.sam_controller.set_enabled(True)
         # set_sam_mode does not emit drawingPolygon, so re-enable the mode-switch
         # actions here (mirroring create_polygon_mode) so the user can leave SAM.
         self.actions.create.setEnabled(True)
@@ -1649,7 +1542,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.cur_img_idx = self._path_to_idx.get(item_path, 0)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
-            self.load_file(filename)
+            self.request_load_file(filename)
 
     def file_item_clicked(self, item=None):
         """Handle single click on file list item - sync gallery selection."""
@@ -1696,7 +1589,7 @@ class MainWindow(QMainWindow, WindowMixin):
         """Handle double-click on gallery thumbnail - load image."""
         if image_path in self._path_to_idx:
             self.cur_img_idx = self._path_to_idx[image_path]
-            self.load_file(image_path)
+            self.request_load_file(image_path)
 
     def on_file_view_tab_changed(self, index):
         """Handle tab switch between list and gallery view."""
@@ -1709,8 +1602,13 @@ class MainWindow(QMainWindow, WindowMixin):
         if use_cache and image_path in self._annotation_status_cache:
             return self._annotation_status_cache[image_path]
 
-        status = _probe_status(
-            image_path, self.default_save_dir, self.m_img_list)
+        entry = self.annotation_catalog.entries.get(image_path)
+        if entry is not None:
+            status = AnnotationStatus(entry.status)
+        else:
+            status = _probe_status(
+                image_path, self.default_save_dir, self.m_img_list,
+                resolver=self._active_annotation_resolver(image_path))
 
         # Cache the result
         self._annotation_status_cache[image_path] = status
@@ -1724,13 +1622,85 @@ class MainWindow(QMainWindow, WindowMixin):
             self._annotation_status_cache.clear()
 
     def _refresh_gallery_statuses(self):
-        """Update all dock gallery thumbnail statuses via async worker."""
-        self._dock_status_controller.refresh(
-            self.m_img_list, self.default_save_dir)
+        """Update dock statuses from the single progressive catalog."""
+        self.gallery_widget.update_all_statuses(
+            self._annotation_status_cache)
+        self._ensure_annotation_catalog()
 
-    def _cleanup_dock_status_worker(self):
-        """Cancel the dock gallery status worker."""
-        self._dock_status_controller.cleanup()
+    def _active_annotation_resolver(self, image_path=None):
+        snapshot = getattr(self, 'dataset_snapshot', None)
+        if snapshot is None:
+            return None
+        if (image_path is not None
+                and os.path.abspath(os.fspath(image_path))
+                not in snapshot.path_to_index):
+            return None
+        return snapshot.resolver
+
+    def _shared_annotation_path(self, image_path, resolver=None):
+        if resolver is not None:
+            path = resolver.named_file(image_path, 'annotations.json')
+            if path:
+                return path
+        directories = []
+        if self.default_save_dir:
+            directories.append(ustr(self.default_save_dir))
+        directories.append(os.path.dirname(os.path.abspath(image_path)))
+        for directory in directories:
+            path = os.path.join(directory, 'annotations.json')
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _ensure_annotation_catalog(self):
+        snapshot = getattr(self, 'dataset_snapshot', None)
+        if snapshot is None or not snapshot.image_paths:
+            return
+        if (self.annotation_catalog.snapshot is not snapshot
+                or (not self.annotation_catalog.entries
+                    and self.annotation_catalog._handle is None)):
+            self.annotation_catalog.start(snapshot)
+
+    def _on_catalog_batch(self, statuses):
+        converted = {
+            path: AnnotationStatus(status)
+            for path, status in statuses.items()
+        }
+        self._annotation_status_cache.update(converted)
+        if hasattr(self, 'gallery_widget') and self.gallery_widget:
+            self.gallery_widget.update_all_statuses(converted)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.update_all_statuses(converted)
+        filter_index = (self.status_filter_combo.currentIndex()
+                        if hasattr(self, 'status_filter_combo') else 0)
+        if filter_index:
+            for path, status in converted.items():
+                index = self._path_to_idx.get(path)
+                if index is not None and index < self.file_list_widget.count():
+                    self.file_list_widget.item(index).setHidden(
+                        not self._status_matches_filter(status, filter_index))
+
+    @staticmethod
+    def _status_matches_filter(status, index):
+        if index == 0:
+            return True
+        if index == 1:
+            return status in (
+                AnnotationStatus.HAS_LABELS, AnnotationStatus.VERIFIED)
+        if index == 2:
+            return status == AnnotationStatus.VERIFIED
+        if index == 3:
+            return status == AnnotationStatus.NO_LABELS
+        return False
+
+    def _on_catalog_statistics(self, total, annotated, verified,
+                               label_counts):
+        widget = getattr(self, 'gallery_stats', None)
+        if widget is None:
+            return
+        widget.update_dataset_stats(total, annotated, verified)
+        widget.update_label_distribution(label_counts)
+        self._update_current_image_stats()
 
     def _update_current_image_gallery_status(self):
         """Reload gallery state for the current persisted annotation."""
@@ -1808,7 +1778,7 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             self.keypoint_panel.hide()
 
-    def add_label(self, shape, row=None):
+    def add_label(self, shape, row=None, refresh=True):
         shape.paint_label = self.display_label_option.isChecked()
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -1823,10 +1793,11 @@ class MainWindow(QMainWindow, WindowMixin):
             target_list.insertItem(row, item)
         else:
             target_list.addItem(item)
-        self._update_tab_counts()
-        for action in self.actions.onShapesPresent:
-            action.setEnabled(True)
-        self.update_combo_box()
+        if refresh:
+            self._update_tab_counts()
+            for action in self.actions.onShapesPresent:
+                action.setEnabled(True)
+            self.update_combo_box()
 
     def remove_label(self, shape):
         """Remove a shape's label-list item. Returns the row it occupied
@@ -1850,53 +1821,64 @@ class MainWindow(QMainWindow, WindowMixin):
         # Scale factor for converting original coords to display coords (Issue #31)
         scale = self._image_scale_factor if hasattr(self, '_image_scale_factor') else 1.0
 
-        for shape_data in shapes:
-            # Handle 5-element (legacy), 6-element (with shape_type),
-            # and 7-element (with keypoints) tuples
-            if len(shape_data) == 7:
-                label, points, line_color, fill_color, difficult, shape_type_str, kp_data = shape_data
-            elif len(shape_data) == 6:
-                label, points, line_color, fill_color, difficult, shape_type_str = shape_data
-                kp_data = None
-            else:
-                label, points, line_color, fill_color, difficult = shape_data
-                shape_type_str = 'rectangle'
-                kp_data = None
+        for widget in (self.rect_label_list, self.poly_label_list):
+            widget.setUpdatesEnabled(False)
+            widget.blockSignals(True)
+        try:
+            for shape_data in shapes:
+                # Handle 5-element (legacy), 6-element (with shape_type),
+                # and 7-element (with keypoints) tuples
+                if len(shape_data) == 7:
+                    label, points, line_color, fill_color, difficult, shape_type_str, kp_data = shape_data
+                elif len(shape_data) == 6:
+                    label, points, line_color, fill_color, difficult, shape_type_str = shape_data
+                    kp_data = None
+                else:
+                    label, points, line_color, fill_color, difficult = shape_data
+                    shape_type_str = 'rectangle'
+                    kp_data = None
 
-            st = ShapeType.POLYGON if shape_type_str == 'polygon' else ShapeType.RECTANGLE
-            shape = Shape(label=label, shape_type=st)
-            for x, y in points:
+                st = ShapeType.POLYGON if shape_type_str == 'polygon' else ShapeType.RECTANGLE
+                shape = Shape(label=label, shape_type=st)
+                for x, y in points:
                 # Scale coordinates from original to display space
-                x = x * scale
-                y = y * scale
+                    x = x * scale
+                    y = y * scale
 
                 # Ensure the labels are within the bounds of the image. If not, fix them.
-                x, y, snapped = self.canvas.snap_point_to_canvas(x, y)
-                if snapped:
-                    self.set_dirty()
+                    x, y, snapped = self.canvas.snap_point_to_canvas(x, y)
+                    if snapped:
+                        self.set_dirty()
 
-                shape.add_point(QPointF(x, y))
-            shape.difficult = difficult
-            if kp_data:
-                shape.keypoints = [
-                    (kp[0] * scale, kp[1] * scale, kp[2])
-                    if kp is not None else None
-                    for kp in kp_data
-                ]
-            shape.close()
-            s.append(shape)
+                    shape.add_point(QPointF(x, y))
+                shape.difficult = difficult
+                if kp_data:
+                    shape.keypoints = [
+                        (kp[0] * scale, kp[1] * scale, kp[2])
+                        if kp is not None else None
+                        for kp in kp_data
+                    ]
+                shape.close()
+                s.append(shape)
 
-            if line_color:
-                shape.line_color = QColor(*line_color)
-            else:
-                shape.line_color = generate_color_by_text(label)
+                if line_color:
+                    shape.line_color = QColor(*line_color)
+                else:
+                    shape.line_color = generate_color_by_text(label)
 
-            if fill_color:
-                shape.fill_color = QColor(*fill_color)
-            else:
-                shape.fill_color = generate_color_by_text(label)
+                if fill_color:
+                    shape.fill_color = QColor(*fill_color)
+                else:
+                    shape.fill_color = generate_color_by_text(label)
 
-            self.add_label(shape)
+                self.add_label(shape, refresh=False)
+        finally:
+            for widget in (self.rect_label_list, self.poly_label_list):
+                widget.blockSignals(False)
+                widget.setUpdatesEnabled(True)
+        self._update_tab_counts()
+        for action in self.actions.onShapesPresent:
+            action.setEnabled(bool(s))
         self.update_combo_box()
         self.canvas.load_shapes(s)
 
@@ -1941,7 +1923,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if polygon_count == 0:
             return True
 
-        get_str = lambda str_id: self.string_bundle.get_string(str_id)
+        def get_str(str_id):
+            return self.string_bundle.get_string(str_id)
         msg = get_str('polygonDegradeWarning') % (polygon_count, format_name)
         reply = QMessageBox.question(
             self, 'Polygon Degradation', msg,
@@ -2040,7 +2023,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Store a copy of the selected shape
         self.clipboard_shapes = [self.canvas.selected_shape.copy()]
         self.actions.pasteFromClipboard.setEnabled(True)
-        self.statusBar().showMessage(f'Copied 1 annotation to clipboard', 3000)
+        self.statusBar().showMessage('Copied 1 annotation to clipboard', 3000)
 
     def copy_all_to_clipboard(self):
         """Copy all shapes to clipboard for pasting across images."""
@@ -2068,6 +2051,7 @@ class MainWindow(QMainWindow, WindowMixin):
             cmd = CreateShapeCommand(self, shape)
             self.undo_stack.push(cmd)
 
+        self.canvas.rebuild_spatial_index()
         self.set_dirty()
         self.canvas.update()
         self.update_box_count()
@@ -2265,6 +2249,280 @@ class MainWindow(QMainWindow, WindowMixin):
         for item, shape in self.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
+    def request_open_file(self, file_path, skip_prompt=False):
+        """Load a standalone file transactionally if it is outside the dataset."""
+        file_path = os.path.abspath(ustr(file_path))
+        if file_path in self._path_to_idx:
+            return self.request_load_file(
+                file_path, skip_prompt=skip_prompt)
+        if not skip_prompt and self.dirty:
+            if self.auto_saving.isChecked() and self.default_save_dir:
+                self.request_save_file(
+                    on_success=lambda: self.request_open_file(
+                        file_path, skip_prompt=True))
+                return None
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return None
+            if answer == QMessageBox.Yes:
+                self.request_save_file(
+                    on_success=lambda: self.request_open_file(
+                        file_path, skip_prompt=True))
+                return None
+        previous_snapshot = self.dataset_snapshot
+        self._dataset_generation = self.task_coordinator.next_generation()
+        generation = self._dataset_generation
+        save_dir = self.default_save_dir or os.path.dirname(file_path)
+        replacement = DatasetSnapshot.from_images(
+            (file_path,), root_dir=os.path.dirname(file_path),
+            save_dir=save_dir, generation=generation)
+        return self.request_load_file(
+            file_path, skip_prompt=skip_prompt,
+            replacement_snapshot=replacement,
+            previous_snapshot=previous_snapshot)
+
+    def request_load_file(self, file_path=None, skip_prompt=False,
+                          replacement_snapshot=None,
+                          previous_snapshot=None):
+        """Queue a latest-wins image load while keeping the current image live."""
+        if file_path is None:
+            file_path = self.settings.get(SETTING_FILENAME)
+        file_path = os.path.abspath(ustr(file_path))
+        if LabelFile.is_label_file(file_path):
+            self.error_message(
+                u'Cannot open annotation file',
+                u'<p>Open the image it describes instead.</p>')
+            return None
+        if not skip_prompt and self.dirty:
+            if self.auto_saving.isChecked() and self.default_save_dir:
+                self.request_save_file(
+                    on_success=lambda: self.request_load_file(
+                        file_path, skip_prompt=True,
+                        replacement_snapshot=replacement_snapshot,
+                        previous_snapshot=previous_snapshot))
+                return None
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return None
+            if answer == QMessageBox.Yes:
+                self.request_save_file(
+                    on_success=lambda: self.request_load_file(
+                        file_path, skip_prompt=True,
+                        replacement_snapshot=replacement_snapshot,
+                        previous_snapshot=previous_snapshot))
+                return None
+
+        self._load_request_id += 1
+        request_id = self._load_request_id
+        generation = self._dataset_generation
+        cached = (None if replacement_snapshot is not None
+                  else self.frame_cache.get(file_path))
+        self.canvas.setEnabled(False)
+        self._show_loading_veil('Loading %s…' % os.path.basename(file_path))
+        if cached is not None:
+            QTimer.singleShot(
+                0, lambda: self._on_image_result(
+                    cached, request_id, generation,
+                    replacement_snapshot))
+            return None
+
+        resolver = (replacement_snapshot.resolver
+                    if replacement_snapshot is not None
+                    else self._active_annotation_resolver(file_path))
+        image_list = (replacement_snapshot.image_paths
+                      if replacement_snapshot is not None
+                      else tuple(self.m_img_list))
+        save_dir = (replacement_snapshot.save_dir
+                    if replacement_snapshot is not None
+                    else self.default_save_dir)
+        label_file_format = self.label_file_format
+
+        def load(handle):
+            with trace_span('image.load', args={'path': hash_path(file_path)}):
+                return load_image_result(
+                    file_path, resolver=resolver, image_list=image_list,
+                    save_dir=save_dir, label_file_format=label_file_format,
+                    cancelled=handle.is_cancelled)
+
+        handle = self.task_coordinator.submit(
+            'interactive', load, priority=JobPriority.IMAGE_LOAD,
+            key='image-load', latest=True, generation=generation)
+        handle.result.connect(
+            lambda result, rid=request_id, gen=generation:
+            self._on_image_result(
+                result, rid, gen, replacement_snapshot))
+        handle.error.connect(
+            lambda message, rid=request_id, gen=generation:
+            self._on_image_load_error(
+                message, rid, gen, previous_snapshot))
+        return handle
+
+    def _on_image_load_error(self, message, request_id, generation,
+                             previous_snapshot=None):
+        if (request_id != self._load_request_id
+                or generation != self._dataset_generation):
+            return
+        self._pending_navigation_index = None
+        self.canvas.setEnabled(bool(self.file_path))
+        self._hide_loading_veil()
+        if previous_snapshot is not None:
+            self.dataset_snapshot = previous_snapshot.with_generation(
+                generation)
+            if self.dataset_snapshot.image_paths:
+                self.annotation_catalog.start(self.dataset_snapshot)
+        self.status('Error reading image: ' + message)
+
+    def _on_image_result(self, result, request_id, generation,
+                         replacement_snapshot=None):
+        if (result is None or request_id != self._load_request_id
+                or generation != self._dataset_generation):
+            return
+        if replacement_snapshot is not None:
+            self._commit_dataset_snapshot(replacement_snapshot)
+        self.frame_cache.put(result)
+        self._commit_image_result(result)
+        self._pending_navigation_index = None
+        self._hide_loading_veil()
+        self._schedule_prefetch(result.path)
+
+    def _commit_image_result(self, result):
+        """Apply worker data; this method is the GUI-thread mutation boundary."""
+        trace_started = None
+        if trace_recorder is not None:
+            import time
+            trace_started = time.perf_counter_ns()
+        assert QApplication.instance().thread() == self.thread()
+        self.reset_state()
+        self._image_scale_factor = result.scale_factor
+        self._original_image_size = QSize(
+            result.original_width, result.original_height)
+        self.image_data = None
+        self.image = result.image
+        self.file_path = result.path
+        self.cur_img_idx = self._path_to_idx.get(
+            result.path, self.cur_img_idx)
+        self.canvas.verified = result.verified
+        self.canvas.load_pixmap(QPixmap.fromImage(result.image))
+        if result.annotation_format is not None:
+            format_names = {
+                LabelFileFormat.PASCAL_VOC: FORMAT_PASCALVOC,
+                LabelFileFormat.YOLO: FORMAT_YOLO,
+                LabelFileFormat.CREATE_ML: FORMAT_CREATEML,
+                LabelFileFormat.COCO: FORMAT_COCO,
+                LabelFileFormat.YOLO_SEG: FORMAT_YOLO_SEG,
+            }
+            self.set_format(format_names[result.annotation_format])
+            self.load_labels(result.shapes)
+            self.label_file = LabelFile()
+            self.label_file.verified = result.verified
+        if self.lock_on_verify_option.isChecked():
+            self.canvas.locked = self.canvas.verified
+        else:
+            self.canvas.locked = False
+        if hasattr(self, 'sam_controller'):
+            self.sam_controller.on_image_changed()
+        if hasattr(self, 'show_grid_option'):
+            self.canvas._grid_enabled = self.show_grid_option.isChecked()
+            checked_action = self.grid_size_group.checkedAction()
+            self.canvas._grid_size = (
+                checked_action.data() if checked_action else 32)
+            self.canvas._edge_alignment = \
+                self.edge_alignment_option.isChecked()
+        self.set_clean()
+        self.canvas.setEnabled(True)
+        self.adjust_scale(initial=True)
+        self.paint_canvas()
+        self.add_recent_file(result.path)
+        self.toggle_actions(True)
+        if result.path in self._path_to_idx:
+            item = self.file_list_widget.item(self._path_to_idx[result.path])
+            self.file_list_widget.setCurrentItem(item)
+            self.gallery_widget.select_image(result.path)
+        self.setWindowTitle(
+            __appname__ + ' ' + result.path + ' ' + self.counter_str())
+        self.update_status_bar()
+        self.canvas.setFocus(True)
+        self._update_current_image_stats()
+        if result.annotation_error:
+            self.status('Annotation error: ' + result.annotation_error)
+        if trace_recorder is not None:
+            trace_recorder.complete(
+                'image.ui-apply', trace_started,
+                args={'path': hash_path(result.path),
+                      'shapes': len(result.shapes)})
+
+    def request_next_image(self, _value=False):
+        return self._request_relative_image(1)
+
+    def request_previous_image(self, _value=False):
+        return self._request_relative_image(-1)
+
+    def _request_relative_image(self, direction):
+        if not self.m_img_list:
+            return None
+        if self._pending_navigation_index is not None:
+            base = self._pending_navigation_index
+        elif self.file_path is None:
+            base = -1 if direction > 0 else 0
+        else:
+            base = self._path_to_idx.get(self.file_path, self.cur_img_idx)
+        target = base + direction
+        if target < 0 or target >= len(self.m_img_list):
+            return None
+        self._pending_navigation_index = target
+        if direction == self._navigation_direction:
+            self._navigation_streak += 1
+        else:
+            self._navigation_direction = direction
+            self._navigation_streak = 1
+        return self.request_load_file(self.m_img_list[target])
+
+    def _schedule_prefetch(self, current_path):
+        if current_path not in self._path_to_idx:
+            return
+        index = self._path_to_idx[current_path]
+        offsets = [-1, 1]
+        if self._navigation_streak >= 2:
+            offsets = ([1, 2] if self._navigation_direction > 0
+                       else [-1, -2])
+        desired = {
+            self.m_img_list[index + offset]
+            for offset in offsets
+            if 0 <= index + offset < len(self.m_img_list)
+        }
+        for path, handle in list(self._prefetch_handles.items()):
+            if path not in desired:
+                handle.cancel()
+                self._prefetch_handles.pop(path, None)
+        for path in desired:
+            if path in self._prefetch_handles or self.frame_cache.get(path):
+                continue
+            resolver = self._active_annotation_resolver(path)
+            image_list = tuple(self.m_img_list)
+            save_dir = self.default_save_dir
+            label_file_format = self.label_file_format
+            handle = self.task_coordinator.submit(
+                'interactive',
+                lambda job, target=path: load_image_result(
+                    target, resolver=resolver, image_list=image_list,
+                    save_dir=save_dir,
+                    label_file_format=label_file_format,
+                    cancelled=job.is_cancelled),
+                priority=JobPriority.VISIBLE_THUMBNAIL,
+                key='prefetch:' + path, latest=True,
+                generation=self._dataset_generation)
+            self._prefetch_handles[path] = handle
+            handle.result.connect(
+                lambda value, target=path: self._on_prefetch_result(
+                    target, value))
+            handle.finished.connect(
+                lambda target=path: self._prefetch_handles.pop(
+                    target, None))
+
+    def _on_prefetch_result(self, path, result):
+        if result is not None and result.path == path:
+            self.frame_cache.put(result)
+
     def load_file(self, file_path=None):
         """Load the specified file, or the last opened file if None."""
         self.reset_state()
@@ -2408,12 +2666,19 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             extensions = (XML_EXT, TXT_EXT, JSON_EXT)
 
+        resolver = self._active_annotation_resolver(file_path)
         annotation_path = find_existing_annotation(
             file_path,
             save_dir=self.default_save_dir,
             image_list=self.m_img_list,
             extensions=extensions,
+            resolver=resolver,
         )
+        if (not annotation_path
+                and self.label_file_format in (
+                    LabelFileFormat.CREATE_ML, LabelFileFormat.COCO)):
+            annotation_path = self._shared_annotation_path(
+                file_path, resolver)
         if not annotation_path:
             return
 
@@ -2437,6 +2702,8 @@ class MainWindow(QMainWindow, WindowMixin):
            and self.zoom_mode != self.MANUAL_ZOOM:
             self.adjust_scale()
         super(MainWindow, self).resizeEvent(event)
+        if self._loading_veil is not None and self._loading_veil.isVisible():
+            self._loading_veil.setGeometry(self.centralWidget().rect())
 
     def paint_canvas(self):
         assert not self.image.isNull(), "cannot paint null image"
@@ -2462,6 +2729,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def closeEvent(self, event):
         if self._reset_all_in_progress:
+            self._shutdown_workers()
             event.accept()
             return
 
@@ -2509,10 +2777,16 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_EDGE_ALIGNMENT] = self.edge_alignment_option.isChecked()
         settings[SETTING_SHORTCUTS] = self.shortcut_config.to_dict()
         settings.save()
+        self._shutdown_workers()
+
+    def _shutdown_workers(self):
+        self.annotation_catalog.cancel()
+        if hasattr(self, 'sam_controller'):
+            self.sam_controller.cancel()
+        self.task_coordinator.shutdown()
 
     def load_recent(self, filename):
-        if self.may_continue():
-            self.load_file(filename)
+        self.request_open_file(filename)
 
     def scan_all_images(self, folder_path):
         extensions = ['.%s' % fmt.data().decode("ascii").lower() for fmt in QImageReader.supportedImageFormats()]
@@ -2527,7 +2801,16 @@ class MainWindow(QMainWindow, WindowMixin):
         natural_sort(images, key=lambda x: x.lower())
         return images
 
-    def change_save_dir_dialog(self, _value=False):
+    def change_save_dir_dialog(self, _value=False, skip_prompt=False):
+        if not skip_prompt and self.dirty:
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return
+            if answer == QMessageBox.Yes:
+                self.request_save_file(
+                    on_success=lambda: self.change_save_dir_dialog(
+                        skip_prompt=True))
+                return
         if self.default_save_dir is not None:
             path = ustr(self.default_save_dir)
         else:
@@ -2538,13 +2821,25 @@ class MainWindow(QMainWindow, WindowMixin):
                                                          | QFileDialog.DontResolveSymlinks))
 
         if dir_path is not None and len(dir_path) > 1:
+            current_path = self.file_path
+            self._dataset_generation = self.task_coordinator.next_generation()
             self.default_save_dir = dir_path
+            self.dataset_snapshot = DatasetSnapshot.from_images(
+                self.dataset_snapshot.image_paths,
+                root_dir=self.dataset_snapshot.root_dir,
+                save_dir=dir_path,
+                generation=self._dataset_generation)
+            self.frame_cache.clear()
             # Clear status cache since annotation directory changed
             self._invalidate_status_cache()
             # Update gallery to reload thumbnails with annotations from new dir
             self.gallery_widget.set_save_dir(self.default_save_dir)
-
-        self.show_bounding_box_from_annotation_file(self.file_path)
+            self.gallery_widget.set_dataset_snapshot(self.dataset_snapshot)
+            if hasattr(self, 'full_gallery') and self.full_gallery:
+                self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
+            self.annotation_catalog.start(self.dataset_snapshot)
+            if current_path:
+                self.request_load_file(current_path, skip_prompt=True)
 
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
@@ -2579,27 +2874,18 @@ class MainWindow(QMainWindow, WindowMixin):
         
 
     def open_dir_dialog(self, _value=False, dir_path=None, silent=False):
-        if not self.may_continue():
-            return
-
         default_open_dir_path = dir_path if dir_path else '.'
         if self.last_open_dir and os.path.exists(self.last_open_dir):
             default_open_dir_path = self.last_open_dir
         else:
             default_open_dir_path = os.path.dirname(self.file_path) if self.file_path else '.'
-        if silent != True:
+        if not silent:
             target_dir_path = ustr(QFileDialog.getExistingDirectory(self,
                                                                     '%s - Open Directory' % __appname__, default_open_dir_path,
                                                                     QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks))
         else:
             target_dir_path = ustr(default_open_dir_path)
-        self.last_open_dir = target_dir_path
-        self.import_dir_images(target_dir_path)
-        # Only set default_save_dir if not already set (e.g., from command line)
-        if self.default_save_dir is None:
-            self.default_save_dir = target_dir_path
-        if self.file_path:
-            self.show_bounding_box_from_annotation_file(file_path=self.file_path)
+        self.request_import_dir_images(target_dir_path)
 
     def check_label_consistency(self):
         """Open dialog to check for label consistency issues in the dataset."""
@@ -2643,18 +2929,24 @@ class MainWindow(QMainWindow, WindowMixin):
         for i in range(self.file_list_widget.count()):
             item = self.file_list_widget.item(i)
             img_path = item.text()
-            show = True
-            if index == 1:  # Annotated Only
-                show = self._has_annotation(img_path)
-            elif index == 2:  # Verified Only
-                show = self._is_verified(img_path)
-            elif index == 3:  # Unannotated Only
-                show = not self._has_annotation(img_path)
+            status = self._annotation_status_cache.get(img_path)
+            if (status is None
+                    and tuple(self.m_img_list)
+                    != self.dataset_snapshot.image_paths):
+                # Compatibility for extensions that replace m_img_list
+                # directly instead of installing a DatasetSnapshot.
+                status = self._get_annotation_status(img_path)
+            # Unknown catalog entries stay visible only in All, matching the
+            # gallery's 3.0 asynchronous filter contract.
+            show = index == 0 or (
+                status is not None
+                and self._status_matches_filter(status, index))
             item.setHidden(not show)
 
         self.gallery_widget.set_status_filter(index)
         if hasattr(self, 'full_gallery') and self.full_gallery:
             self.full_gallery.set_status_filter(index)
+        self._ensure_annotation_catalog()
 
     def _has_annotation(self, img_path):
         """Check if image has an annotation file.
@@ -2665,12 +2957,18 @@ class MainWindow(QMainWindow, WindowMixin):
         Returns:
             True if an annotation file exists for the image.
         """
-        return find_existing_annotation(
+        resolver = self._active_annotation_resolver(img_path)
+        annotation_path = find_existing_annotation(
             img_path,
             save_dir=self.default_save_dir,
             image_list=self.m_img_list,
             extensions=(XML_EXT, TXT_EXT, JSON_EXT),
-        ) is not None
+            resolver=resolver,
+        )
+        if annotation_path is None:
+            annotation_path = self._shared_annotation_path(
+                img_path, resolver)
+        return annotation_path is not None
 
     def _is_verified(self, img_path):
         """Check if image annotation is verified.
@@ -2686,6 +2984,7 @@ class MainWindow(QMainWindow, WindowMixin):
             save_dir=self.default_save_dir,
             image_list=self.m_img_list,
             extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+            resolver=self._active_annotation_resolver(img_path),
         )
         if annotation_path and annotation_path.lower().endswith(XML_EXT):
             try:
@@ -2700,8 +2999,14 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.m_img_list:
             return
 
-        annotated = sum(
-            1 for img in self.m_img_list if self._has_annotation(img))
+        self._ensure_annotation_catalog()
+        if tuple(self.m_img_list) == self.dataset_snapshot.image_paths:
+            annotated = sum(
+                entry.status != 0
+                for entry in self.annotation_catalog.entries.values())
+        else:
+            annotated = sum(
+                1 for img in self.m_img_list if self._has_annotation(img))
 
         from libs.widgets.batchVerifyDialog import BatchVerifyDialog
         dialog = BatchVerifyDialog(
@@ -2713,7 +3018,31 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         verify = dialog.verify_mode
-        count, failures = self._apply_batch_verify(verify)
+        from libs.tools.batch_verify import batch_verify_atomic
+        snapshot = self.dataset_snapshot
+
+        def apply(handle):
+            return batch_verify_atomic(
+                snapshot.image_paths, snapshot.save_dir, verify, handle,
+                resolver=snapshot.resolver)
+
+        worker = self.task_coordinator.submit(
+            'background', apply, priority=JobPriority.BULK,
+            key='batch-verify', latest=True,
+            generation=snapshot.generation)
+        worker.progress.connect(
+            lambda value: self.status(
+                'Preparing verification: %d / %d' % value))
+        worker.result.connect(
+            lambda result: self._on_batch_verify_finished(
+                verify, *result))
+        worker.error.connect(
+            lambda message: self.status('Batch verification failed: ' + message))
+        return worker
+
+    def _on_batch_verify_finished(self, verify, count, failures):
+        self._annotation_status_cache.clear()
+        self.annotation_catalog.start(self.dataset_snapshot)
 
         action_label = 'Verified' if verify else 'Unverified'
         self.statusBar().showMessage(
@@ -2731,7 +3060,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 (f'<p>{action_label} {count} image(s); {len(failures)} could '
                  f'not be updated:</p><pre>{sample}</pre>'))
         if self.file_path:
-            self.load_file(self.file_path)
+            self.request_load_file(self.file_path, skip_prompt=True)
 
     def _apply_batch_verify(self, verify):
         """Set/clear the PASCAL VOC ``verified`` flag across annotated images.
@@ -2743,15 +3072,25 @@ class MainWindow(QMainWindow, WindowMixin):
             annotation whose format has no verified flag.
         """
         import xml.etree.ElementTree as ET
+        from libs.core.dataset import AnnotationResolver
         count = 0
         failures = []
+        resolver = self._active_annotation_resolver()
+        if resolver is None or tuple(self.m_img_list) != \
+                resolver.image_paths:
+            resolver = AnnotationResolver(
+                self.m_img_list, self.default_save_dir)
         for img_path in self.m_img_list:
             annotation_path = find_existing_annotation(
                 img_path,
                 save_dir=self.default_save_dir,
                 image_list=self.m_img_list,
                 extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+                resolver=resolver,
             )
+            if annotation_path is None:
+                annotation_path = resolver.named_file(
+                    img_path, 'annotations.json')
             if not annotation_path:
                 continue
             if not annotation_path.lower().endswith(XML_EXT):
@@ -2794,24 +3133,44 @@ class MainWindow(QMainWindow, WindowMixin):
                 'Please select an output directory.')
             return
 
-        from libs.tools.dataset_splitter import split_dataset, execute_split
-
-        splits = split_dataset(
-            self.m_img_list,
-            dialog.ratios,
-            seed=dialog.seed,
-            stratified=dialog.stratified,
-            save_dir=self.default_save_dir,
+        from libs.tools.dataset_splitter import (
+            execute_split_transactional, split_dataset,
         )
+        snapshot = self.dataset_snapshot
+        ratios = dict(dialog.ratios)
+        seed = dialog.seed
+        stratified = dialog.stratified
+        output_dir = dialog.output_dir
+        copy_mode = dialog.copy_mode
 
-        manifest_path = execute_split(
-            splits,
-            dialog.output_dir,
-            save_dir=self.default_save_dir,
-            copy=dialog.copy_mode,
-        )
+        def split(handle):
+            splits = split_dataset(
+                snapshot.image_paths, ratios, seed=seed,
+                stratified=stratified, save_dir=snapshot.save_dir,
+                resolver=snapshot.resolver)
+            manifest_path = execute_split_transactional(
+                splits, output_dir, save_dir=snapshot.save_dir,
+                copy=copy_mode, handle=handle,
+                resolver=snapshot.resolver)
+            return manifest_path, {
+                key: len(value) for key, value in splits.items()}
 
-        counts = {k: len(v) for k, v in splits.items()}
+        worker = self.task_coordinator.submit(
+            'background', split, priority=JobPriority.BULK,
+            key='dataset-split', latest=True,
+            generation=snapshot.generation)
+        worker.progress.connect(
+            lambda value: self.status('Splitting dataset: %d / %d' % value))
+        worker.result.connect(self._on_split_complete)
+        worker.error.connect(
+            lambda message: self.status('Dataset split failed: ' + message))
+        return worker
+
+    def _on_split_complete(self, result):
+        manifest_path, counts = result
+        if not manifest_path:
+            self.status('Dataset split cancelled')
+            return
         QMessageBox.information(
             self, 'Split Complete',
             f'Dataset split into:\n'
@@ -2822,69 +3181,149 @@ class MainWindow(QMainWindow, WindowMixin):
         )
 
     def import_dir_images(self, dir_path):
+        """Synchronous compatibility path used by tests and extensions."""
         if not self.may_continue() or not dir_path:
+            return False
+        self._dataset_generation = self.task_coordinator.next_generation()
+        with trace_span('directory.scan', args={
+                'root': hash_path(dir_path)}):
+            snapshot = DatasetSnapshot.scan(
+                dir_path, save_dir=self.default_save_dir,
+                generation=self._dataset_generation,
+                extensions=self._supported_image_extensions())
+        self._commit_dataset_snapshot(snapshot)
+        if snapshot.image_paths:
+            self.cur_img_idx = 0
+            self.load_file(snapshot.image_paths[0])
+        return True
+
+    def request_import_dir_images(self, dir_path, skip_prompt=False):
+        """Transactionally scan a directory without clearing the live dataset."""
+        if not dir_path:
+            return None
+        dir_path = os.path.abspath(ustr(dir_path))
+        if not skip_prompt and self.dirty:
+            if self.auto_saving.isChecked() and self.default_save_dir:
+                self.request_save_file(
+                    on_success=lambda: self.request_import_dir_images(
+                        dir_path, skip_prompt=True))
+                return None
+            answer = self.discard_changes_dialog()
+            if answer == QMessageBox.Cancel:
+                return None
+            if answer == QMessageBox.Yes:
+                self.request_save_file(
+                    on_success=lambda: self.request_import_dir_images(
+                        dir_path, skip_prompt=True))
+                return None
+        previous_snapshot = self.dataset_snapshot
+        self._dataset_generation = self.task_coordinator.next_generation()
+        generation = self._dataset_generation
+        save_dir = self.default_save_dir or dir_path
+        extensions = self._supported_image_extensions()
+        self._show_loading_veil('Scanning directory…')
+
+        def scan(handle):
+            with trace_span('directory.scan', args={'root': hash_path(dir_path)}):
+                return DatasetSnapshot.scan(
+                    dir_path, save_dir=save_dir, generation=generation,
+                    extensions=extensions,
+                    cancelled=handle.is_cancelled,
+                    progress=lambda visited, found: handle.report_progress(
+                        (visited, found)))
+
+        handle = self.task_coordinator.submit(
+            'background', scan, priority=JobPriority.CATALOG,
+            key='directory-scan', latest=True, generation=generation)
+        handle.progress.connect(
+            lambda value, g=generation:
+            self.status('Scanning: %d files, %d images' % value)
+            if g == self._dataset_generation else None)
+        handle.result.connect(
+            lambda snapshot, g=generation:
+            self._on_directory_snapshot(snapshot, g))
+        handle.error.connect(
+            lambda message, g=generation, previous=previous_snapshot:
+            self._on_directory_scan_error(message, g, previous))
+        return handle
+
+    def _supported_image_extensions(self):
+        return tuple(
+            '.%s' % fmt.data().decode('ascii').lower()
+            for fmt in QImageReader.supportedImageFormats())
+
+    def _on_directory_snapshot(self, snapshot, generation):
+        if generation != self._dataset_generation or snapshot is None:
             return
+        self._commit_dataset_snapshot(snapshot)
+        self._hide_loading_veil()
+        if snapshot.image_paths:
+            self.cur_img_idx = 0
+            self.request_load_file(snapshot.image_paths[0], skip_prompt=True)
 
-        self.last_open_dir = dir_path
-        self.dir_name = dir_path
-        self.file_path = None
-        self.file_list_widget.clear()
-
-        # Show progress dialog for scanning
-        progress = QProgressDialog("Scanning directory...", "Cancel", 0, 0, self)
-        progress.setWindowTitle("Loading Images")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(500)  # Only show if operation takes > 500ms
-        progress.setValue(0)
-        QApplication.processEvents()
-
-        self.m_img_list = self.scan_all_images(dir_path)
-        self._path_to_idx = {path: idx for idx, path in enumerate(self.m_img_list)}
-        self._annotation_status_cache.clear()  # Clear cache for new directory
-        self.img_count = len(self.m_img_list)
-
-        if progress.wasCanceled():
-            progress.close()
+    def _on_directory_scan_error(self, message, generation,
+                                 previous_snapshot=None):
+        if generation != self._dataset_generation:
             return
+        self._hide_loading_veil()
+        if previous_snapshot is not None:
+            self.dataset_snapshot = previous_snapshot.with_generation(
+                generation)
+            if self.dataset_snapshot.image_paths:
+                self.annotation_catalog.start(self.dataset_snapshot)
+        self.status('Directory scan failed: ' + message)
 
-        # Update progress for file list population
-        if self.img_count > 100:
-            progress.setLabelText(f"Loading {self.img_count} images...")
-            progress.setMaximum(self.img_count)
+    def _commit_dataset_snapshot(self, snapshot):
+        """Atomically replace all dataset-facing widgets on the GUI thread."""
+        trace_started = None
+        if trace_recorder is not None:
+            import time
+            trace_started = time.perf_counter_ns()
+        self.annotation_catalog.cancel()
+        self.dataset_snapshot = snapshot
+        self.last_open_dir = snapshot.root_dir
+        self.dir_name = snapshot.root_dir
+        self.default_save_dir = snapshot.save_dir
+        self.m_img_list = list(snapshot.image_paths)
+        self._path_to_idx = dict(snapshot.path_to_index)
+        self.img_count = len(snapshot.image_paths)
+        self.cur_img_idx = 0
+        self._annotation_status_cache.clear()
+        self.frame_cache.clear()
+        self.reset_state()
 
-        # Populate file list widget
-        for i, imgPath in enumerate(self.m_img_list):
-            item = QListWidgetItem(imgPath)
-            self.file_list_widget.addItem(item)
-            if self.img_count > 100 and i % 50 == 0:
-                progress.setValue(i)
-                QApplication.processEvents()
-                if progress.wasCanceled():
-                    progress.close()
-                    return
-
-        progress.setValue(self.img_count)
-
-        # Populate gallery widget with annotation directory
-        self.gallery_widget.set_save_dir(self.default_save_dir)
-        self.gallery_widget.set_image_list(self.m_img_list)
-        self._refresh_gallery_statuses()
-
-        # Update full-screen gallery if active
+        self.file_list_widget.setUpdatesEnabled(False)
+        try:
+            self.file_list_widget.clear()
+            self.file_list_widget.addItems(self.m_img_list)
+        finally:
+            self.file_list_widget.setUpdatesEnabled(True)
+        self.gallery_widget.set_dataset_snapshot(snapshot)
         if hasattr(self, 'full_gallery') and self.full_gallery:
-            self.full_gallery.set_save_dir(self.default_save_dir)
-            self.full_gallery.set_image_list(self.m_img_list)
-            self._refresh_full_gallery_statuses()
-
-        progress.close()
-
-        # Update image count in status bar
+            self.full_gallery.set_dataset_snapshot(snapshot)
         self.update_image_count()
+        if snapshot.image_paths:
+            self.annotation_catalog.start(snapshot)
+        if trace_recorder is not None:
+            trace_recorder.complete(
+                'directory.ui-apply', trace_started,
+                args={'images': len(snapshot.image_paths)})
 
-        # Refresh statistics (Issue #19)
-        self._refresh_all_statistics()
+    def _show_loading_veil(self, text):
+        if self._loading_veil is None:
+            self._loading_veil = QLabel(self.centralWidget())
+            self._loading_veil.setAlignment(Qt.AlignCenter)
+            self._loading_veil.setStyleSheet(
+                'background: rgba(20, 20, 20, 150); color: white; '
+                'font-size: 18px; padding: 20px;')
+        self._loading_veil.setText(text)
+        self._loading_veil.setGeometry(self.centralWidget().rect())
+        self._loading_veil.show()
+        self._loading_veil.raise_()
 
-        self.open_next_image()
+    def _hide_loading_veil(self):
+        if self._loading_veil is not None:
+            self._loading_veil.hide()
 
     def verify_image(self, _value=False):
         # Proceeding next image without dialog if having any label
@@ -2905,6 +3344,20 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas.locked = self.canvas.verified
             self.paint_canvas()
             self.save_file()
+
+    def request_verify_image(self, _value=False):
+        """Toggle verification and persist it through the async save lane."""
+        if self.file_path is None:
+            return None
+        if self.label_file is None:
+            self.label_file = LabelFile()
+        self.label_file.verified = not bool(self.canvas.verified)
+        self.canvas.verified = self.label_file.verified
+        if self.lock_on_verify_option.isChecked():
+            self.canvas.locked = self.canvas.verified
+        self.set_dirty()
+        self.paint_canvas()
+        return self.request_save_file()
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
@@ -2963,8 +3416,6 @@ class MainWindow(QMainWindow, WindowMixin):
             self.load_file(filename)
 
     def open_file(self, _value=False):
-        if not self.may_continue():
-            return
         path = os.path.dirname(ustr(self.file_path)) if self.file_path else '.'
         formats = ['*.%s' % fmt.data().decode("ascii").lower() for fmt in QImageReader.supportedImageFormats()]
         filters = "Image & Label files (%s)" % ' '.join(formats + ['*%s' % LabelFile.suffix])
@@ -2972,17 +3423,149 @@ class MainWindow(QMainWindow, WindowMixin):
         if filename:
             if isinstance(filename, (tuple, list)):
                 filename = filename[0]
-            self.cur_img_idx = 0
-            self.img_count = 1
-            self.load_file(filename)
+            self.request_open_file(filename)
+
+    def request_save_file(self, _value=False, on_success=None,
+                          annotation_base=None):
+        """Queue an immutable, revision-aware save for GUI workflows."""
+        if not self.file_path:
+            return None
+        degradation_formats = {
+            LabelFileFormat.YOLO: FORMAT_YOLO,
+            LabelFileFormat.CREATE_ML: FORMAT_CREATEML,
+        }
+        degradation = degradation_formats.get(self.label_file_format)
+        if degradation and not self._check_polygon_degradation(degradation):
+            return None
+
+        if annotation_base:
+            annotation_base = ustr(annotation_base)
+        elif (self.default_save_dir is not None
+              and len(ustr(self.default_save_dir))):
+            resolver = self._active_annotation_resolver(self.file_path)
+            shared_path = (
+                self._shared_annotation_path(self.file_path, resolver)
+                if self.label_file_format in (
+                    LabelFileFormat.CREATE_ML, LabelFileFormat.COCO)
+                else None)
+            annotation_base = shared_path or annotation_output_base(
+                self.file_path, ustr(self.default_save_dir), self.m_img_list,
+                resolver=resolver)
+        else:
+            image_dir = os.path.dirname(self.file_path)
+            image_stem = os.path.splitext(os.path.basename(self.file_path))[0]
+            annotation_base = os.path.join(image_dir, image_stem)
+            if self.label_file is None:
+                annotation_base = self.save_file_dialog(remove_ext=False)
+        if not annotation_base:
+            return None
+
+        inverse_scale = (1.0 / self._image_scale_factor
+                         if self._image_scale_factor else 1.0)
+        serialized = []
+        for shape in self.canvas.shapes:
+            values = {
+                'label': shape.label,
+                'line_color': shape.line_color.getRgb(),
+                'fill_color': shape.fill_color.getRgb(),
+                'points': tuple(
+                    (point.x() * inverse_scale,
+                     point.y() * inverse_scale)
+                    for point in shape.points),
+                'difficult': shape.difficult,
+                'shape_type': shape.shape_type.value,
+            }
+            if shape.keypoints is not None:
+                values['keypoints'] = tuple(
+                    (point[0] * inverse_scale,
+                     point[1] * inverse_scale, point[2])
+                    if point is not None else None
+                    for point in shape.keypoints)
+            serialized.append(tuple(values.items()))
+        request = SaveRequest(
+            image_path=self.file_path,
+            annotation_path=annotation_target_path(
+                annotation_base, self.label_file_format),
+            label_file_format=self.label_file_format,
+            shapes=tuple(serialized),
+            class_list=tuple(self.label_hist),
+            verified=bool(self.canvas.verified),
+            revision=self._document_revision,
+        )
+        save_lock = self._save_locks.setdefault(
+            request.annotation_path, threading.Lock())
+
+        def save(handle):
+            with save_lock:
+                handle.check_cancelled()
+                with trace_span('annotation.save', args={
+                        'path': hash_path(request.annotation_path)}):
+                    return write_save_request(
+                        request, cancelled=handle.is_cancelled,
+                        begin_commit=handle.begin_non_cancellable)
+
+        handle = self.task_coordinator.submit(
+            'background', save, priority=JobPriority.IMAGE_LOAD,
+            key='save:' + request.image_path, latest=True,
+            generation=self._dataset_generation)
+        self._save_handle = handle
+        handle.result.connect(
+            lambda path, req=request, callback=on_success,
+            gen=self._dataset_generation:
+            self._on_save_result(path, req, callback, gen))
+        handle.error.connect(self._on_save_error)
+        return handle
+
+    def _on_save_result(self, path, request, on_success, generation=None):
+        if path is None:
+            return
+        if (generation is not None
+                and generation != self._dataset_generation):
+            self.status('Saved superseded document to %s' % path)
+            return
+        self._record_annotation_written(path)
+        if (self.file_path == request.image_path
+                and self._document_revision == request.revision):
+            self.set_clean()
+        self.status('Saved to %s' % path)
+        if self.file_path == request.image_path:
+            self._update_current_image_gallery_status()
+        if callable(on_success):
+            on_success()
+
+    def _on_save_error(self, message):
+        self.status('Error saving annotation: ' + message)
+
+    def _record_annotation_written(self, path):
+        if getattr(self, 'dataset_snapshot', None) is None:
+            return
+        self.dataset_snapshot = self.dataset_snapshot.with_annotation_file(
+            path, image_path=self.file_path)
+        if self.file_path:
+            self.frame_cache.remove(self.file_path)
+        resolver = self.dataset_snapshot.resolver
+        self.gallery_widget.set_annotation_resolver(resolver)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_annotation_resolver(resolver)
+        self.annotation_catalog._json_cache.invalidate(path)
+        if self.file_path:
+            self.annotation_catalog.invalidate(
+                self.file_path, snapshot=self.dataset_snapshot)
 
     def save_file(self, _value=False):
         if not self.file_path:
             return False
 
         if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            saved_path = annotation_output_base(
-                self.file_path, ustr(self.default_save_dir), self.m_img_list)
+            resolver = self._active_annotation_resolver(self.file_path)
+            shared_path = (
+                self._shared_annotation_path(self.file_path, resolver)
+                if self.label_file_format in (
+                    LabelFileFormat.CREATE_ML, LabelFileFormat.COCO)
+                else None)
+            saved_path = shared_path or annotation_output_base(
+                self.file_path, ustr(self.default_save_dir), self.m_img_list,
+                resolver=resolver)
             return self._save_file(saved_path)
         else:
             image_file_dir = os.path.dirname(self.file_path)
@@ -2995,6 +3578,14 @@ class MainWindow(QMainWindow, WindowMixin):
     def save_file_as(self, _value=False):
         assert not self.image.isNull(), "cannot save empty image"
         return self._save_file(self.save_file_dialog())
+
+    def request_save_file_as(self, _value=False):
+        """Choose a target on the GUI thread and write it asynchronously."""
+        assert not self.image.isNull(), "cannot save empty image"
+        annotation_base = self.save_file_dialog()
+        if not annotation_base:
+            return None
+        return self.request_save_file(annotation_base=annotation_base)
 
     def save_file_dialog(self, remove_ext=True):
         caption = '%s - Choose File' % __appname__
@@ -3018,6 +3609,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if not annotation_file_path or not self.save_labels(annotation_file_path):
             return False
 
+        self._record_annotation_written(annotation_target_path(
+            annotation_file_path, self.label_file_format))
         self.set_clean()
         self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
         self.statusBar().show()
@@ -3069,12 +3662,23 @@ class MainWindow(QMainWindow, WindowMixin):
         # to discard edits. Clear it only after the image is actually deleted
         # so refreshing the directory cannot prompt for those edits again.
         self.set_clean()
-        reload_dir = self.last_open_dir or os.path.dirname(delete_path)
-        self.import_dir_images(reload_dir)
+        if delete_path in self.dataset_snapshot.path_to_index:
+            self._dataset_generation = self.task_coordinator.next_generation()
+            snapshot = self.dataset_snapshot.without(delete_path)
+            if snapshot.generation != self._dataset_generation:
+                snapshot = DatasetSnapshot.from_images(
+                    snapshot.image_paths, root_dir=snapshot.root_dir,
+                    save_dir=snapshot.save_dir,
+                    generation=self._dataset_generation)
+            self._commit_dataset_snapshot(snapshot)
+        else:
+            # Compatibility for extensions that manage m_img_list directly.
+            reload_dir = self.last_open_dir or os.path.dirname(delete_path)
+            self.import_dir_images(reload_dir)
         if self.img_count > 0:
             self.cur_img_idx = min(idx, self.img_count - 1)
             filename = self.m_img_list[self.cur_img_idx]
-            self.load_file(filename)
+            self.request_load_file(filename, skip_prompt=True)
         else:
             self.close_file()
         return True
@@ -3336,7 +3940,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if current_index - 1 >= 0:
             prev_file_path = self.m_img_list[current_index - 1]
             self.show_bounding_box_from_annotation_file(prev_file_path)
-            self.save_file()
+            self.request_save_file()
 
     def toggle_paint_labels_option(self):
         for shape in self.canvas.shapes:
@@ -3407,7 +4011,7 @@ class MainWindow(QMainWindow, WindowMixin):
         return 60  # Default 1 minute
 
     def _auto_save_triggered(self):
-        """Called by timer to perform auto-save."""
+        """Synchronous auto-save compatibility hook for extensions/tests."""
         if not self.dirty:
             return  # Nothing to save
 
@@ -3416,17 +4020,21 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
             save_path = annotation_output_base(
-                self.file_path, ustr(self.default_save_dir), self.m_img_list)
+                self.file_path, ustr(self.default_save_dir), self.m_img_list,
+                resolver=self._active_annotation_resolver(self.file_path))
         else:
-            image_file_dir = os.path.dirname(self.file_path)
-            image_file_name = os.path.basename(self.file_path)
-            saved_file_name = os.path.splitext(image_file_name)[0]
-            save_path = os.path.join(image_file_dir, saved_file_name)
-
+            image_dir = os.path.dirname(self.file_path)
+            image_stem = os.path.splitext(os.path.basename(self.file_path))[0]
+            save_path = os.path.join(image_dir, image_stem)
         if save_path:
             self.status("Auto-saving...")
             self._save_file(save_path)
             self.status("Auto-saved to %s" % os.path.basename(save_path))
+
+    def _request_auto_save_triggered(self):
+        if self.dirty and self.file_path:
+            self.status("Auto-saving...")
+            self.request_save_file()
 
     # Dark mode methods (Issue #7)
     def _toggle_dark_mode(self):
@@ -3512,12 +4120,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):
-        """Start async refresh of all statistics in the gallery stats widget."""
-        self.stats_controller.refresh_all(self.m_img_list, self.default_save_dir)
-
-    def _cleanup_stats_worker(self):
-        """Cancel the in-flight statistics worker and disconnect its signals."""
-        self.stats_controller.cleanup()
+        """Complete label data in the shared catalog, then aggregate it."""
+        self._ensure_annotation_catalog()
+        self.annotation_catalog.request_statistics()
 
     def _update_current_image_stats(self):
         """Update statistics for the current image."""
@@ -3526,13 +4131,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         annotations_count = len(self.canvas.shapes)
         labels = [shape.label for shape in self.canvas.shapes]
-        self.stats_controller.update_current_image(annotations_count, labels)
+        self.gallery_stats.update_current_image_stats(
+            annotations_count, labels)
 
     def _get_labels_for_image(self, img_path):
         """Get list of labels for an image from its annotation file."""
         return probe_annotation(
             img_path, self.default_save_dir, want_labels=True,
-            image_list=self.m_img_list).labels
+            image_list=self.m_img_list,
+            resolver=self._active_annotation_resolver(img_path),
+            json_cache=self.annotation_catalog._json_cache).labels
 
 
 def get_main_app(argv=None):

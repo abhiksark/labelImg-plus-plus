@@ -16,7 +16,7 @@ sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
 from PyQt5.QtCore import QSize
-from PyQt5.QtGui import QImage
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.galleryWidget import (
@@ -627,6 +627,22 @@ class TestThumbnailCache(unittest.TestCase):
         self.assertEqual(cache.get('/img1.jpg'), 'new_value')
         self.assertIsNone(cache.get('/img2.jpg'))
 
+    def test_byte_limit_evicts_oldest_thumbnail(self):
+        cache = ThumbnailCache(max_size=10, max_bytes=8 * 8 * 4)
+        first_image = QImage(8, 8, QImage.Format_RGB32)
+        first_image.fill(0xFFFF0000)
+        second_image = QImage(8, 8, QImage.Format_RGB32)
+        second_image.fill(0xFF00FF00)
+        first = QPixmap.fromImage(first_image)
+        second = QPixmap.fromImage(second_image)
+
+        cache.put('/img1.jpg', first)
+        cache.put('/img2.jpg', second)
+
+        self.assertIsNone(cache.get('/img1.jpg'))
+        self.assertIsNotNone(cache.get('/img2.jpg'))
+        self.assertLessEqual(cache.bytes_used, cache.max_bytes)
+
 
 class TestAnnotationStatus(unittest.TestCase):
     """Test cases for AnnotationStatus enum."""
@@ -833,6 +849,30 @@ class TestGalleryTheme(unittest.TestCase):
         gallery.apply_theme(Theme.DARK)
         expected = hex_to_qcolor(get_theme_colors(Theme.DARK)['status_verified'])
         self.assertEqual(gallery._status_colors[AnnotationStatus.VERIFIED], expected)
+
+
+class TestBoundedThumbnailScheduling(unittest.TestCase):
+    def test_visible_scheduler_never_returns_more_than_queue_cap(self):
+        gallery = GalleryWidget(show_size_slider=False)
+        gallery.resize(900, 600)
+        for index in range(700):
+            gallery._add_item('/images/image-%04d.jpg' % index)
+        gallery.show()
+        app.processEvents()
+
+        visible = gallery._visible_items_with_margin()
+
+        self.assertLessEqual(len(visible), 512)
+
+    def test_unloaded_items_share_one_placeholder_pixmap(self):
+        gallery = GalleryWidget(show_size_slider=False)
+        gallery._add_item('/images/first.jpg')
+        gallery._add_item('/images/second.jpg')
+
+        first = gallery._path_to_item['/images/first.jpg'].icon().pixmap(100)
+        second = gallery._path_to_item['/images/second.jpg'].icon().pixmap(100)
+
+        self.assertEqual(first.cacheKey(), second.cacheKey())
 
 
 class TestGalleryStatusFilter(unittest.TestCase):
