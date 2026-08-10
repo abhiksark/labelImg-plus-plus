@@ -2,7 +2,8 @@
 """Dialog for reviewing and reporting label consistency issues."""
 
 import os
-from typing import Callable, Dict, List, Optional
+import tempfile
+from typing import List, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -10,8 +11,6 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QProgressBar, QHeaderView, QAbstractItemView,
     QMessageBox, QFileDialog, QCheckBox, QGroupBox
 )
-from PyQt5.QtGui import QColor
-
 from libs.tools.label_checker import LabelConsistencyChecker, LabelIssue, IssueType
 
 
@@ -49,6 +48,9 @@ class LabelCheckerDialog(QDialog):
         self.save_dir = save_dir
         self.issues: List[LabelIssue] = []
         self.checker: Optional[LabelConsistencyChecker] = None
+        self._coordinator = getattr(parent, 'task_coordinator', None)
+        self._scan_handle = None
+        self._export_handle = None
         from libs.utils.styles import Theme
         self._issue_colors = self._get_issue_colors(Theme.LIGHT)
 
@@ -203,12 +205,37 @@ class LabelCheckerDialog(QDialog):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate
 
-        try:
-            # Scan annotations
+        if self._coordinator is None:
+            self._scan_sync()
+            return
+
+        predefined = tuple(self.predefined_classes)
+        annotations_dir = self.annotations_dir
+        save_dir = self.save_dir
+
+        def scan(handle):
             labels_with_files = LabelConsistencyChecker.scan_annotations(
-                self.annotations_dir,
-                self.save_dir
-            )
+                annotations_dir, save_dir,
+                cancelled=handle.is_cancelled,
+                progress=lambda current, total: handle.report_progress(
+                    (current, total)))
+            handle.check_cancelled()
+            checker = LabelConsistencyChecker(list(predefined))
+            return checker.check_labels(labels_with_files), len(labels_with_files)
+
+        from libs.core.task_coordinator import JobPriority
+        self.progress_bar.setRange(0, 100)
+        self._scan_handle = self._coordinator.submit(
+            'background', scan, priority=JobPriority.BULK,
+            key='label-checker', latest=True)
+        self._scan_handle.progress.connect(self._on_scan_progress)
+        self._scan_handle.result.connect(self._on_scan_result)
+        self._scan_handle.error.connect(self._on_scan_error)
+
+    def _scan_sync(self):
+        try:
+            labels_with_files = LabelConsistencyChecker.scan_annotations(
+                self.annotations_dir, self.save_dir)
 
             if not labels_with_files:
                 self.status_label.setText("No annotations found")
@@ -220,22 +247,9 @@ class LabelCheckerDialog(QDialog):
             if self.checker is None:
                 self.checker = LabelConsistencyChecker(self.predefined_classes)
 
-            self.issues = self.checker.check_labels(labels_with_files)
-
-            # Update UI
-            self._populate_table()
-            self._update_summary()
-
-            issue_count = len(self.issues)
-            label_count = len(labels_with_files)
-            self.status_label.setText(
-                f"Found {issue_count} issues in {label_count} unique labels"
-            )
-
-            # Annotation rewriting is not implemented. Keep the action
-            # unavailable even when the scan has actionable suggestions.
-            self.fix_selected_btn.setEnabled(False)
-            self.export_btn.setEnabled(issue_count > 0)
+            self._on_scan_result((
+                self.checker.check_labels(labels_with_files),
+                len(labels_with_files)))
 
         except Exception as e:
             QMessageBox.critical(
@@ -248,6 +262,38 @@ class LabelCheckerDialog(QDialog):
         finally:
             self.progress_bar.setVisible(False)
             self.scan_button.setEnabled(True)
+
+    def _on_scan_progress(self, value):
+        current, total = value
+        if total <= 0:
+            self.progress_bar.setRange(0, 0)
+            return
+        self.progress_bar.setRange(0, max(1, total))
+        self.progress_bar.setValue(current)
+
+    def _on_scan_result(self, result):
+        self.issues, label_count = result
+        self._populate_table()
+        self._update_summary()
+        issue_count = len(self.issues)
+        if label_count:
+            self.status_label.setText(
+                f"Found {issue_count} issues in {label_count} unique labels")
+        else:
+            self.status_label.setText("No annotations found")
+        self.fix_selected_btn.setEnabled(False)
+        self.export_btn.setEnabled(issue_count > 0)
+        self.progress_bar.setVisible(False)
+        self.scan_button.setEnabled(True)
+        self._scan_handle = None
+
+    def _on_scan_error(self, message):
+        QMessageBox.critical(
+            self, "Scan Error", f"Error scanning annotations: {message}")
+        self.status_label.setText("Scan failed")
+        self.progress_bar.setVisible(False)
+        self.scan_button.setEnabled(True)
+        self._scan_handle = None
 
     def _populate_table(self):
         """Populate the issues table."""
@@ -355,49 +401,105 @@ class LabelCheckerDialog(QDialog):
         if not file_path:
             return
 
+        issues = tuple(self.issues)
+        annotations_dir = self.annotations_dir
+        if self._coordinator is not None:
+            from libs.core.task_coordinator import JobPriority
+            render_report = LabelCheckerDialog._render_report
+            atomic_write_text = LabelCheckerDialog._atomic_write_text
+
+            def export(handle):
+                text = render_report(
+                    file_path, issues, annotations_dir)
+                handle.check_cancelled()
+                atomic_write_text(file_path, text)
+                return file_path
+
+            self.export_btn.setEnabled(False)
+            self._export_handle = self._coordinator.submit(
+                'background', export, priority=JobPriority.BULK,
+                key='label-report-export', latest=True)
+            self._export_handle.result.connect(self._on_exported)
+            self._export_handle.error.connect(self._on_export_error)
+            return
+
         try:
-            with open(file_path, 'w') as f:
-                if file_path.endswith('.csv'):
-                    f.write("Type,Label,Suggestion,Similarity,Count,Files\n")
-                    for issue in self.issues:
-                        files = "|".join(issue.files)
-                        f.write(
-                            f"{ISSUE_TYPE_NAMES[issue.issue_type]},"
-                            f"\"{issue.label}\","
-                            f"\"{issue.suggestion or ''}\","
-                            f"{issue.similarity:.2f},"
-                            f"{issue.count},"
-                            f"\"{files}\"\n"
-                        )
-                else:
-                    f.write("Label Consistency Report\n")
-                    f.write("=" * 50 + "\n\n")
-                    f.write(f"Directory: {self.annotations_dir}\n")
-                    f.write(f"Total issues: {len(self.issues)}\n\n")
-
-                    for issue_type in IssueType:
-                        type_issues = [
-                            i for i in self.issues
-                            if i.issue_type == issue_type
-                        ]
-                        if type_issues:
-                            f.write(f"\n{ISSUE_TYPE_NAMES[issue_type]} ({len(type_issues)})\n")
-                            f.write("-" * 40 + "\n")
-                            for issue in type_issues:
-                                f.write(f"  '{issue.label}'")
-                                if issue.suggestion:
-                                    f.write(f" → '{issue.suggestion}'")
-                                f.write(f" ({issue.count} occurrences)\n")
-
-            QMessageBox.information(
-                self,
-                "Export Complete",
-                f"Report saved to:\n{file_path}"
-            )
+            text = self._render_report(file_path, issues, annotations_dir)
+            self._atomic_write_text(file_path, text)
+            self._on_exported(file_path)
 
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Export Error",
-                f"Failed to export report: {e}"
-            )
+            self._on_export_error(str(e))
+
+    @staticmethod
+    def _render_report(file_path, issues, annotations_dir):
+        lines = []
+        if file_path.endswith('.csv'):
+            lines.append("Type,Label,Suggestion,Similarity,Count,Files")
+            for issue in issues:
+                files = "|".join(issue.files)
+                lines.append(
+                    f'{ISSUE_TYPE_NAMES[issue.issue_type]},'
+                    f'"{issue.label}","{issue.suggestion or ""}",'
+                    f'{issue.similarity:.2f},{issue.count},"{files}"')
+        else:
+            lines.extend([
+                "Label Consistency Report",
+                "=" * 50,
+                "",
+                f"Directory: {annotations_dir}",
+                f"Total issues: {len(issues)}",
+                "",
+            ])
+            for issue_type in IssueType:
+                type_issues = [
+                    issue for issue in issues
+                    if issue.issue_type == issue_type]
+                if not type_issues:
+                    continue
+                lines.extend([
+                    f"{ISSUE_TYPE_NAMES[issue_type]} ({len(type_issues)})",
+                    "-" * 40,
+                ])
+                for issue in type_issues:
+                    suggestion = (
+                        f" → '{issue.suggestion}'"
+                        if issue.suggestion else '')
+                    lines.append(
+                        f"  '{issue.label}'{suggestion} "
+                        f"({issue.count} occurrences)")
+        return '\n'.join(lines) + '\n'
+
+    @staticmethod
+    def _atomic_write_text(file_path, text):
+        directory = os.path.dirname(os.path.abspath(file_path)) or os.curdir
+        descriptor, temporary = tempfile.mkstemp(
+            prefix='.' + os.path.basename(file_path) + '.',
+            suffix='.tmp', dir=directory)
+        try:
+            with os.fdopen(descriptor, 'w') as output:
+                output.write(text)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, file_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def _on_exported(self, file_path):
+        self.export_btn.setEnabled(bool(self.issues))
+        self._export_handle = None
+        QMessageBox.information(
+            self, "Export Complete", f"Report saved to:\n{file_path}")
+
+    def _on_export_error(self, message):
+        self.export_btn.setEnabled(bool(self.issues))
+        self._export_handle = None
+        QMessageBox.critical(
+            self, "Export Error", f"Failed to export report: {message}")
+
+    def closeEvent(self, event):
+        for handle in (self._scan_handle, self._export_handle):
+            if handle is not None:
+                handle.cancel()
+        super().closeEvent(event)

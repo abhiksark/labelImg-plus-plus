@@ -2,6 +2,7 @@
 """Label consistency checker for detecting typos and inconsistencies."""
 
 import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -199,7 +200,9 @@ class LabelConsistencyChecker:
     @staticmethod
     def scan_annotations(
         directory: str,
-        save_dir: Optional[str] = None
+        save_dir: Optional[str] = None,
+        cancelled=None,
+        progress=None,
     ) -> Dict[str, List[str]]:
         """Scan a directory for annotations and collect all labels.
 
@@ -216,32 +219,53 @@ class LabelConsistencyChecker:
         # Discover every image first so collision-safe annotation paths are
         # resolved against the complete dataset, not one file at a time.
         image_paths = []
+        last_progress = time.monotonic()
         for root, _, files in os.walk(directory):
             for filename in files:
+                if cancelled is not None and cancelled():
+                    return {}
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in image_extensions:
                     image_paths.append(os.path.join(root, filename))
+                now = time.monotonic()
+                if (progress is not None
+                        and now - last_progress >= 0.20):
+                    # Total is not known until discovery completes.
+                    progress(0, 0)
+                    last_progress = now
 
-        for image_path in image_paths:
+        from libs.core.dataset import AnnotationResolver
+        resolver = AnnotationResolver(image_paths, save_dir)
+
+        total = len(image_paths)
+        last_progress = time.monotonic()
+        for index, image_path in enumerate(image_paths, 1):
+            if cancelled is not None and cancelled():
+                return {}
             annotation_path = find_existing_annotation(
                 image_path,
                 save_dir=save_dir,
                 image_list=image_paths,
                 extensions=('.txt', '.xml'),
+                resolver=resolver,
             )
-            if not annotation_path:
-                continue
-
-            extension = os.path.splitext(annotation_path)[1].lower()
-            if extension == '.txt':
-                labels = LabelConsistencyChecker._extract_yolo_labels(
-                    annotation_path, os.path.dirname(annotation_path)
-                )
-            else:
-                labels = LabelConsistencyChecker._extract_voc_labels(
-                    annotation_path)
-            for label in labels:
-                labels_with_files[label].append(annotation_path)
+            if annotation_path:
+                extension = os.path.splitext(annotation_path)[1].lower()
+                if extension == '.txt':
+                    labels = LabelConsistencyChecker._extract_yolo_labels(
+                        annotation_path, os.path.dirname(annotation_path)
+                    )
+                else:
+                    labels = LabelConsistencyChecker._extract_voc_labels(
+                        annotation_path)
+                for label in labels:
+                    labels_with_files[label].append(annotation_path)
+            now = time.monotonic()
+            if progress is not None and (
+                    index % 100 == 0 or index == total
+                    or now - last_progress >= 0.20):
+                progress(index, total)
+                last_progress = now
 
         # Check for CreateML format (single JSON file)
         json_path = os.path.join(save_dir or directory, 'annotations.json')
