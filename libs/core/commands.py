@@ -43,6 +43,32 @@ class Command(ABC):
         return "Command"
 
 
+class VideoModelCommand(Command):
+    """Undo a video-domain mutation by restoring immutable model states."""
+
+    def __init__(self, main_window, before, after, description):
+        self.main_window = main_window
+        self.before = before
+        self.after = after
+        self._description = description
+
+    def _restore(self, state):
+        self.main_window.video_model.restore_state(state)
+        self.main_window._on_video_model_mutation()
+        pts = self.main_window.current_video_frame_ref.pts
+        self.main_window._materialize_video_frame(pts)
+
+    def execute(self):
+        self._restore(self.after)
+
+    def undo(self):
+        self._restore(self.before)
+
+    @property
+    def description(self):
+        return self._description
+
+
 class CreateShapeCommand(Command):
     """Command for creating a new shape.
 
