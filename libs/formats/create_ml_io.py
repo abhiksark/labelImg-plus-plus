@@ -93,20 +93,22 @@ class CreateMLWriter:
 
 
 class CreateMLReader:
-    def __init__(self, json_path, file_path):
+    def __init__(self, json_path, file_path, data=None):
         self.json_path = json_path
         self.shapes = []
         self.verified = False
         self.filename = os.path.basename(file_path)
         # Let parse failures propagate so callers can surface them, instead
         # of silently swallowing a malformed file into an empty shape list.
-        self.parse_json()
+        self.parse_json(data=data)
 
-    def parse_json(self):
-        with open(self.json_path, "r") as file:
-            input_data = file.read()
-
-        output_list = json.loads(input_data)
+    def parse_json(self, data=None):
+        if data is None:
+            with open(self.json_path, "r") as file:
+                input_data = file.read()
+            output_list = json.loads(input_data)
+        else:
+            output_list = data
 
         # A CreateML file is a JSON array of image objects; anything else is
         # malformed. Fail with a clear error instead of an opaque TypeError.
