@@ -56,6 +56,10 @@ def test_tracking_batches_render_pending_and_review_is_undoable(
         assert _wait(app, lambda: window.current_video_frame_ref.pts
                      == target.pts)
         assert window.canvas.shapes[0].video_render_state == 'pending'
+        assert window.actions.videoAcceptVisible.isEnabled()
+        assert window.actions.videoRejectVisible.isEnabled()
+        assert window.actions.videoAcceptRun.isEnabled()
+        assert window.actions.videoRejectRun.isEnabled()
         assert window.accept_current_suggestion()
         accepted = window.video_model.observations[
             (target.track_id, target.pts)]
@@ -69,6 +73,30 @@ def test_tracking_batches_render_pending_and_review_is_undoable(
         assert not any(
             item.review_state == 'pending'
             for item in window.video_model.observations.values())
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_tracking_action_accepts_exact_user_endpoint(tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(
+        tmp_path / 'endpoint.mp4', frames=24, width=128, height=96,
+        tracking_stress=True)
+    try:
+        assert window.open_video(video)
+        _seed(window)
+        with patch(
+                'labelImgPlusPlus.QInputDialog.getText',
+                return_value=('00:00:00.500', True)):
+            handle = window.track_selected_forward(choose_endpoint=True)
+        assert handle is not None
+        expected = int(round(
+            .5 * window.video_snapshot.time_base_den /
+            window.video_snapshot.time_base_num))
+        assert window._active_tracking_request.end_pts == expected
+        window.cancel_video_tracking()
+        assert _wait(app, lambda: window._tracking_handle is None)
     finally:
         window.dirty = False
         window.close()

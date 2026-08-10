@@ -53,6 +53,53 @@ make qt5py3
 rm ~/.labelImgSettings.pkl
 ```
 
+## Smart Video
+
+### Video action shows an installation hint
+
+Install the optional extra into the same Python environment that launches the
+application:
+
+```bash
+python -m pip install "labelimgplusplus[video]"
+```
+
+For SAM on paused video frames, install `"labelimgplusplus[sam,video]"`.
+
+### Video will not open
+
+- Confirm the source is a local MP4, MOV, MKV, or AVI file.
+- Try opening it with the current PyAV/FFmpeg build. A container extension does
+  not guarantee that its internal codec is available.
+- Corrupt, truncated, empty, and no-video-stream sources are rejected before
+  the current document changes.
+- Only the first playable video stream is selected; audio is ignored.
+
+### Project cannot find its source
+
+Open the `.labelimgpp.sqlite` project and locate the original media. A moved
+file is relinked only when its sampled fingerprint matches. If content changed,
+create a new project; annotations are not applied to a different source.
+
+### Video opened read-only
+
+The source directory could not hold the default sibling project and no alternate
+project path was selected. Reopen the video and choose a writable project
+location. Read-only mode permits navigation but disables editing and saving.
+
+### Project schema or revision error
+
+Unknown SQLite application IDs and project schemas newer than this build are
+left untouched. Upgrade labelImg++, or open the project with the version that
+created it. A revision conflict means another process saved the project; keep
+your current session open, preserve its changes, and reconcile before retrying.
+
+### Export failed or was cancelled
+
+Choose a new or empty destination whose parent directory is writable. Export is
+staged atomically; cancellation removes only LabelImg++'s owned staging tree and
+does not remove an existing non-empty destination.
+
 ## File Operations
 
 ### Annotations Not Saving

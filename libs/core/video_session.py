@@ -1,5 +1,6 @@
 """Transactional video/project opening orchestration."""
 
+from dataclasses import dataclass
 import os
 
 from libs.core.video_decoder import PreparedVideoOpen, VideoDecoderSession
@@ -10,18 +11,25 @@ from libs.core.video_project import (
 )
 
 
+@dataclass(frozen=True)
+class VideoOpenProblem:
+    kind: str
+    message: str
+
+
 def is_video_project(path):
     return os.fspath(path).lower().endswith(PROJECT_SUFFIX)
 
 
 def prepare_video_open(path, project_path=None, read_only=False,
-                       cancelled=None):
+                       cancelled=None, source_override=None):
     """Fully prepare a new session without mutating application state."""
     requested = os.path.abspath(os.fspath(path))
     if is_video_project(requested):
         project_path = requested
         source = read_project_source(project_path)
-        source_path = source.absolute_path
+        source_path = (os.path.abspath(os.fspath(source_override))
+                       if source_override else source.absolute_path)
         if not os.path.isfile(source_path):
             raise VideoSourceMissing(
                 'video source is missing: %s' % source_path)

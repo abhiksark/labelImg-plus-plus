@@ -8,6 +8,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_decoder import VideoDependencyError
 from libs.core.video_project import default_project_path
+from libs.core.video_project import read_project_source
 
 
 def _wait(app, predicate, timeout=5):
@@ -133,6 +134,54 @@ def test_cli_positional_argument_accepts_video_project(tmp_path, make_video):
             app, lambda: window.document_kind == DocumentKind.VIDEO)
         assert window.video_snapshot.project_path == project
         assert window.file_path == video
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_missing_project_source_can_be_located_and_relinked(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'clip.mp4')
+    assert window.open_video(video)
+    project = window.video_snapshot.project_path
+    moved = tmp_path / 'moved.mp4'
+    os.replace(video, moved)
+    try:
+        with patch(
+                'labelImgPlusPlus.QFileDialog.getOpenFileName',
+                return_value=(str(moved), 'Video files')):
+            window.request_open_video(project, skip_prompt=True)
+            assert _wait(
+                app, lambda: window.video_snapshot is not None
+                and window.video_snapshot.source_path == str(moved))
+        assert read_project_source(project).absolute_path == str(moved)
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_changed_source_can_create_a_separate_project(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'clip.mp4')
+    assert window.open_video(video)
+    old_project = window.video_snapshot.project_path
+    make_video(tmp_path / 'clip.mp4', width=80, height=64)
+    new_project = str(tmp_path / 'changed.labelimgpp.sqlite')
+    try:
+        with patch.object(
+                window, '_video_source_changed_choice',
+                return_value='create'), patch(
+                'labelImgPlusPlus.QFileDialog.getSaveFileName',
+                return_value=(new_project, 'LabelImg++ video project')):
+            window.request_open_video(video, skip_prompt=True)
+            assert _wait(
+                app, lambda: window.video_snapshot is not None
+                and window.video_snapshot.project_path == new_project)
+        assert os.path.isfile(old_project)
+        assert os.path.isfile(new_project)
+        assert window.video_snapshot.width == 80
     finally:
         window.dirty = False
         window.close()

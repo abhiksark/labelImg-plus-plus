@@ -3,7 +3,9 @@
 from dataclasses import dataclass
 from fractions import Fraction
 import importlib
+import math
 import os
+import struct
 
 from PyQt5.QtGui import QImage
 
@@ -47,13 +49,60 @@ def _fraction_parts(value):
     return int(value.numerator), int(value.denominator)
 
 
-def _rotation_for_stream(stream):
-    value = stream.metadata.get('rotate', 0)
+def _normalized_rotation(value, fallback=0):
     try:
         value = int(round(float(value))) % 360
     except (TypeError, ValueError):
-        value = 0
-    return value if value in (0, 90, 180, 270) else 0
+        value = int(fallback) % 360
+    return value if value in (0, 90, 180, 270) else int(fallback) % 360
+
+
+def _rotation_for_stream(stream):
+    """Read rotation from old PyAV stream side data or metadata."""
+    side_data = getattr(stream, 'side_data', None)
+    if side_data is not None:
+        try:
+            value = side_data.get('DISPLAYMATRIX')
+        except AttributeError:
+            value = None
+        if value is not None:
+            return _normalized_rotation(value)
+    metadata = getattr(stream, 'metadata', {})
+    return _normalized_rotation(metadata.get('rotate', 0))
+
+
+def _frame_display_matrix_rotation(frame):
+    """Decode raw DISPLAYMATRIX side data used by PyAV 13 through 16."""
+    for item in getattr(frame, 'side_data', ()):
+        item_type = getattr(item, 'type', None)
+        name = getattr(item_type, 'name', str(item_type))
+        if str(name).split('.')[-1] != 'DISPLAYMATRIX':
+            continue
+        try:
+            matrix = struct.unpack('=9i', bytes(item)[:36])
+        except (TypeError, ValueError, struct.error):
+            return None
+        if matrix[0] == 0 and matrix[1] == 0:
+            return None
+        return _normalized_rotation(
+            -math.degrees(math.atan2(matrix[1], matrix[0])))
+    return None
+
+
+def _rotation_for_frame(frame, fallback=0):
+    """Read FFmpeg display-matrix rotation when PyAV exposes it."""
+    matrix_rotation = _frame_display_matrix_rotation(frame)
+    if matrix_rotation is not None:
+        return matrix_rotation
+    try:
+        value = _normalized_rotation(frame.rotation, fallback)
+    except (AttributeError, TypeError, ValueError):
+        return _normalized_rotation(fallback)
+    # PyAV 17+ returns zero when no display matrix is attached. Preserve an
+    # older stream-level rotation in that case.
+    if value == 0 and _normalized_rotation(fallback) != 0:
+        return _normalized_rotation(fallback)
+    return value
 
 
 def _oriented_array(frame, rotation, np):
@@ -133,7 +182,14 @@ class VideoDecoderSession:
     def _result(self, frame):
         if frame.pts is None:
             raise VideoDecodeError('decoded frame has no presentation timestamp')
-        array = _oriented_array(frame, self.rotation, self._np)
+        rotation = _rotation_for_frame(frame, self.rotation)
+        if rotation != self.rotation:
+            self.rotation = rotation
+            self.oriented_width = (
+                self.height if rotation in (90, 270) else self.width)
+            self.oriented_height = (
+                self.width if rotation in (90, 270) else self.height)
+        array = _oriented_array(frame, rotation, self._np)
         height, width = array.shape[:2]
         image = QImage(
             array.data, width, height, int(array.strides[0]),
@@ -145,7 +201,7 @@ class VideoDecoderSession:
             image, 'sizeInBytes') else int(image.byteCount())
         result = VideoFrameResult(
             frame_ref, image, width, height, self.width, self.height,
-            self.rotation, byte_size,
+            rotation, byte_size,
             '%s:%s:%s' % (self.fingerprint.sampled_sha256,
                           self.stream_index, frame.pts))
         self._history.append(result)
@@ -242,4 +298,3 @@ class VideoDecoderSession:
         self._iterator = iter(())
         if container is not None:
             container.close()
-

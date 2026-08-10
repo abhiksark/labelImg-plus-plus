@@ -4,7 +4,8 @@ import math
 import time
 
 from libs.core.video_decoder import (
-    _oriented_array, _rotation_for_stream, load_video_dependencies,
+    _oriented_array, _rotation_for_frame, _rotation_for_stream,
+    load_video_dependencies,
 )
 from libs.core.video_types import ObservationRecord, TrackingBatch
 
@@ -151,8 +152,9 @@ def _decoded_frames(container, stream, start_pts, end_pts, rotation,
             continue
         if frame.pts > end_pts:
             break
+        frame_rotation = _rotation_for_frame(frame, rotation)
         gray, scale, width, height = _working_frame(
-            frame, rotation, cv2, np)
+            frame, frame_rotation, cv2, np)
         yield int(frame.pts), gray, scale, width, height
 
 
@@ -266,7 +268,9 @@ def track_optical_flow(request, handle):
             if step_index % 5 == 0:
                 points = _feature_points(
                     current_gray, rectangle, cv2, np)
-            if time.monotonic() - last_emit >= .25:
+            # Leave scheduling headroom so observers receive progress at
+            # least once per 250 ms rather than just after that boundary.
+            if time.monotonic() - last_emit >= .20:
                 handle.report_progress(TrackingBatch(
                     request.request_id, request.generation,
                     request.track.track_id, request.seed_track_revision,

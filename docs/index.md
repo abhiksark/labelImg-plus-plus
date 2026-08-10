@@ -9,6 +9,7 @@ This documentation provides comprehensive guidance for developers working with t
 | [Architecture Overview](architecture.md) | High-level system design and data flow |
 | [Components](components/) | Deep dives into core classes |
 | [Annotation Formats](formats/) | Format specifications and I/O |
+| [Smart Video Annotation](features/smart-video-annotation.md) | PTS-based video projects, tracking, review, and export |
 | [Extension Guides](guides/) | How to extend labelImg++ |
 | [Reference](reference/) | Shortcuts, settings, troubleshooting |
 
@@ -144,6 +145,8 @@ python3 -m unittest discover tests -v
 - [Adding Formats](guides/adding-formats.md) - Create new annotation formats
 - [Adding Features](guides/adding-features.md) - Add new actions and UI
 - [i18n Guide](guides/i18n-guide.md) - Add new languages
+- [Optional Dependencies](guides/optional-dependencies.md) - Install SAM, video, and profiling extras
+- [Smart Video Annotation](features/smart-video-annotation.md) - Annotate and export tracked video frames
 - [Testing Plan](testing-plan.md) - Test audit findings and roadmap
 
 ### Reference

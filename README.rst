@@ -106,6 +106,23 @@ Workflow and Interface
     extra installed, the action stays disabled (with an install hint) and
     nothing else changes.
 
+**Smart Video Annotation** (optional)
+    Open local MP4, MOV, MKV, and AVI video, annotate on exact presentation
+    timestamps, interpolate rectangle keyframes, and propagate rectangles with
+    reviewable optical-flow suggestions. Video work is stored in a sibling
+    ``<video>.labelimgpp.sqlite`` project; existing image annotations and
+    formats are unchanged.
+
+    .. code:: shell
+
+        pip install labelimgplusplus[video]
+
+    The timeline supports frame stepping, exact timecode seeks, variable-rate
+    media, playback without audio, track markers, and verified-frame markers.
+    Accepted frames export to VOC, YOLO, YOLO-seg, COCO, or CreateML. See the
+    `Smart Video Annotation Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/features/smart-video-annotation.md>`_
+    for the project, review, and export workflow.
+
 Installation
 ------------
 
@@ -132,6 +149,13 @@ With a specific image or directory:
 .. code:: shell
 
     labelimgpp [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
+
+The first positional path can also be a local video or a
+``.labelimgpp.sqlite`` video project. Optional features can be combined:
+
+.. code:: shell
+
+    pip install labelimgplusplus[sam,video]
 
 Build from Source
 ~~~~~~~~~~~~~~~~~
@@ -170,6 +194,10 @@ Quick Start
 4. **Save**: Press **Ctrl+S** to save annotations
 5. **Navigate**: Use **D** (next) and **A** (previous) to move between images
 6. **Review**: Press **Ctrl+G** for gallery mode to review all annotations
+
+For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
+frame, then use the **Tracks** tab and **Tools** menu to add keyframes, track,
+review suggestions, and export accepted frames.
 
 Supported Annotation Formats
 ----------------------------
@@ -212,6 +240,8 @@ These are the defaults. They can be changed from **Help → Keyboard Shortcuts**
 +--------------------+--------------------------------------------+
 | Ctrl + O           | Open file                                  |
 +--------------------+--------------------------------------------+
+| Ctrl + Alt + V     | Open video or video project                |
++--------------------+--------------------------------------------+
 | Ctrl + U           | Open directory                             |
 +--------------------+--------------------------------------------+
 | Ctrl + R           | Change save directory                      |
@@ -232,6 +262,11 @@ These are the defaults. They can be changed from **Help → Keyboard Shortcuts**
 +--------------------+--------------------------------------------+
 | Ctrl + G           | Toggle Gallery Mode                        |
 +--------------------+--------------------------------------------+
+
+In video mode, **A/D** step exact frames, **Ctrl+Space** toggles playback,
+**Shift+K** adds a keyframe to the selected track, **T/Shift+T** track forward
+or backward, and **Shift+Enter/Backspace** accept or reject the current
+suggestion. **Space** continues to verify the current frame.
 
 **Annotation**
 

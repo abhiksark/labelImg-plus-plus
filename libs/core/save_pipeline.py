@@ -79,7 +79,9 @@ def write_save_request(request, cancelled=None, begin_commit=None):
 
         if cancelled is not None and cancelled():
             return None
-        with open(temporary, 'rb') as output:
+        # Windows requires a writable descriptor for fsync even though no
+        # additional bytes are written here.
+        with open(temporary, 'rb+') as output:
             os.fsync(output.fileno())
         if begin_commit is not None:
             begin_commit()

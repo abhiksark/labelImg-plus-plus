@@ -41,6 +41,13 @@ jobs:
           pyrcc5 -o libs/resources.py resources.qrc
           python scripts/verify_qt_resources.py
 
+      - name: Verify base startup stays optional-feature-free
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "import sys; import labelImgPlusPlus; assert 'av' not in sys.modules; assert 'cv2' not in sys.modules; assert 'numpy' not in sys.modules"
+          python -c "from libs.core.video_decoder import VIDEO_INSTALL_HINT; assert 'labelimgplusplus[video]' in VIDEO_INSTALL_HINT"
+
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
@@ -91,8 +98,117 @@ jobs:
             tests/utils/test_sam_constants.py \
             -v
 
+  video-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 x11-utils libegl1-mesa-dev
+
+      - name: Install package with video dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install '.[video]' pytest
+
+      - name: Build and verify Qt resources
+        run: |
+          pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
+
+      - name: Run focused video tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests/video -v
+
+  sam-video-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.8', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 x11-utils libegl1-mesa-dev
+
+      - name: Install combined optional dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install '.[sam,video]' pytest
+
+      - name: Build and verify Qt resources
+        run: |
+          pyrcc5 -o libs/resources.py resources.qrc
+          python scripts/verify_qt_resources.py
+
+      - name: Run combined feature tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pytest \
+            tests/video \
+            tests/integrations \
+            tests/integration/test_sam_controller.py \
+            tests/integration/test_sam_mainwindow.py \
+            tests/widgets/test_canvas_sam.py \
+            tests/widgets/test_sam_settings_dialog.py \
+            tests/utils/test_sam_constants.py \
+            -v
+
+  video-platform-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with video dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install '.[video]' pytest
+
+      - name: Run decoder and persistence smoke tests
+        run: |
+          python -m pytest tests/video/test_decoder.py tests/video/test_project.py tests/video/test_model.py tests/video/test_tracking.py tests/video/test_export.py -v
+
   build-release:
-    needs: [test, sam-test]
+    needs: [test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -149,7 +265,7 @@ jobs:
           if-no-files-found: error
 
   package-macos:
-    needs: [test, sam-test]
+    needs: [test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: macos-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -175,7 +291,7 @@ jobs:
           if-no-files-found: error
 
   package-windows:
-    needs: [test, sam-test]
+    needs: [test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: windows-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -202,7 +318,7 @@ jobs:
           if-no-files-found: error
 
   package-linux:
-    needs: [test, sam-test]
+    needs: [test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:

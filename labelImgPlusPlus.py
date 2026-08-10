@@ -21,7 +21,7 @@ try:
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
         QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
-        QListWidget, QMainWindow, QMenu, QMessageBox,
+        QInputDialog, QListWidget, QMainWindow, QMenu, QMessageBox,
         QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
@@ -36,7 +36,7 @@ except ImportError:
     from PyQt4.QtGui import (
         QColor, QCursor, QImage, QImageReader, QPixmap,
         QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
-        QFileDialog, QHBoxLayout, QLabel, QListWidget,
+        QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
         QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
@@ -84,17 +84,20 @@ from libs.core.profiling import (
 )
 from libs.core.video_decoder import VIDEO_EXTENSIONS, VideoDecoderSession
 from libs.core.video_project import (
+    PROJECT_SUFFIX, VideoSourceChanged, VideoSourceMissing,
     checkpoint_project, default_project_path, save_project_as,
     save_project_delta,
 )
 from libs.core.video_model import VideoProjectModel
 from libs.core.video_export import export_video_frames
 from libs.core.video_tracking import track_optical_flow
-from libs.core.video_session import is_video_project, prepare_video_open
+from libs.core.video_session import (
+    VideoOpenProblem, is_video_project, prepare_video_open,
+)
 from libs.core.video_types import (
     DocumentKind, TrackingRequest, VideoExportRequest, VideoFrameRef,
 )
-from libs.widgets.videoTimelineWidget import parse_timecode
+from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.integrations import segmentation
 
 # Formats
@@ -564,12 +567,16 @@ class MainWindow(QMainWindow, WindowMixin):
             None, 'delete', 'Delete the selected track on every frame',
             enabled=False)
         video_track_forward = action(
-            'Track Forward', self.track_selected_forward,
+            'Track Forward…',
+            lambda _checked=False: self.track_selected_forward(
+                choose_endpoint=True),
             self.shortcut_config.get('video_track_forward'), None,
             'Propagate the selected rectangle forward with optical flow',
             enabled=False)
         video_track_backward = action(
-            'Track Backward', self.track_selected_backward,
+            'Track Backward…',
+            lambda _checked=False: self.track_selected_backward(
+                choose_endpoint=True),
             self.shortcut_config.get('video_track_backward'), None,
             'Propagate the selected rectangle backward with optical flow',
             enabled=False)
@@ -582,6 +589,30 @@ class MainWindow(QMainWindow, WindowMixin):
             'Reject Current Suggestion', self.reject_current_suggestion,
             self.shortcut_config.get('video_reject_suggestion'), 'close',
             'Reject the pending tracker observation on this frame',
+            enabled=False)
+        video_accept_visible = action(
+            'Accept Visible Suggestions',
+            lambda: self.review_visible_suggestions('accepted'),
+            None, 'verify',
+            'Accept pending tracker observations in the visible range',
+            enabled=False)
+        video_reject_visible = action(
+            'Reject Visible Suggestions',
+            lambda: self.review_visible_suggestions('rejected'),
+            None, 'close',
+            'Reject pending tracker observations in the visible range',
+            enabled=False)
+        video_accept_run = action(
+            'Accept Full Propagation',
+            lambda: self.review_full_propagation('accepted'),
+            None, 'verify',
+            'Accept pending observations from the latest propagation run',
+            enabled=False)
+        video_reject_run = action(
+            'Reject Full Propagation',
+            lambda: self.review_full_propagation('rejected'),
+            None, 'close',
+            'Reject pending observations from the latest propagation run',
             enabled=False)
         video_export = action(
             'Export Video Frames…', self.open_video_export_dialog,
@@ -824,6 +855,10 @@ class MainWindow(QMainWindow, WindowMixin):
                               videoTrackBackward=video_track_backward,
                               videoAcceptSuggestion=video_accept_suggestion,
                               videoRejectSuggestion=video_reject_suggestion,
+                              videoAcceptVisible=video_accept_visible,
+                              videoRejectVisible=video_reject_visible,
+                              videoAcceptRun=video_accept_run,
+                              videoRejectRun=video_reject_run,
                               videoExport=video_export,
                               sam_mode=sam_mode_action,
                               delete=delete, edit=edit, copy=copy,
@@ -996,6 +1031,8 @@ class MainWindow(QMainWindow, WindowMixin):
             None, video_play_pause, video_add_keyframe,
             video_track_forward, video_track_backward,
             video_accept_suggestion, video_reject_suggestion,
+            video_accept_visible, video_reject_visible,
+            video_accept_run, video_reject_run,
             video_delete_track, video_export,
             None, sam_mode_action, sam_settings_action))
 
@@ -1457,6 +1494,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.videoTrackBackward.setEnabled(False)
             self.actions.videoAcceptSuggestion.setEnabled(False)
             self.actions.videoRejectSuggestion.setEnabled(False)
+            self.actions.videoAcceptVisible.setEnabled(False)
+            self.actions.videoRejectVisible.setEnabled(False)
+            self.actions.videoAcceptRun.setEnabled(False)
+            self.actions.videoRejectRun.setEnabled(False)
 
     def _close_video_decoder(self):
         if hasattr(self, '_video_playback_timer'):
@@ -2586,20 +2627,23 @@ class MainWindow(QMainWindow, WindowMixin):
                 return os.path.abspath(chosen), False
         return None, True
 
-    def request_open_video(self, path, project_path=None, skip_prompt=False):
+    def request_open_video(self, path, project_path=None, skip_prompt=False,
+                           source_override=None):
         """Queue a transactional video/project open on the decoder lane."""
         path = os.path.abspath(ustr(path))
         if not skip_prompt and self.dirty:
             if self.auto_saving.isChecked():
                 self.request_save_file(on_success=lambda: self.request_open_video(
-                    path, project_path=project_path, skip_prompt=True))
+                    path, project_path=project_path, skip_prompt=True,
+                    source_override=source_override))
                 return None
             answer = self.discard_changes_dialog()
             if answer == QMessageBox.Cancel:
                 return None
             if answer == QMessageBox.Yes:
                 self.request_save_file(on_success=lambda: self.request_open_video(
-                    path, project_path=project_path, skip_prompt=True))
+                    path, project_path=project_path, skip_prompt=True,
+                    source_override=source_override))
                 return None
 
         target, read_only = self._video_project_target(
@@ -2611,9 +2655,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self._show_loading_veil('Opening video %s…' % os.path.basename(path))
 
         def prepare(handle):
-            prepared = prepare_video_open(
-                path, project_path=target, read_only=read_only,
-                cancelled=handle.is_cancelled)
+            try:
+                prepared = prepare_video_open(
+                    path, project_path=target, read_only=read_only,
+                    cancelled=handle.is_cancelled,
+                    source_override=source_override)
+            except VideoSourceMissing as exc:
+                return VideoOpenProblem('missing', str(exc))
+            except VideoSourceChanged as exc:
+                return VideoOpenProblem('changed', str(exc))
             if handle.is_cancelled():
                 prepared.decoder.close()
                 return None
@@ -2623,8 +2673,10 @@ class MainWindow(QMainWindow, WindowMixin):
             'video', prepare, priority=JobPriority.IMAGE_LOAD,
             key='video-open', latest=True, generation=generation)
         handle.result.connect(
-            lambda prepared, rid=request_id, gen=generation:
-            self._on_video_open_result(prepared, rid, gen))
+            lambda prepared, rid=request_id, gen=generation,
+            requested=path, project=target, override=source_override:
+            self._on_video_open_result(
+                prepared, rid, gen, requested, project, override))
         handle.error.connect(
             lambda message, rid=request_id, gen=generation:
             self._on_video_open_error(message, rid, gen))
@@ -2638,15 +2690,95 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.setEnabled(bool(self.file_path))
         self.status('Error opening video: ' + message, delay=10000)
 
-    def _on_video_open_result(self, prepared, request_id, generation):
+    def _on_video_open_result(self, prepared, request_id, generation,
+                              requested_path=None, project_path=None,
+                              source_override=None):
         if prepared is None:
             return
         if (request_id != self._video_open_request_id
                 or generation != self._dataset_generation):
-            prepared.decoder.close()
+            decoder = getattr(prepared, 'decoder', None)
+            if decoder is not None:
+                decoder.close()
+            return
+        if isinstance(prepared, VideoOpenProblem):
+            self._hide_loading_veil()
+            self._resolve_video_open_problem(
+                prepared, requested_path, project_path, source_override)
             return
         self._commit_video_open(prepared)
         self._hide_loading_veil()
+
+    def _locate_video_source(self, project_path):
+        source, _selected = QFileDialog.getOpenFileName(
+            self, 'Locate original video', os.path.dirname(project_path),
+            'Video files (*.mp4 *.mov *.mkv *.avi);;All files (*)')
+        return os.path.abspath(ustr(source)) if source else None
+
+    def _video_source_changed_choice(self, message):
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Warning)
+        dialog.setWindowTitle('Video source changed')
+        dialog.setText(message)
+        dialog.setInformativeText(
+            'Annotations will not be applied to changed media.')
+        locate = dialog.addButton('Locate Original', QMessageBox.AcceptRole)
+        create = dialog.addButton(
+            'Create New Project', QMessageBox.DestructiveRole)
+        cancel = dialog.addButton(QMessageBox.Cancel)
+        dialog.exec_()
+        clicked = dialog.clickedButton()
+        if clicked is locate:
+            return 'locate'
+        if clicked is create:
+            return 'create'
+        if clicked is cancel:
+            return 'cancel'
+        return 'cancel'
+
+    def _new_video_project_path(self, source_path, old_project_path):
+        suggested = default_project_path(source_path)
+        if os.path.abspath(suggested) == os.path.abspath(old_project_path):
+            suggested = source_path + '.new' + PROJECT_SUFFIX
+        path, _selected = QFileDialog.getSaveFileName(
+            self, 'Create new video project', suggested,
+            'LabelImg++ video project (*.labelimgpp.sqlite)')
+        return os.path.abspath(ustr(path)) if path else None
+
+    def _resolve_video_open_problem(self, problem, requested_path,
+                                    project_path, source_override):
+        if problem.kind == 'missing':
+            located = self._locate_video_source(project_path)
+            if located:
+                self.request_open_video(
+                    project_path, skip_prompt=True,
+                    source_override=located)
+            else:
+                self.status('Video project open cancelled')
+            return
+        choice = self._video_source_changed_choice(problem.message)
+        if choice == 'locate':
+            located = self._locate_video_source(project_path)
+            if located:
+                self.request_open_video(
+                    project_path, skip_prompt=True,
+                    source_override=located)
+            return
+        if choice == 'create':
+            source_path = source_override
+            if source_path is None and not is_video_project(requested_path):
+                source_path = requested_path
+            if source_path is None:
+                source_path = self._locate_video_source(project_path)
+            if source_path:
+                new_project = self._new_video_project_path(
+                    source_path, project_path)
+                if new_project:
+                    self.request_open_video(
+                        source_path, project_path=new_project,
+                        skip_prompt=True)
+            return
+        self.status('Video project open cancelled')
 
     def _commit_video_open(self, prepared):
         """Atomically publish worker data on QApplication.thread()."""
@@ -2961,6 +3093,17 @@ class MainWindow(QMainWindow, WindowMixin):
             for item in model.observations.values())
         self.actions.videoAcceptSuggestion.setEnabled(has_pending)
         self.actions.videoRejectSuggestion.setEnabled(has_pending)
+        has_any_pending = any(
+            item.review_state == 'pending'
+            for item in model.observations.values())
+        has_run_pending = any(
+            key in self._tracking_run_keys
+            and item.review_state == 'pending'
+            for key, item in model.observations.items())
+        self.actions.videoAcceptVisible.setEnabled(has_any_pending)
+        self.actions.videoRejectVisible.setEnabled(has_any_pending)
+        self.actions.videoAcceptRun.setEnabled(has_run_pending)
+        self.actions.videoRejectRun.setEnabled(has_run_pending)
 
     def _refresh_video_track_list(self):
         model = self.video_model
@@ -3060,11 +3203,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self._on_video_model_mutation()
         self._materialize_video_frame(self.current_video_frame_ref.pts)
 
-    def track_selected_forward(self):
-        return self._request_video_tracking(1)
+    def track_selected_forward(self, choose_endpoint=False):
+        return self._request_video_tracking(
+            1, choose_endpoint=choose_endpoint)
 
-    def track_selected_backward(self):
-        return self._request_video_tracking(-1)
+    def track_selected_backward(self, choose_endpoint=False):
+        return self._request_video_tracking(
+            -1, choose_endpoint=choose_endpoint)
 
     def _tracking_endpoint(self, track_id, start_pts, direction):
         anchors = sorted(
@@ -3082,7 +3227,33 @@ class MainWindow(QMainWindow, WindowMixin):
         upper = lower + int(snapshot.duration_pts or five_seconds)
         return max(lower, min(upper, endpoint))
 
-    def _request_video_tracking(self, direction):
+    def _choose_tracking_endpoint(self, default_pts, direction):
+        snapshot = self.video_snapshot
+        start = int(snapshot.start_pts or 0)
+        seconds = (default_pts - start) * snapshot.time_base_num / \
+            snapshot.time_base_den
+        value, accepted = QInputDialog.getText(
+            self, 'Optical-flow endpoint',
+            'Track %s until (HH:MM:SS.mmm):' % (
+                'forward' if direction > 0 else 'backward'),
+            text=format_timecode(seconds))
+        if not accepted:
+            return None
+        try:
+            endpoint = start + int(round(
+                parse_timecode(value) * snapshot.time_base_den /
+                snapshot.time_base_num))
+        except ValueError as exc:
+            self.status('Invalid tracking endpoint: %s' % exc)
+            return None
+        current = self.current_video_frame_ref.pts
+        if (endpoint - current) * direction <= 0:
+            self.status('Tracking endpoint must be in the selected direction')
+            return None
+        upper = start + int(snapshot.duration_pts or max(0, endpoint - start))
+        return max(start, min(upper, endpoint))
+
+    def _request_video_tracking(self, direction, choose_endpoint=False):
         model = self.video_model
         frame_ref = self.current_video_frame_ref
         track_id = self._selected_video_track_id
@@ -3099,6 +3270,10 @@ class MainWindow(QMainWindow, WindowMixin):
             return None
         endpoint = self._tracking_endpoint(
             track_id, frame_ref.pts, direction)
+        if choose_endpoint:
+            endpoint = self._choose_tracking_endpoint(endpoint, direction)
+            if endpoint is None:
+                return None
         if endpoint == frame_ref.pts:
             self.status('No tracking range is available in that direction')
             return None

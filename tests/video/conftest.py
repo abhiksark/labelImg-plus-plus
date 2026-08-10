@@ -12,13 +12,14 @@ def make_video():
 
     def create(path, frames=12, width=96, height=64, rate=12,
                container_format=None, rotation=0,
-               tracking_stress=False, scene_cut_at=None):
+               tracking_stress=False, scene_cut_at=None,
+               variable_rate=False, gop_size=6):
         output = av.open(str(path), mode='w', format=container_format)
         stream = output.add_stream('mpeg4', rate=rate)
         stream.width = width
         stream.height = height
         stream.pix_fmt = 'yuv420p'
-        stream.gop_size = 6
+        stream.gop_size = gop_size
         if rotation:
             stream.metadata['rotate'] = str(rotation)
         for index in range(frames):
@@ -38,7 +39,8 @@ def make_video():
             else:
                 array[12:36, 8 + index:32 + index, 1] = 255
             frame = av.VideoFrame.from_ndarray(array, format='rgb24')
-            frame.pts = index
+            frame.pts = index + (
+                index // 4 if variable_rate else 0)
             frame.time_base = fractions.Fraction(1, rate)
             for packet in stream.encode(frame):
                 output.mux(packet)
