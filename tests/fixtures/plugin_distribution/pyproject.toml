@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "labelimgpp-test-plugin"
+version = "1.0.0"
+description = "Packaged entry-point fixture for labelImg++ plugin tests"
+requires-python = ">=3.8"
+
+[project.entry-points."labelimgplusplus.plugins"]
+"org.labelimgpp.fixture" = "labelimgpp_fixture_plugin:create_plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]

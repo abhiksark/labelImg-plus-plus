@@ -2,6 +2,20 @@
 
 Overview of extension points in labelImg++ for developers who want to customize or extend functionality.
 
+## External plugins or source contributions?
+
+Use the [plugin API](plugin-authoring.md) when a separately installed package
+only needs host-owned commands, JSON settings, background tasks, read-only
+document state, and diagnostics. Plugins use the stable
+`labelimgplusplus.plugins` namespace and do not modify this repository.
+
+The patterns below are for source contributions built and reviewed with
+labelImg++ itself. Direct imports from `libs.*` and edits to MainWindow, Canvas,
+Shape, format dispatch, resources, or string bundles are not external plugin
+APIs. Custom annotation-tool APIs are tracked by issue #27 and external format
+adapters by issue #28; until those land, such work must remain a source
+contribution.
+
 ## Extension Points Overview
 
 ```
@@ -38,6 +52,7 @@ Overview of extension points in labelImg++ for developers who want to customize 
 
 | Extension Type | Files to Modify | Guide |
 |----------------|-----------------|-------|
+| External command plugin | Separate installed distribution | [Plugin Authoring](plugin-authoring.md) |
 | New annotation format | `libs/*_io.py`, `libs/labelFile.py`, `labelImgPlusPlus.py` | [Adding Formats](adding-formats.md) |
 | New action/feature | `labelImgPlusPlus.py`, `resources/strings/` | [Adding Features](adding-features.md) |
 | New language | `resources/strings/strings-XX.properties` | [i18n Guide](i18n-guide.md) |
@@ -232,6 +247,8 @@ assert shapes[0][0] == 'cat'
 
 ## Resources
 
+- [Plugin Authoring Guide](plugin-authoring.md) - Stable external plugin workflow
+- [Plugin API Major 1](../reference/plugin-api-v1.md) - Public types and compatibility policy
 - [Adding Formats Guide](adding-formats.md) - Complete format implementation
 - [Adding Features Guide](adding-features.md) - UI and action implementation
 - [i18n Guide](i18n-guide.md) - Adding translations

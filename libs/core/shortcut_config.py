@@ -60,6 +60,8 @@ class ShortcutConfig:
     """Manages keyboard shortcut configuration."""
 
     def __init__(self):
+        self._dynamic_defaults = {}
+        self._plugin_owners = {}
         self._shortcuts = dict(DEFAULT_SHORTCUTS)
 
     def get(self, action_name):
@@ -68,30 +70,127 @@ class ShortcutConfig:
 
     def set(self, action_name, shortcut):
         """Sets the shortcut for the given action name."""
+        if action_name not in DEFAULT_SHORTCUTS \
+                and action_name not in self._dynamic_defaults:
+            raise KeyError('unknown shortcut action: %s' % action_name)
+        if not isinstance(shortcut, str):
+            raise TypeError('shortcut must be a string')
         self._shortcuts[action_name] = shortcut
+
+    def register_plugin(self, action_name, default_shortcut='', plugin_id=None):
+        """Register a live plugin command while retaining stored overrides."""
+        if not isinstance(action_name, str) \
+                or not action_name.startswith('plugin.'):
+            raise ValueError('plugin shortcut IDs must start with plugin.')
+        if not isinstance(default_shortcut, str):
+            raise TypeError('default shortcut must be a string')
+        if plugin_id is not None \
+                and (not isinstance(plugin_id, str) or not plugin_id):
+            raise ValueError('plugin owner must be a non-empty string')
+        self._dynamic_defaults[action_name] = default_shortcut
+        if plugin_id is not None:
+            self._plugin_owners[action_name] = plugin_id
+        self._shortcuts.setdefault(action_name, default_shortcut)
+        return self._shortcuts[action_name]
+
+    def unregister_plugin(self, action_name, retain=True):
+        """Hide a plugin command, optionally discarding a staged default."""
+        self._dynamic_defaults.pop(action_name, None)
+        if not retain:
+            self._shortcuts.pop(action_name, None)
+            self._plugin_owners.pop(action_name, None)
+
+    def forget_plugin(self, plugin_id):
+        """Remove defaults and retained overrides for one forgotten plugin."""
+        owned = {
+            name for name, owner in self._plugin_owners.items()
+            if owner == plugin_id
+        }
+        for name in owned:
+            self._dynamic_defaults.pop(name, None)
+            self._shortcuts.pop(name, None)
+            self._plugin_owners.pop(name, None)
 
     def reset(self, action_name):
         """Resets a single action's shortcut to its default value."""
-        if action_name in DEFAULT_SHORTCUTS:
-            self._shortcuts[action_name] = DEFAULT_SHORTCUTS[action_name]
+        default = self.get_default(action_name)
+        if action_name in DEFAULT_SHORTCUTS \
+                or action_name in self._dynamic_defaults:
+            self._shortcuts[action_name] = default
 
     def reset_all(self):
         """Resets all shortcuts to their default values."""
+        retained = {
+            name: value for name, value in self._shortcuts.items()
+            if name.startswith('plugin.')
+            and name not in self._dynamic_defaults
+        }
         self._shortcuts = dict(DEFAULT_SHORTCUTS)
+        self._shortcuts.update(retained)
+        self._shortcuts.update(self._dynamic_defaults)
+        self._plugin_owners = {
+            name: owner for name, owner in self._plugin_owners.items()
+            if name in self._shortcuts
+        }
 
     def get_all(self):
         """Returns a copy of all current shortcuts."""
-        return dict(self._shortcuts)
+        visible = {
+            name: self._shortcuts.get(name, default)
+            for name, default in DEFAULT_SHORTCUTS.items()
+        }
+        for name, default in self._dynamic_defaults.items():
+            visible[name] = self._shortcuts.get(name, default)
+        return visible
+
+    def plugin_owners(self):
+        """Return the persisted command-to-plugin ownership index."""
+        return dict(self._plugin_owners)
+
+    def restore_plugin_owners(self, owners):
+        """Restore validated ownership for retained plugin shortcut keys."""
+        self._plugin_owners = {}
+        if not isinstance(owners, dict):
+            return
+        for name, owner in owners.items():
+            if (isinstance(name, str) and name.startswith('plugin.')
+                    and name in self._shortcuts
+                    and isinstance(owner, str) and owner):
+                self._plugin_owners[name] = owner
+
+    def owner_for(self, action_name):
+        return self._plugin_owners.get(action_name)
+
+    def set_plugin_owner(self, action_name, plugin_id):
+        if plugin_id is None:
+            self._plugin_owners.pop(action_name, None)
+        else:
+            self._plugin_owners[action_name] = plugin_id
+
+    def _snapshot(self):
+        return (
+            dict(self._shortcuts),
+            dict(self._dynamic_defaults),
+            dict(self._plugin_owners),
+        )
+
+    def _restore(self, snapshot):
+        shortcuts, dynamic_defaults, plugin_owners = snapshot
+        self._shortcuts = dict(shortcuts)
+        self._dynamic_defaults = dict(dynamic_defaults)
+        self._plugin_owners = dict(plugin_owners)
 
     def get_default(self, action_name):
         """Returns the default shortcut for the given action name."""
-        return DEFAULT_SHORTCUTS.get(action_name, '')
+        if action_name in DEFAULT_SHORTCUTS:
+            return DEFAULT_SHORTCUTS[action_name]
+        return self._dynamic_defaults.get(action_name, '')
 
     def find_conflict(self, shortcut, exclude_action=None):
         """Return action name that has this shortcut, or None."""
         if not shortcut:
             return None
-        for name, sc in self._shortcuts.items():
+        for name, sc in self.get_all().items():
             if name != exclude_action and sc == shortcut:
                 return name
         return None
@@ -106,9 +205,11 @@ class ShortcutConfig:
         corrupt config can never crash the load."""
         if not isinstance(data, dict):
             return
-        for key in DEFAULT_SHORTCUTS:
-            value = data.get(key)
-            if isinstance(value, str):
+        for key, value in data.items():
+            if not isinstance(value, str):
+                continue
+            if key in DEFAULT_SHORTCUTS or (
+                    isinstance(key, str) and key.startswith('plugin.')):
                 self._shortcuts[key] = value
 
     def export_json(self, file_path):

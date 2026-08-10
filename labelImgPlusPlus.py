@@ -79,6 +79,7 @@ from libs.core.save_pipeline import (
     SaveRequest, target_path as annotation_target_path, write_save_request,
 )
 from libs.core.task_coordinator import JobPriority, TaskCoordinator
+from libs.core.plugin_manager import PluginManager
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
@@ -98,7 +99,11 @@ from libs.core.video_types import (
     DocumentKind, TrackingRequest, VideoExportRequest, VideoFrameRef,
 )
 from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
+from libs.widgets.pluginManagerDialog import (
+    PluginManagerDialog, QtPluginCommandHost,
+)
 from libs.integrations import segmentation
+from labelimgplusplus.plugins import DocumentDescriptor
 
 # Formats
 from libs.formats.labelFile import LabelFile, LabelFileError, LabelFileFormat
@@ -205,6 +210,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self._path_to_idx = {}  # O(1) lookup: path -> index
         self._annotation_status_cache = {}  # Cache: path -> status (reduces I/O)
         self.task_coordinator = TaskCoordinator(parent=self)
+        self._plugin_document_generation = 0
+        self._plugin_document_ready = False
+        self.plugin_manager = PluginManager(
+            settings, self.task_coordinator, parent=self)
         self._dataset_generation = 0
         self.dataset_snapshot = DatasetSnapshot.from_images(
             (), save_dir=default_save_dir, generation=0)
@@ -895,6 +904,7 @@ class MainWindow(QMainWindow, WindowMixin):
             edit=self.menu(get_str('menu_edit')),
             view=self.menu(get_str('menu_view')),
             tools=self.menu('&Tools'),
+            plugins=self.menu('&Plugins'),
             help=self.menu(get_str('menu_help')),
             recentFiles=QMenu(get_str('menu_openRecent')),
             labelList=label_menu)
@@ -1030,6 +1040,9 @@ class MainWindow(QMainWindow, WindowMixin):
         export_ultralytics_action = action(
             get_str('exportUltralytics'), self.export_ultralytics_dataset,
             None, 'save-as', get_str('exportUltralyticsDetail'))
+        plugin_manager_action = action(
+            'Plugins…', self.show_plugins_dialog,
+            None, None, 'Inspect, enable, disable, and diagnose installed plugins')
         add_actions(self.menus.tools, (
             check_labels, batch_verify_action, split_dataset_action,
             export_ultralytics_action,
@@ -1039,7 +1052,8 @@ class MainWindow(QMainWindow, WindowMixin):
             video_accept_visible, video_reject_visible,
             video_accept_run, video_reject_run,
             video_delete_track, video_export,
-            None, sam_mode_action, sam_settings_action))
+            None, sam_mode_action, sam_settings_action,
+            None, plugin_manager_action))
 
         # Custom context menu for the canvas widget:
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
@@ -1181,6 +1195,12 @@ class MainWindow(QMainWindow, WindowMixin):
         # Start auto-save timer if enabled (Issue #13)
         if self.auto_save_enabled.isChecked():
             self._toggle_auto_save_timer()
+
+        self.plugin_command_host = QtPluginCommandHost(
+            self, self.menus.plugins, self.shortcut_config,
+            self._action_map, self.settings)
+        self.plugin_manager.command_host = self.plugin_command_host
+        self.plugin_manager.activate_enabled()
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -1374,12 +1394,14 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.save.setEnabled(True)
             self.update_save_status(saved=False)
             self.update_box_count()
+            self._publish_plugin_document()
             return
         self._document_revision += 1
         self.dirty = True
         self.actions.save.setEnabled(True)
         self.update_save_status(saved=False)
         self.update_box_count()
+        self._publish_plugin_document()
 
     def set_clean(self):
         self.dirty = False
@@ -1395,6 +1417,46 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.editMode.setEnabled(False)
             self.actions.verify.setEnabled(False)
         self.update_save_status(saved=True)
+        self._publish_plugin_document()
+
+    def _plugin_document_descriptor(self):
+        kind = getattr(self, 'document_kind', DocumentKind.NONE)
+        source_path = None
+        project_path = None
+        read_only = True
+        revision = 0
+        dirty = False
+        if kind == DocumentKind.IMAGE:
+            source_path = self.file_path or None
+            read_only = False
+            revision = self._document_revision
+            dirty = bool(self.dirty)
+        elif kind == DocumentKind.VIDEO and self.video_snapshot is not None:
+            source_path = self.video_snapshot.source_path
+            project_path = self.video_snapshot.project_path
+            if project_path is not None:
+                project_path = os.fspath(project_path)
+            read_only = bool(self.video_snapshot.read_only)
+            revision = self._document_revision
+            dirty = bool(self.dirty)
+        return DocumentDescriptor(
+            kind=kind.value,
+            source_path=source_path,
+            project_path=project_path,
+            generation=self._plugin_document_generation,
+            revision=revision,
+            dirty=dirty,
+            read_only=read_only,
+        )
+
+    def _publish_plugin_document(self, new_generation=False, force=False):
+        manager = getattr(self, 'plugin_manager', None)
+        if manager is None or (not self._plugin_document_ready and not force):
+            return
+        assert QApplication.instance().thread() == self.thread()
+        if new_generation:
+            self._plugin_document_generation += 1
+        manager.publish_document(self._plugin_document_descriptor())
 
     def toggle_actions(self, value=True):
         """Enable/Disable widgets which depend on an opened image."""
@@ -1463,6 +1525,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._update_save_status_style(saved)
 
     def reset_state(self):
+        self._plugin_document_ready = False
         self._restart_workers_if_needed()
         self._close_video_decoder()
         self._set_document_kind(DocumentKind.NONE)
@@ -1483,6 +1546,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Reset status bar widgets
         self.label_box_count.setText('Boxes: 0')
         self.update_save_status(saved=True)
+        self._publish_plugin_document(new_generation=True, force=True)
 
     def _set_document_kind(self, kind):
         """Switch cache policy and document-only UI without touching content."""
@@ -1637,6 +1701,12 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog = ShortcutsDialog(self.shortcut_config, self._action_map, self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
+        dialog.exec_()
+
+    def show_plugins_dialog(self):
+        dialog = PluginManagerDialog(self.plugin_manager, self)
+        if hasattr(self, '_current_theme'):
+            dialog.setStyleSheet(get_stylesheet(self._current_theme))
         dialog.exec_()
 
     def create_shape(self):
@@ -2959,6 +3029,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_status_bar()
         self.canvas.setFocus(True)
         self.status('Opened video %s' % os.path.basename(snapshot.source_path))
+        self._plugin_document_ready = True
+        self._publish_plugin_document(new_generation=True, force=True)
 
     def open_video(self, path, project_path=None):
         """Synchronous compatibility API for extensions and tests."""
@@ -3126,6 +3198,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._refresh_video_timeline_markers()
         self._refresh_video_track_list()
         self.update_box_count()
+        self._publish_plugin_document()
 
     def _shape_geometry(self, shape):
         inverse = (1.0 / self._image_scale_factor
@@ -4171,6 +4244,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 'image.ui-apply', trace_started,
                 args={'path': hash_path(result.path),
                       'shapes': len(result.shapes)})
+        self._plugin_document_ready = True
+        self._publish_plugin_document(new_generation=True, force=True)
 
     def request_next_image(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:
@@ -4379,6 +4454,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
             self.canvas.setFocus(True)
             self._update_current_image_stats()
+            self._plugin_document_ready = True
+            self._publish_plugin_document(new_generation=True, force=True)
             return True
         return False
 
@@ -4540,6 +4617,10 @@ class MainWindow(QMainWindow, WindowMixin):
         QTimer.singleShot(0, self.close)
 
     def _shutdown_workers(self):
+        self._plugin_document_ready = False
+        self._publish_plugin_document(new_generation=True, force=True)
+        if hasattr(self, 'plugin_manager'):
+            self.plugin_manager.shutdown()
         self.annotation_catalog.cancel()
         if hasattr(self, 'sam_controller'):
             self.sam_controller.cancel()

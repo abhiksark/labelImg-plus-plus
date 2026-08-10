@@ -23,12 +23,17 @@ Common issues and solutions when using labelImg++.
    python3 -c "from lxml import etree; print('lxml OK')"
    ```
 
-3. **Reset Settings**
+3. **Start in plugin safe mode**
    ```bash
-   rm ~/.labelImgSettings.pkl
+   LABELIMGPP_DISABLE_PLUGINS=1 labelimgpp
    ```
 
-4. **Rebuild Resources**
+4. **Reset Settings**
+   ```bash
+   rm ~/.labelImgSettings.json
+   ```
+
+5. **Rebuild Resources**
    ```bash
    make qt5py3
    # Or manually:
@@ -50,8 +55,57 @@ make qt5py3
 
 **Solution:**
 ```bash
-rm ~/.labelImgSettings.pkl
+rm ~/.labelImgSettings.json
 ```
+
+## Plugins
+
+### Startup changed after enabling a plugin
+
+Run labelImg++ without discovering or loading any plugin:
+
+```bash
+LABELIMGPP_DISABLE_PLUGINS=1 labelimgpp
+```
+
+In Windows PowerShell:
+
+```powershell
+$env:LABELIMGPP_DISABLE_PLUGINS = "1"
+labelimgpp
+```
+
+Safe mode does not change image/video projects, plugin configuration,
+shortcuts, or unrelated application settings. Uninstall or repair the suspect
+distribution in the same virtual environment, then start normally. Plugins are
+trusted in-process code; safe mode cannot undo filesystem, network, or process
+actions already performed by a plugin.
+
+### Plugin is disabled or says restart required
+
+Open **Tools → Plugins…**, verify the distribution name, version, homepage, and
+entry-point reference, then change the checkbox. The change is persisted
+immediately but takes effect only after a complete application restart. New
+plugins always default to disabled.
+
+### Plugin is incompatible, conflicting, or failed
+
+- **Incompatible** means its required API major or capability is unsupported.
+- **Conflicting** means multiple installed distributions claim the same plugin
+  ID; the host loads none of them.
+- **Failed** means factory, metadata, activation, command, callback, task, or
+  deactivation validation raised an exception.
+
+Select the plugin in the manager and copy its structured diagnostics. Upgrade
+or remove the distribution rather than editing `libs.*` or plugin metadata in
+place.
+
+### Uninstalled plugin still appears
+
+Unavailable entries retain their configuration and shortcut overrides by
+design. Select the entry and choose **Forget Unavailable Plugin** to remove its
+`plugins.config`, cached metadata, enabled state, and `plugin.<id>.*` shortcut
+keys.
 
 ## Smart Video
 
@@ -333,7 +387,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 | Problem | Quick Fix |
 |---------|-----------|
-| Won't start | `rm ~/.labelImgSettings.pkl` |
+| Won't start | Try `LABELIMGPP_DISABLE_PLUGINS=1`, then inspect `~/.labelImgSettings.json` |
 | No resources | `make qt5py3` |
 | No save | Check File > Change Save Dir |
 | No load | Check annotation filename matches |

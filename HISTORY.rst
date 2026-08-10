@@ -1,6 +1,20 @@
 History
 =======
 
+Unreleased
+----------
+
+* Add API-major-1 installed Python plugins with PyPA entry-point discovery,
+  transactional activation, host-owned commands and shortcuts, JSON-only
+  settings, bounded generation-scoped tasks, read-only document descriptors,
+  structured diagnostics, a restart-oriented manager, and safe-mode recovery.
+* Keep new and disabled plugins import-free, preserve unavailable
+  configuration until explicitly forgotten, and document that enabled plugins
+  are trusted in-process code rather than sandboxed extensions.
+* Qualify a separately installed fixture wheel on Python 3.8 through 3.13 and
+  add five-run startup, 100-entry discovery/manager, cancellation, and teardown
+  gates.
+
 3.0.0 (2026-08-09)
 ------------------
 
