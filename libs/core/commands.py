@@ -75,7 +75,8 @@ class CreateShapeCommand(Command):
     Undo removes the shape from canvas and label list.
     """
 
-    def __init__(self, main_window, shape):
+    def __init__(self, main_window, shape, video_before=None,
+                 video_after=None):
         """Initialize with reference to main window and the created shape.
 
         Args:
@@ -84,9 +85,21 @@ class CreateShapeCommand(Command):
         """
         self.main_window = main_window
         self.shape = shape
+        self.video_before = video_before
+        self.video_after = video_after
+
+    def _restore_video(self, state):
+        self.main_window.video_model.restore_state(state)
+        self.main_window._on_video_model_mutation()
+        frame_ref = self.main_window.current_video_frame_ref
+        if frame_ref is not None:
+            self.main_window._materialize_video_frame(frame_ref.pts)
 
     def execute(self):
         """Add the shape to canvas and label list."""
+        if self.video_after is not None:
+            self._restore_video(self.video_after)
+            return
         self.main_window.canvas.shapes.append(self.shape)
         _rebuild_spatial(self.main_window.canvas)
         self.main_window.add_label(self.shape)
@@ -94,6 +107,9 @@ class CreateShapeCommand(Command):
 
     def undo(self):
         """Remove the shape from canvas and label list."""
+        if self.video_before is not None:
+            self._restore_video(self.video_before)
+            return
         if self.shape in self.main_window.canvas.shapes:
             self.main_window.canvas.shapes.remove(self.shape)
             _rebuild_spatial(self.main_window.canvas)
@@ -104,6 +120,8 @@ class CreateShapeCommand(Command):
 
     @property
     def description(self):
+        if self.video_after is not None:
+            return f"Create video track '{self.shape.label}'"
         return f"Create shape '{self.shape.label}'"
 
 
