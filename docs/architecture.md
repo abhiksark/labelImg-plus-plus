@@ -2,6 +2,121 @@
 
 This document describes the high-level architecture of labelImg++, including component relationships, data flow, and design patterns.
 
+## Runtime and dataset pipeline
+
+Normal UI actions use bounded Qt worker lanes owned by
+`libs/core/task_coordinator.py`. Interactive image work has one or two threads,
+background catalog/thumbnail/bulk work has one to four, and SAM has one
+dedicated thread. Jobs carry cancellation handles, dataset generations, and
+optional latest-request-wins keys. The process-global Qt thread pool is not
+used.
+
+Opening a directory builds an immutable `DatasetSnapshot` in a worker. The
+snapshot owns the sorted paths, an O(1) path index, and an `AnnotationResolver`
+that computes recursive collision-safe annotation stems and directory filename
+sets once. A completed snapshot replaces the visible dataset atomically; a
+failed or cancelled scan leaves the prior dataset intact.
+
+One progressive `AnnotationCatalog` supplies file-list filters, both gallery
+surfaces, statistics, and verification counts. Shared COCO/CreateML documents
+are parsed and indexed once per `(path, mtime_ns, size)` fingerprint.
+
+UI navigation calls `request_load_file()`. Its worker returns an immutable
+`ImageLoadResult` containing a worker-owned `QImage` and raw shape tuples. Only
+the application thread creates `QPixmap`, `Shape`, and widget items. A
+fingerprinted five-frame/96 MiB LRU supports adjacent-image prefetch. The
+historical synchronous `load_file()` remains available to extensions and
+tests.
+
+Menu, shortcut, autosave, navigation, and verification saves create immutable
+`SaveRequest` values. Worker serialization is atomically published with
+`os.replace`; a revision check marks the document clean only if no later edit
+occurred. `save_file()` remains the synchronous compatibility entry point.
+
+## Plugin runtime
+
+The Qt-free public boundary is `labelimgplusplus.plugins`. Installed
+distributions advertise zero-argument factories through the
+`labelimgplusplus.plugins` entry-point group. `plugin_discovery.py` reads only
+distribution metadata during discovery, adapts both legacy and selectable
+`importlib.metadata` collections, sorts deterministically, and does not import
+disabled plugin targets.
+
+MainWindow constructs `PluginManager` after Settings and TaskCoordinator. Once
+core UI construction is complete, enabled candidates are loaded in order.
+Each activation receives an `ActivationContext` containing staged commands,
+namespaced JSON settings, a restricted background task service, immutable
+document descriptors, and diagnostics. The manager commits registrations
+atomically or discards them and continues base startup.
+
+The Qt command host creates every plugin `QAction`, places actions in the
+host-owned Plugins menu, and applies dynamic shortcut defaults and retained
+overrides. Plugins never receive MainWindow, menu, action, Canvas, Shape, or
+mutable video objects. Enable/disable state is saved immediately but is applied
+only on restart.
+
+Plugin workers share the bounded background lane and use cooperative
+cancellation. Result, error, progress, command, enablement, and document
+callbacks return to `QApplication.thread()`. Successful image/video commits,
+reset/close transitions, and dirty/revision changes publish frozen
+`DocumentDescriptor` values. A generation change cancels plugin work and
+discards stale results.
+
+Shutdown stops plugin task submission, cancels handles, deactivates active
+plugins in reverse order, removes host registrations, and then shuts down the
+core TaskCoordinator. `LABELIMGPP_DISABLE_PLUGINS=1` bypasses discovery and
+loading for recovery. This boundary limits accidental coupling but is not a
+sandbox; enabled plugins are trusted in-process Python code.
+
+Ultralytics dataset export captures the active immutable snapshot, annotation
+resolver, source-format selection, class order, split ratios, and copy mode in
+an `UltralyticsExportRequest`. A background job reuses the image annotation
+pipeline and YOLO normalization writer, builds `images/`, `labels/`,
+`data.yaml`, and a manifest in an owned sibling staging directory, then
+atomically publishes only to a new or empty destination. Cancellation and
+conversion errors remove only that staging tree.
+
+## Smart-video pipeline
+
+`DocumentKind` isolates no-document, image, and video state. Video requests use
+a dedicated one-thread decoder lane; tracking and export use independent PyAV
+contexts on the background lane so bulk work cannot block scrubbing. Workers
+return immutable records and detached `QImage` values. `QPixmap`, `Shape`, dock,
+track-list, timeline, and canvas mutation remain on `QApplication.thread()`.
+
+Opening is transactional. `video_session.py` resolves a video/project source,
+opens the first playable stream, fingerprints bounded source samples, decodes
+the first frame, and validates or initializes SQLite before MainWindow swaps
+the visible document. Failed or stale requests close their new container and
+leave the old document intact. `open_video()` is the synchronous compatibility
+path; `request_open_video()` is the GUI path.
+
+The session-owned `VideoDecoderSession` seeks in stream PTS/time-base units,
+decodes forward from a keyframe, supports nearest or at/after selection, and
+applies stream or display-matrix rotation before display. Video uses up to 12
+entries in the shared 96 MiB frame cache. Together with two 16 MiB gallery
+caches, the application cache ceiling remains 128 MiB.
+
+`VideoProjectModel` is the in-memory overlay. It materializes accepted manual
+states, accepted tracker states, pending suggestions, or rectangle/keypoint
+interpolation in that order. Polygon interpolation is forbidden. Canvas edits
+become accepted manual observations; computed occurrences never serialize as
+image `Shape` state.
+
+`video_project.py` owns the application-ID/schema-versioned SQLite file. WAL,
+foreign keys, `synchronous=FULL`, busy timeout, expected durable revisions, and
+`BEGIN IMMEDIATE` delta commits fence concurrent or failed saves. MainWindow
+chains writes and only marks clean when the saved revision still matches.
+Save As uses SQLite backup and clean close checkpoints WAL.
+
+`video_tracking.py` performs bounded-resolution Shi–Tomasi/Lucas–Kanade flow
+and RANSAC affine estimation, emitting immutable pending observations. Session,
+request, generation, document-revision, and seed-revision checks discard stale
+batches. `video_export.py` decodes original-resolution oriented frames in an
+independent context, filters to accepted materialization, reuses the existing
+format contracts, and atomically publishes an owned staging directory plus a
+video manifest.
+
 ## System Architecture
 
 ```
@@ -391,10 +506,11 @@ labelImg++/
 
 ## Threading Model
 
-labelImg++ runs entirely on the main Qt event loop thread:
-- No background workers for I/O
-- UI remains responsive for typical image sizes
-- Large images may cause brief freezes during load/save
+The Qt application thread owns widgets, `QPixmap`, `Shape`, selection, and
+document mutation. Bounded coordinator lanes own image decode/catalog work,
+bulk jobs, SAM, and serialized interactive video decode. Background work uses
+immutable snapshots, cooperative cancellation, generation fencing, and queued
+signals to return plain data or detached `QImage` values to the UI.
 
 ## Extension Points
 

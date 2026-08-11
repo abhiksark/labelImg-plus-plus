@@ -26,7 +26,9 @@ class GalleryStatusController(QObject):
         self._get_widget = widget_getter
         self._cache = cache  # Shared {path: AnnotationStatus} dict (by reference).
         self._worker_factory = worker_factory
-        self._thread_pool = thread_pool or QThreadPool.globalInstance()
+        self._thread_pool = thread_pool or QThreadPool()
+        if thread_pool is None:
+            self._thread_pool.setMaxThreadCount(1)
         self._worker = None
         self._worker_gen = 0  # Bumped per refresh; guards against stale signals.
         self._label = label

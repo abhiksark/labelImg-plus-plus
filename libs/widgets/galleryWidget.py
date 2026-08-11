@@ -3,14 +3,14 @@
 
 try:
     from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush, QPolygonF
-    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer, QPointF
+    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer, QPoint, QPointF
     from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
                                   QListView, QSlider, QLabel, QPushButton, QFrame)
 except ImportError:
     from PyQt4.QtGui import (QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush,
                               QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
                               QListView, QSlider, QLabel, QPolygonF)
-    from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPointF
+    from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPoint, QPointF
 
 import hashlib
 import json
@@ -29,6 +29,7 @@ from libs.formats.annotation_paths import find_existing_annotation
 from libs.formats.coco_io import COCOReader
 from libs.formats.create_ml_io import CreateMLReader
 from libs.formats.pascal_voc_io import PascalVocReader
+from libs.core.profiling import hash_path, recorder as trace_recorder
 
 
 OverlayShape = namedtuple('OverlayShape', ['label', 'shape_type', 'points'])
@@ -475,7 +476,8 @@ def _find_classes_file(annotation_path, image_dir):
     return None
 
 
-def find_annotation_file(image_path, save_dir=None, image_list=None):
+def find_annotation_file(image_path, save_dir=None, image_list=None,
+                         resolver=None):
     """Find annotation file for an image.
 
     Returns (annotation_path, format, classes_path) or three ``None`` values.
@@ -488,6 +490,7 @@ def find_annotation_file(image_path, save_dir=None, image_list=None):
         save_dir=save_dir,
         image_list=image_list,
         extensions=('.txt', '.xml', '.json'),
+        resolver=resolver,
     )
     if not annotation_path:
         search_directories = []
@@ -495,11 +498,15 @@ def find_annotation_file(image_path, save_dir=None, image_list=None):
             search_directories.append(os.fspath(save_dir))
         if img_dir not in search_directories:
             search_directories.append(img_dir)
-        for directory in search_directories:
-            candidate = os.path.join(directory, 'annotations.json')
-            if os.path.isfile(candidate):
-                annotation_path = candidate
-                break
+        if resolver is not None:
+            annotation_path = resolver.named_file(
+                image_path, 'annotations.json')
+        else:
+            for directory in search_directories:
+                candidate = os.path.join(directory, 'annotations.json')
+                if os.path.isfile(candidate):
+                    annotation_path = candidate
+                    break
     if not annotation_path:
         return None, None, None
 
@@ -530,9 +537,23 @@ class AnnotationStatus(IntEnum):
 class ThumbnailCache:
     """LRU cache for thumbnail images with O(1) operations using OrderedDict."""
 
-    def __init__(self, max_size=200):
+    def __init__(self, max_size=200, max_bytes=16 * 1024 * 1024):
         self.max_size = max_size
+        self.max_bytes = max(0, int(max_bytes))
         self._cache = OrderedDict()
+        self._sizes = {}
+        self._bytes = 0
+
+    @staticmethod
+    def _pixmap_bytes(pixmap):
+        try:
+            return max(0, pixmap.width()) * max(0, pixmap.height()) * 4
+        except (AttributeError, TypeError):
+            return 0
+
+    @property
+    def bytes_used(self):
+        return self._bytes
 
     def get(self, path):
         """Retrieve thumbnail from cache (O(1) with LRU update)."""
@@ -543,21 +564,30 @@ class ThumbnailCache:
 
     def put(self, path, pixmap):
         """Store thumbnail in cache with O(1) LRU eviction."""
+        size = self._pixmap_bytes(pixmap)
         if path in self._cache:
+            self._bytes -= self._sizes.pop(path, 0)
             self._cache.move_to_end(path)  # O(1)
             self._cache[path] = pixmap
         else:
-            if len(self._cache) >= self.max_size:
-                self._cache.popitem(last=False)  # O(1) eviction
             self._cache[path] = pixmap
+        self._sizes[path] = size
+        self._bytes += size
+        while (len(self._cache) > self.max_size
+               or (self.max_bytes and self._bytes > self.max_bytes)):
+            evicted_path, _pixmap = self._cache.popitem(last=False)
+            self._bytes -= self._sizes.pop(evicted_path, 0)
 
     def clear(self):
         """Clear all cached thumbnails."""
         self._cache.clear()
+        self._sizes.clear()
+        self._bytes = 0
 
     def remove(self, path):
         """Remove specific thumbnail from cache."""
-        self._cache.pop(path, None)  # O(1)
+        if self._cache.pop(path, None) is not None:
+            self._bytes -= self._sizes.pop(path, 0)
 
 
 class ThumbnailLoaderSignals(QObject):
@@ -568,47 +598,67 @@ class ThumbnailLoaderSignals(QObject):
 class ThumbnailLoaderWorker(QRunnable):
     """Worker for async thumbnail generation with annotation overlay."""
 
-    def __init__(self, image_path, size=100, save_dir=None, image_list=None):
+    def __init__(self, image_path, size=100, save_dir=None, image_list=None,
+                 resolver=None):
         super().__init__()
         self.image_path = image_path
         self.size = size
         self.save_dir = save_dir
         self.image_list = list(image_list) if image_list is not None else None
+        self.resolver = resolver
         self.signals = ThumbnailLoaderSignals()
 
     def run(self):
         """Load, scale image, and draw annotations in background thread."""
         try:
-            reader = QImageReader(self.image_path)
-            reader.setAutoTransform(True)
-
-            original_size = reader.size()
-            if original_size.isValid():
-                scaled_size = original_size.scaled(
-                    self.size, self.size,
-                    Qt.KeepAspectRatio
-                )
-                reader.setScaledSize(scaled_size)
-
-            image = reader.read()
-            if not image.isNull():
-                # Draw annotations on thumbnail
-                source_size = (
-                    original_size
-                    if original_size.isValid()
-                    else QSize(image.width(), image.height())
-                )
-                image = self._draw_annotations(image, source_size)
+            image = self.load()
+            if image is not None and not image.isNull():
                 self.signals.thumbnail_ready.emit(self.image_path, image)
         except Exception:
             pass
 
+    def load(self):
+        """Return the worker-safe QImage, leaving QPixmap creation to the UI."""
+        trace_started = None
+        if trace_recorder is not None:
+            import time
+            trace_started = time.perf_counter_ns()
+        try:
+            return self._load_image()
+        finally:
+            if trace_recorder is not None:
+                trace_recorder.complete(
+                    'thumbnail.load', trace_started,
+                    args={'path': hash_path(self.image_path)})
+
+    def _load_image(self):
+        reader = QImageReader(self.image_path)
+        reader.setAutoTransform(True)
+
+        original_size = reader.size()
+        if original_size.isValid():
+            scaled_size = original_size.scaled(
+                self.size, self.size, Qt.KeepAspectRatio)
+            reader.setScaledSize(scaled_size)
+
+        image = reader.read()
+        if image.isNull():
+            return None
+        source_size = (
+            original_size if original_size.isValid()
+            else QSize(image.width(), image.height()))
+        return self._draw_annotations(image, source_size)
+
     def _draw_annotations(self, image, original_size=None):
         """Draw normalized annotation shapes on the thumbnail image."""
         # Find annotation file
-        ann_path, ann_format, classes_path = find_annotation_file(
-            self.image_path, self.save_dir, self.image_list
-        )
+        if self.resolver is None:
+            ann_path, ann_format, classes_path = find_annotation_file(
+                self.image_path, self.save_dir, self.image_list)
+        else:
+            ann_path, ann_format, classes_path = find_annotation_file(
+                self.image_path, self.save_dir, self.image_list,
+                resolver=self.resolver)
         if not ann_path:
             return image
 
@@ -685,16 +735,21 @@ class GalleryWidget(QWidget):
     MIN_ICON_SIZE = 40
     MAX_ICON_SIZE = 300
 
-    def __init__(self, parent=None, show_size_slider=False):
+    def __init__(self, parent=None, show_size_slider=False,
+                 coordinator=None):
         super().__init__(parent)
 
         self._icon_size = self.DEFAULT_ICON_SIZE
         self._show_size_slider = show_size_slider
         self._save_dir = None  # Directory where annotations are saved
+        self._coordinator = coordinator
+        self._resolver = None
 
         self.thumbnail_cache = ThumbnailCache(max_size=300)
-        self.thread_pool = QThreadPool.globalInstance()
-        self.thread_pool.setMaxThreadCount(4)
+        self.thread_pool = (coordinator.pool('background')
+                            if coordinator is not None else QThreadPool())
+        if coordinator is None:
+            self.thread_pool.setMaxThreadCount(4)
 
         self._path_to_item = {}
         self._image_list = []
@@ -703,6 +758,7 @@ class GalleryWidget(QWidget):
         self._loading_paths = set()
         self._thumbnail_request_serial = 0
         self._active_thumbnail_requests = {}
+        self._thumbnail_handles = {}
         self._statuses = {}
         # Keep the status selection when the gallery is repopulated. Statuses
         # arrive asynchronously after a directory reload, so filtered views
@@ -715,6 +771,8 @@ class GalleryWidget(QWidget):
         # Theme colors cache for placeholders and item backgrounds
         self._placeholder_color = QColor(220, 220, 220)  # Default light
         self._item_bg_color = QColor(240, 240, 240)      # Default light
+        self._placeholder_icon_key = None
+        self._placeholder_icon_value = None
 
         # Status border colors (defaults, updated by theme)
         self._status_colors = {
@@ -808,6 +866,7 @@ class GalleryWidget(QWidget):
         if hasattr(self, 'size_value_label'):
             self.size_value_label.setText(f"{value}px")
         self._apply_icon_size()
+        self._placeholder_icon_key = None
         # Clear cache and reload thumbnails at new size
         self.thumbnail_cache.clear()
         self._loading_paths.clear()
@@ -831,6 +890,7 @@ class GalleryWidget(QWidget):
 
         self._placeholder_color = hex_to_qcolor(colors['placeholder'])
         self._item_bg_color = hex_to_qcolor(colors['item_bg'])
+        self._placeholder_icon_key = None
 
         # Update status border colors
         self._status_colors[AnnotationStatus.NO_LABELS] = hex_to_qcolor(colors['status_no_labels'])
@@ -852,13 +912,21 @@ class GalleryWidget(QWidget):
 
     def _reload_all_thumbnails(self):
         """Reload all thumbnails at current size."""
+        placeholder_icon = self._placeholder_icon()
         for path, item in self._path_to_item.items():
-            # Set placeholder
-            placeholder = QPixmap(self._icon_size, self._icon_size)
-            placeholder.fill(self._placeholder_color)
-            item.setIcon(QIcon(placeholder))
+            item.setIcon(placeholder_icon)
             item.setSizeHint(QSize(self._icon_size + 20, self._icon_size + 40))
         self._load_visible_thumbnails()
+
+    def _placeholder_icon(self):
+        """Return one implicitly-shared placeholder for every unloaded item."""
+        key = (self._icon_size, self._placeholder_color.rgba())
+        if self._placeholder_icon_key != key:
+            placeholder = QPixmap(self._icon_size, self._icon_size)
+            placeholder.fill(self._placeholder_color)
+            self._placeholder_icon_value = QIcon(placeholder)
+            self._placeholder_icon_key = key
+        return self._placeholder_icon_value
 
     def set_image_list(self, image_paths):
         """Populate gallery with images using batched creation."""
@@ -868,6 +936,19 @@ class GalleryWidget(QWidget):
         # Start batched item creation with current batch_id
         current_batch = self._batch_id
         self._add_items_batch(current_batch)
+
+    def set_dataset_snapshot(self, snapshot):
+        """Use a precomputed resolver for all subsequent thumbnail work."""
+        self._resolver = snapshot.resolver if snapshot is not None else None
+        self.set_save_dir(snapshot.save_dir if snapshot is not None else None)
+        self.set_image_list(snapshot.image_paths if snapshot is not None else ())
+
+    def set_annotation_resolver(self, resolver):
+        self._resolver = resolver
+
+    def set_task_coordinator(self, coordinator):
+        self._coordinator = coordinator
+        self.thread_pool = coordinator.pool('background')
 
     def _add_items_batch(self, batch_id, batch_size=100):
         """Add items in batches to prevent UI freeze."""
@@ -906,9 +987,7 @@ class GalleryWidget(QWidget):
         item.setSizeHint(QSize(grid_size, grid_size + 20))
 
         # Set placeholder icon
-        placeholder = QPixmap(self._icon_size, self._icon_size)
-        placeholder.fill(self._placeholder_color)
-        item.setIcon(QIcon(placeholder))
+        item.setIcon(self._placeholder_icon())
 
         # Set initial status color (gray background)
         item.setBackground(QBrush(self._item_bg_color))
@@ -947,24 +1026,60 @@ class GalleryWidget(QWidget):
             return
         self._loading_thumbnails = True
         try:
-            viewport_rect = self.list_widget.viewport().rect()
-            count = self.list_widget.count()
+            items = self._visible_items_with_margin()
+            desired = {
+                item.data(Qt.UserRole) for item in items
+                if item.data(Qt.UserRole)
+            }
+            # Queued work outside the viewport is no longer useful. Running
+            # decodes are cooperatively invalidated and their results dropped.
+            for path, handle in list(self._thumbnail_handles.items()):
+                if path not in desired:
+                    handle.cancel()
+                    self._thumbnail_handles.pop(path, None)
+                    self._loading_paths.discard(path)
+                    self._active_thumbnail_requests.pop(path, None)
 
-            for i in range(count):
-                item = self.list_widget.item(i)
-                item_rect = self.list_widget.visualItemRect(item)
-
-                # Check if item is visible (with some buffer)
-                if item_rect.intersects(viewport_rect.adjusted(0, -200, 0, 200)):
-                    path = item.data(Qt.UserRole)
-                    if path and path not in self._loading_paths:
-                        cached = self.thumbnail_cache.get(path)
-                        if cached:
-                            self._set_item_icon(item, cached, path)
-                        else:
-                            self._load_thumbnail_async(path)
+            for item in items:
+                path = item.data(Qt.UserRole)
+                if path and path not in self._loading_paths:
+                    cached = self.thumbnail_cache.get(path)
+                    if cached:
+                        self._set_item_icon(item, cached, path)
+                    else:
+                        self._load_thumbnail_async(path)
         finally:
             self._loading_thumbnails = False
+
+    def _visible_items_with_margin(self):
+        """Return viewport items plus one grid row without scanning all rows."""
+        count = self.list_widget.count()
+        if not count:
+            return []
+        viewport = self.list_widget.viewport().rect()
+        grid = self.list_widget.gridSize()
+        step_x = max(1, grid.width())
+        step_y = max(1, grid.height())
+        visible_rows = set()
+        for y in range(0, viewport.height() + step_y, step_y):
+            for x in range(0, viewport.width() + step_x, step_x):
+                item = self.list_widget.itemAt(QPoint(
+                    min(x + step_x // 2, max(0, viewport.width() - 1)),
+                    min(y + step_y // 2, max(0, viewport.height() - 1))))
+                if item is not None:
+                    visible_rows.add(self.list_widget.row(item))
+        if not visible_rows:
+            current = self.list_widget.currentRow()
+            visible_rows.add(max(0, current))
+        columns = max(1, viewport.width() // step_x)
+        first = max(0, min(visible_rows) - columns)
+        last = min(count, max(visible_rows) + columns + 1)
+        # The scheduler is deliberately bounded even for pathological layouts.
+        return [
+            self.list_widget.item(row)
+            for row in range(first, min(last, first + 512))
+            if not self.list_widget.item(row).isHidden()
+        ]
 
     def _load_thumbnail_async(self, image_path):
         """Load thumbnail in background thread."""
@@ -975,12 +1090,43 @@ class GalleryWidget(QWidget):
         self._thumbnail_request_serial += 1
         request_id = self._thumbnail_request_serial
         self._active_thumbnail_requests[image_path] = request_id
-        worker = ThumbnailLoaderWorker(
-            image_path, self._icon_size, self._save_dir, self._image_list)
-        worker.signals.thumbnail_ready.connect(
-            lambda path, image, rid=request_id:
-            self._on_thumbnail_loaded(path, image, rid))
-        self.thread_pool.start(worker)
+        if self._resolver is None:
+            worker = ThumbnailLoaderWorker(
+                image_path, self._icon_size, self._save_dir,
+                self._image_list)
+        else:
+            worker = ThumbnailLoaderWorker(
+                image_path, self._icon_size, self._save_dir,
+                self._image_list, resolver=self._resolver)
+        if self._coordinator is None:
+            worker.signals.thumbnail_ready.connect(
+                lambda path, image, rid=request_id:
+                self._on_thumbnail_loaded(path, image, rid))
+            self.thread_pool.start(worker)
+            return
+        if self._coordinator.is_shutting_down:
+            self._loading_paths.discard(image_path)
+            self._active_thumbnail_requests.pop(image_path, None)
+            return
+
+        handle = self._coordinator.submit(
+            'background', lambda job: worker.load(),
+            priority=10, key='thumbnail:' + image_path, latest=True)
+        self._thumbnail_handles[image_path] = handle
+        handle.result.connect(
+            lambda image, path=image_path, rid=request_id:
+            self._on_thumbnail_loaded(path, image, rid)
+            if image is not None else None)
+        handle.finished.connect(
+            lambda path=image_path, rid=request_id:
+            self._on_thumbnail_finished(path, rid))
+
+    def _on_thumbnail_finished(self, path, request_id):
+        if self._active_thumbnail_requests.get(path) == request_id:
+            self._thumbnail_handles.pop(path, None)
+            if path in self._loading_paths and path not in self.thumbnail_cache._cache:
+                self._loading_paths.discard(path)
+                self._active_thumbnail_requests.pop(path, None)
 
     def _on_thumbnail_loaded(self, path, image, request_id=None):
         """Handle loaded thumbnail."""
@@ -989,6 +1135,7 @@ class GalleryWidget(QWidget):
             return
 
         self._active_thumbnail_requests.pop(path, None)
+        self._thumbnail_handles.pop(path, None)
         self._loading_paths.discard(path)
         pixmap = QPixmap.fromImage(image)
         self.thumbnail_cache.put(path, pixmap)
@@ -1112,6 +1259,9 @@ class GalleryWidget(QWidget):
         self._image_list.clear()
         self._loading_paths.clear()
         self._active_thumbnail_requests.clear()
+        for handle in self._thumbnail_handles.values():
+            handle.cancel()
+        self._thumbnail_handles.clear()
         self._statuses.clear()
 
     def refresh_thumbnail(self, image_path):
@@ -1119,6 +1269,9 @@ class GalleryWidget(QWidget):
         self.thumbnail_cache.remove(image_path)
         self._loading_paths.discard(image_path)
         self._active_thumbnail_requests.pop(image_path, None)
+        handle = self._thumbnail_handles.pop(image_path, None)
+        if handle is not None:
+            handle.cancel()
         self._load_thumbnail_async(image_path)
 
     def showEvent(self, event):

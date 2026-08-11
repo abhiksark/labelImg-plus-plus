@@ -29,7 +29,7 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Version 3.0.0 (stable).** Install with
+    **Version 3.1.0 (stable).** Install with
     ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
@@ -80,6 +80,23 @@ Workflow and Interface
 **Consolidated File Menu**
     Open File, Open Dir, and Change Save Dir combined into a single dropdown for cleaner toolbar.
 
+**Direct Ultralytics Dataset Export**
+    Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
+    YOLO detection dataset with ``images/{train,val,test}``, matching
+    ``labels/{train,val,test}``, and ``data.yaml``. Configure deterministic
+    split ratios and either copy images or create absolute local symlinks. The
+    destination must be new or empty, and it is published only after the full
+    export succeeds. See the `Ultralytics Export Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/ultralytics-export.md>`_.
+
+**Installed Python Plugins**
+    Add trusted command plugins from separately installed Python distributions
+    without editing labelImg++ source. Review and enable them under
+    **Tools → Plugins…**; changes take effect after restart. Plugins use a
+    versioned public API with host-owned actions, namespaced shortcuts and
+    settings, bounded background work, read-only document state, diagnostics,
+    and ``LABELIMGPP_DISABLE_PLUGINS=1`` recovery. See the
+    `Plugin Authoring Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/guides/plugin-authoring.md>`_.
+
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
 
@@ -105,6 +122,23 @@ Workflow and Interface
     exported encoder/decoder pair to use a different SAM variant. Without the
     extra installed, the action stays disabled (with an install hint) and
     nothing else changes.
+
+**Smart Video Annotation** (optional)
+    Open local MP4, MOV, MKV, and AVI video, annotate on exact presentation
+    timestamps, interpolate rectangle keyframes, and propagate rectangles with
+    reviewable optical-flow suggestions. Video work is stored in a sibling
+    ``<video>.labelimgpp.sqlite`` project; existing image annotations and
+    formats are unchanged.
+
+    .. code:: shell
+
+        pip install labelimgplusplus[video]
+
+    The timeline supports frame stepping, exact timecode seeks, variable-rate
+    media, playback without audio, track markers, and verified-frame markers.
+    Accepted frames export to VOC, YOLO, YOLO-seg, COCO, or CreateML. See the
+    `Smart Video Annotation Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/smart-video-annotation.md>`_
+    for the project, review, and export workflow.
 
 Installation
 ------------
@@ -132,6 +166,13 @@ With a specific image or directory:
 .. code:: shell
 
     labelimgpp [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
+
+The first positional path can also be a local video or a
+``.labelimgpp.sqlite`` video project. Optional features can be combined:
+
+.. code:: shell
+
+    pip install labelimgplusplus[sam,video]
 
 Build from Source
 ~~~~~~~~~~~~~~~~~
@@ -170,6 +211,10 @@ Quick Start
 4. **Save**: Press **Ctrl+S** to save annotations
 5. **Navigate**: Use **D** (next) and **A** (previous) to move between images
 6. **Review**: Press **Ctrl+G** for gallery mode to review all annotations
+
+For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
+frame, then use the **Tracks** tab and **Tools** menu to add keyframes, track,
+review suggestions, and export accepted frames.
 
 Supported Annotation Formats
 ----------------------------
@@ -212,6 +257,8 @@ These are the defaults. They can be changed from **Help → Keyboard Shortcuts**
 +--------------------+--------------------------------------------+
 | Ctrl + O           | Open file                                  |
 +--------------------+--------------------------------------------+
+| Ctrl + Alt + V     | Open video or video project                |
++--------------------+--------------------------------------------+
 | Ctrl + U           | Open directory                             |
 +--------------------+--------------------------------------------+
 | Ctrl + R           | Change save directory                      |
@@ -232,6 +279,11 @@ These are the defaults. They can be changed from **Help → Keyboard Shortcuts**
 +--------------------+--------------------------------------------+
 | Ctrl + G           | Toggle Gallery Mode                        |
 +--------------------+--------------------------------------------+
+
+In video mode, **A/D** step exact frames, **Ctrl+Space** toggles playback,
+**Shift+K** adds a keyframe to the selected track, **T/Shift+T** track forward
+or backward, and **Shift+Enter/Backspace** accept or reject the current
+suggestion. **Space** continues to verify the current frame.
 
 **Annotation**
 
@@ -297,7 +349,7 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.0.0**, the stable 3.0 release. See
+This source tree identifies itself as **3.1.0**, the stable 3.1 release. See
 the `release history
 <https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases

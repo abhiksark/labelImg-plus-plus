@@ -12,7 +12,13 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
 from libs.formats.annotation_paths import annotation_output_base
-from libs.tools.dataset_splitter import execute_split, split_dataset
+from libs.tools.dataset_splitter import (
+    SplitCancelled,
+    _place_file,
+    execute_split,
+    execute_split_transactional,
+    split_dataset,
+)
 
 
 def _touch(path, content='x'):
@@ -266,6 +272,42 @@ class TestExecuteSplitDataSafety(unittest.TestCase):
                 self.assertEqual(f.read(), expected_image)
             with open(os.path.join(split_dir, 'frame.xml')) as f:
                 self.assertEqual(f.read(), expected_annotation)
+
+    def test_cancelled_copy_removes_partial_destination(self):
+        source = os.path.join(self.src, 'large.jpg')
+        with open(source, 'wb') as stream:
+            stream.write(b'x' * (2 * 1024 * 1024))
+        destination = os.path.join(self.out, 'large.jpg')
+        calls = []
+
+        def cancelled():
+            calls.append(True)
+            return len(calls) >= 2
+
+        with self.assertRaises(SplitCancelled):
+            _place_file(source, destination, copy=True, cancelled=cancelled)
+        self.assertFalse(os.path.exists(destination))
+
+    def test_transactional_cancel_does_not_publish_staging_files(self):
+        image = self._yolo_image('cancelled')
+        output = os.path.join(self.out, 'published')
+
+        class Handle:
+            def is_cancelled(self):
+                return True
+
+            def report_progress(self, _value):
+                pass
+
+            def begin_non_cancellable(self):
+                raise AssertionError('cancelled job cannot enter commit')
+
+        result = execute_split_transactional(
+            {'train': [image], 'val': [], 'test': []},
+            output, self.src, True, Handle())
+
+        self.assertIsNone(result)
+        self.assertFalse(os.path.exists(output))
 
 
 class TestSplitRatios(unittest.TestCase):

@@ -6,13 +6,16 @@ import json
 import os
 import random
 import shutil
+import tempfile
+import time
 from collections import defaultdict
 from datetime import datetime
 
 from libs.formats.annotation_paths import find_existing_annotation
 
 
-def find_annotation_file(img_path, save_dir=None, image_list=None):
+def find_annotation_file(img_path, save_dir=None, image_list=None,
+                         resolver=None):
     """Find the annotation file matching an image.
 
     Args:
@@ -29,6 +32,7 @@ def find_annotation_file(img_path, save_dir=None, image_list=None):
         save_dir=save_dir,
         image_list=image_list,
         extensions=('.xml', '.txt', '.json'),
+        resolver=resolver,
     )
 
 
@@ -50,7 +54,7 @@ def get_labels_from_xml(xml_path):
 
 
 def split_dataset(image_list, ratios, seed=42, stratified=False,
-                  save_dir=None):
+                  save_dir=None, resolver=None):
     """Split image list into train/val/test sets.
 
     Args:
@@ -73,8 +77,12 @@ def split_dataset(image_list, ratios, seed=42, stratified=False,
 
     if stratified:
         label_groups = defaultdict(list)
+        if resolver is None:
+            from libs.core.dataset import AnnotationResolver
+            resolver = AnnotationResolver(images, save_dir)
         for img in images:
-            ann = find_annotation_file(img, save_dir, images)
+            ann = find_annotation_file(
+                img, save_dir, images, resolver=resolver)
             if ann and ann.endswith('.xml'):
                 labels = get_labels_from_xml(ann)
                 primary = labels[0] if labels else '_unlabeled'
@@ -118,11 +126,38 @@ def _find_classes_file(save_dir, splits):
     return None
 
 
-def _place_file(src, dest, copy):
+def _copy_file_cancellable(src, dest, cancelled=None, heartbeat=None):
+    """Copy one file in bounded chunks and discard an interrupted partial."""
+    try:
+        last_heartbeat = time.monotonic()
+        with open(src, 'rb') as source, open(dest, 'xb') as output:
+            while True:
+                if cancelled is not None and cancelled():
+                    raise SplitCancelled()
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                now = time.monotonic()
+                if heartbeat is not None and now - last_heartbeat >= 0.20:
+                    heartbeat()
+                    last_heartbeat = now
+        shutil.copystat(src, dest)
+    except Exception:
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
+        raise
+
+
+def _place_file(src, dest, copy, cancelled=None, heartbeat=None):
     """Copy or symlink src->dest. Caller guarantees dest does not yet exist."""
     if copy:
-        shutil.copy2(src, dest)
+        _copy_file_cancellable(src, dest, cancelled, heartbeat)
     else:
+        if cancelled is not None and cancelled():
+            raise SplitCancelled()
         os.symlink(os.path.abspath(src), dest)
 
 
@@ -223,7 +258,8 @@ def _build_output_names(images):
     return output_names
 
 
-def execute_split(splits, output_dir, save_dir=None, copy=True):
+def execute_split(splits, output_dir, save_dir=None, copy=True,
+                  cancelled=None, progress=None, resolver=None):
     """Copy or symlink files into train/val/test directories.
 
     Existing destination files are never overwritten (recorded under
@@ -252,6 +288,21 @@ def execute_split(splits, output_dir, save_dir=None, copy=True):
         for images in splits.values()
         for image_path in images
     ]
+    if resolver is None:
+        from libs.core.dataset import AnnotationResolver
+        resolver = AnnotationResolver(all_images, save_dir)
+    processed = 0
+    total = len(all_images)
+    last_progress = time.monotonic()
+
+    def report_progress(force=False):
+        nonlocal last_progress
+        if progress is None:
+            return
+        now = time.monotonic()
+        if force or now - last_progress >= 0.20:
+            progress(processed, total)
+            last_progress = now
 
     try:
         for split_name, images in splits.items():
@@ -262,22 +313,32 @@ def execute_split(splits, output_dir, save_dir=None, copy=True):
             output_names = _build_output_names(images)
 
             for img_path in images:
+                if cancelled is not None and cancelled():
+                    raise SplitCancelled()
                 output_name = output_names[_source_key(img_path)]
                 dest = os.path.join(split_dir, output_name)
                 if os.path.lexists(dest):
                     manifest['skipped'].append(dest)  # never clobber
+                    processed += 1
+                    report_progress(processed == total)
                     continue
                 try:
-                    _place_file(img_path, dest, copy)
+                    _place_file(
+                        img_path, dest, copy, cancelled,
+                        heartbeat=report_progress)
+                except SplitCancelled:
+                    raise
                 except OSError as e:
                     manifest['errors'].append(
                         {'file': img_path, 'error': str(e)})
+                    processed += 1
+                    report_progress(processed == total)
                     continue
 
                 manifest['files'][split_name].append(output_name)
 
                 ann = find_annotation_file(
-                    img_path, save_dir, all_images)
+                    img_path, save_dir, all_images, resolver=resolver)
                 if ann:
                     output_stem = os.path.splitext(output_name)[0]
                     annotation_extension = os.path.splitext(ann)[1]
@@ -285,7 +346,11 @@ def execute_split(splits, output_dir, save_dir=None, copy=True):
                         split_dir, output_stem + annotation_extension)
                     if not os.path.lexists(ann_dest):
                         try:
-                            _place_file(ann, ann_dest, copy)
+                            _place_file(
+                                ann, ann_dest, copy, cancelled,
+                                heartbeat=report_progress)
+                        except SplitCancelled:
+                            raise
                         except OSError as e:
                             manifest['errors'].append(
                                 {'file': ann, 'error': str(e)})
@@ -293,13 +358,19 @@ def execute_split(splits, output_dir, save_dir=None, copy=True):
                         manifest['skipped'].append(ann_dest)
                     if ann.endswith('.txt'):
                         wrote_yolo = True
+                processed += 1
+                report_progress(processed == total)
 
             # YOLO labels are useless without their class map.
             if wrote_yolo and classes_src:
                 classes_dest = os.path.join(split_dir, 'classes.txt')
                 if not os.path.lexists(classes_dest):
                     try:
-                        shutil.copy2(classes_src, classes_dest)
+                        _place_file(
+                            classes_src, classes_dest, True, cancelled,
+                            heartbeat=report_progress)
+                    except SplitCancelled:
+                        raise
                     except OSError as e:
                         manifest['errors'].append(
                             {'file': classes_src, 'error': str(e)})
@@ -310,3 +381,47 @@ def execute_split(splits, output_dir, save_dir=None, copy=True):
             json.dump(manifest, f, indent=2)
 
     return manifest_path
+
+
+class SplitCancelled(Exception):
+    pass
+
+
+def execute_split_transactional(splits, output_dir, save_dir, copy, handle,
+                                resolver=None):
+    """Build in an owned sibling tree and publish only after full success."""
+    output_dir = os.path.abspath(output_dir)
+    parent = os.path.dirname(output_dir) or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    staging = tempfile.mkdtemp(prefix='.labelimgpp-split-', dir=parent)
+    try:
+        manifest = execute_split(
+            splits, staging, save_dir=save_dir, copy=copy,
+            cancelled=handle.is_cancelled,
+            progress=lambda current, total: handle.report_progress(
+                (current, total)), resolver=resolver)
+        handle.begin_non_cancellable()
+        if not os.path.exists(output_dir):
+            os.replace(staging, output_dir)
+            staging = None
+            return os.path.join(output_dir, os.path.basename(manifest))
+
+        os.makedirs(output_dir, exist_ok=True)
+        for name in os.listdir(staging):
+            source = os.path.join(staging, name)
+            target = os.path.join(output_dir, name)
+            if os.path.isdir(source):
+                os.makedirs(target, exist_ok=True)
+                for filename in os.listdir(source):
+                    source_file = os.path.join(source, filename)
+                    target_file = os.path.join(target, filename)
+                    if not os.path.lexists(target_file):
+                        os.replace(source_file, target_file)
+            else:
+                os.replace(source, target)
+        return os.path.join(output_dir, 'split_manifest.json')
+    except SplitCancelled:
+        return None
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)

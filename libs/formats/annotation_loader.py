@@ -75,13 +75,14 @@ def load_yolo_seg(txt_path, image, original_image_size=None):
     return LoadedAnnotation(reader.get_shapes(), reader.verified)
 
 
-def load_create_ml(json_path, image_path):
+def load_create_ml(json_path, image_path, data=None):
     """Load a CreateML ``.json`` annotation file for ``image_path``."""
-    reader = CreateMLReader(json_path, image_path)
+    reader = CreateMLReader(json_path, image_path, data=data)
     return LoadedAnnotation(reader.get_shapes(), reader.verified)
 
 
-def load_coco(json_path, image_path):
+def load_coco(json_path, image_path, data=None):
     """Load a COCO ``.json`` annotation file, matching by image basename."""
-    reader = COCOReader(json_path, os.path.basename(image_path))
+    reader = COCOReader(
+        json_path, os.path.basename(image_path), data=data)
     return LoadedAnnotation(reader.get_shapes(), reader.verified)

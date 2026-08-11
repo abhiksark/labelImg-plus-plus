@@ -23,12 +23,17 @@ Common issues and solutions when using labelImg++.
    python3 -c "from lxml import etree; print('lxml OK')"
    ```
 
-3. **Reset Settings**
+3. **Start in plugin safe mode**
    ```bash
-   rm ~/.labelImgSettings.pkl
+   LABELIMGPP_DISABLE_PLUGINS=1 labelimgpp
    ```
 
-4. **Rebuild Resources**
+4. **Reset Settings**
+   ```bash
+   rm ~/.labelImgSettings.json
+   ```
+
+5. **Rebuild Resources**
    ```bash
    make qt5py3
    # Or manually:
@@ -50,8 +55,104 @@ make qt5py3
 
 **Solution:**
 ```bash
-rm ~/.labelImgSettings.pkl
+rm ~/.labelImgSettings.json
 ```
+
+## Plugins
+
+### Startup changed after enabling a plugin
+
+Run labelImg++ without discovering or loading any plugin:
+
+```bash
+LABELIMGPP_DISABLE_PLUGINS=1 labelimgpp
+```
+
+In Windows PowerShell:
+
+```powershell
+$env:LABELIMGPP_DISABLE_PLUGINS = "1"
+labelimgpp
+```
+
+Safe mode does not change image/video projects, plugin configuration,
+shortcuts, or unrelated application settings. Uninstall or repair the suspect
+distribution in the same virtual environment, then start normally. Plugins are
+trusted in-process code; safe mode cannot undo filesystem, network, or process
+actions already performed by a plugin.
+
+### Plugin is disabled or says restart required
+
+Open **Tools → Plugins…**, verify the distribution name, version, homepage, and
+entry-point reference, then change the checkbox. The change is persisted
+immediately but takes effect only after a complete application restart. New
+plugins always default to disabled.
+
+### Plugin is incompatible, conflicting, or failed
+
+- **Incompatible** means its required API major or capability is unsupported.
+- **Conflicting** means multiple installed distributions claim the same plugin
+  ID; the host loads none of them.
+- **Failed** means factory, metadata, activation, command, callback, task, or
+  deactivation validation raised an exception.
+
+Select the plugin in the manager and copy its structured diagnostics. Upgrade
+or remove the distribution rather than editing `libs.*` or plugin metadata in
+place.
+
+### Uninstalled plugin still appears
+
+Unavailable entries retain their configuration and shortcut overrides by
+design. Select the entry and choose **Forget Unavailable Plugin** to remove its
+`plugins.config`, cached metadata, enabled state, and `plugin.<id>.*` shortcut
+keys.
+
+## Smart Video
+
+### Video action shows an installation hint
+
+Install the optional extra into the same Python environment that launches the
+application:
+
+```bash
+python -m pip install "labelimgplusplus[video]"
+```
+
+For SAM on paused video frames, install `"labelimgplusplus[sam,video]"`.
+
+### Video will not open
+
+- Confirm the source is a local MP4, MOV, MKV, or AVI file.
+- Try opening it with the current PyAV/FFmpeg build. A container extension does
+  not guarantee that its internal codec is available.
+- Corrupt, truncated, empty, and no-video-stream sources are rejected before
+  the current document changes.
+- Only the first playable video stream is selected; audio is ignored.
+
+### Project cannot find its source
+
+Open the `.labelimgpp.sqlite` project and locate the original media. A moved
+file is relinked only when its sampled fingerprint matches. If content changed,
+create a new project; annotations are not applied to a different source.
+
+### Video opened read-only
+
+The source directory could not hold the default sibling project and no alternate
+project path was selected. Reopen the video and choose a writable project
+location. Read-only mode permits navigation but disables editing and saving.
+
+### Project schema or revision error
+
+Unknown SQLite application IDs and project schemas newer than this build are
+left untouched. Upgrade labelImg++, or open the project with the version that
+created it. A revision conflict means another process saved the project; keep
+your current session open, preserve its changes, and reconcile before retrying.
+
+### Export failed or was cancelled
+
+Choose a new or empty destination whose parent directory is writable. Export is
+staged atomically; cancellation removes only LabelImg++'s owned staging tree and
+does not remove an existing non-empty destination.
 
 ## File Operations
 
@@ -286,7 +387,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 | Problem | Quick Fix |
 |---------|-----------|
-| Won't start | `rm ~/.labelImgSettings.pkl` |
+| Won't start | Try `LABELIMGPP_DISABLE_PLUGINS=1`, then inspect `~/.labelImgSettings.json` |
 | No resources | `make qt5py3` |
 | No save | Check File > Change Save Dir |
 | No load | Check annotation filename matches |

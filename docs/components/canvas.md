@@ -11,6 +11,8 @@ Canvas is a QWidget subclass that handles:
 - Selecting and editing existing annotations
 - Zoom and pan operations
 - Coordinate transformation between screen and image space
+- A 256-image-pixel spatial index for hover, containment, and edge snapping
+- Cached shape geometry and static grid/overlay painting
 
 ## Class Definition
 
@@ -121,7 +123,7 @@ mouseMoveEvent (during drawing)
          +---> Update status bar with dimensions
          |
          v
-    repaint()
+    coalesced update()
 
 mouseReleaseEvent (Left button)
          |

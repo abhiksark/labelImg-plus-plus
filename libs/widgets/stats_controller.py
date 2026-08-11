@@ -27,7 +27,9 @@ class StatsController(QObject):
         super().__init__(parent)
         self._get_widget = stats_widget_getter
         self._worker_factory = worker_factory
-        self._thread_pool = thread_pool or QThreadPool.globalInstance()
+        self._thread_pool = thread_pool or QThreadPool()
+        if thread_pool is None:
+            self._thread_pool.setMaxThreadCount(1)
         self._worker = None
         self._worker_gen = 0  # Bumped per refresh; guards against stale signals.
 
@@ -42,7 +44,8 @@ class StatsController(QObject):
 
         worker = self._worker_factory(image_list, save_dir)
         worker.signals.progress.connect(
-            lambda t, a, v, l, g=gen: self._on_progress(t, a, v, l, g))
+            lambda total, annotated, verified, labels, g=gen:
+            self._on_progress(total, annotated, verified, labels, g))
         worker.signals.finished.connect(lambda g=gen: self._on_finished(g))
         worker.signals.error.connect(lambda e, g=gen: self._on_error(e, g))
 

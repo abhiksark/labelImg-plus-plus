@@ -221,6 +221,18 @@ class TestScanAnnotations(unittest.TestCase):
         labels = LabelConsistencyChecker.scan_annotations(self.temp_dir)
         self.assertEqual(len(labels), 0)
 
+    def test_scan_reports_progress_for_unannotated_images(self):
+        for index in range(101):
+            open(os.path.join(
+                self.temp_dir, 'image-%03d.jpg' % index), 'w').close()
+        progress = []
+
+        LabelConsistencyChecker.scan_annotations(
+            self.temp_dir,
+            progress=lambda current, total: progress.append((current, total)))
+
+        self.assertEqual(progress[-1], (101, 101))
+
     def test_scan_with_save_dir(self):
         """Test scanning with separate save directory."""
         img_dir = os.path.join(self.temp_dir, 'images')

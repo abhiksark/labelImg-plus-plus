@@ -12,6 +12,18 @@ except ImportError:
     from PyQt4.QtCore import QPointF
 
 
+def _rebuild_spatial(canvas):
+    rebuild = getattr(canvas, 'rebuild_spatial_index', None)
+    if rebuild is not None:
+        rebuild()
+
+
+def _reindex(canvas, shape):
+    reindex = getattr(canvas, 'reindex_shape', None)
+    if reindex is not None:
+        reindex(shape)
+
+
 class Command(ABC):
     """Base class for all undoable commands."""
 
@@ -29,6 +41,32 @@ class Command(ABC):
     def description(self):
         """Return a description of this command."""
         return "Command"
+
+
+class VideoModelCommand(Command):
+    """Undo a video-domain mutation by restoring immutable model states."""
+
+    def __init__(self, main_window, before, after, description):
+        self.main_window = main_window
+        self.before = before
+        self.after = after
+        self._description = description
+
+    def _restore(self, state):
+        self.main_window.video_model.restore_state(state)
+        self.main_window._on_video_model_mutation()
+        pts = self.main_window.current_video_frame_ref.pts
+        self.main_window._materialize_video_frame(pts)
+
+    def execute(self):
+        self._restore(self.after)
+
+    def undo(self):
+        self._restore(self.before)
+
+    @property
+    def description(self):
+        return self._description
 
 
 class CreateShapeCommand(Command):
@@ -50,6 +88,7 @@ class CreateShapeCommand(Command):
     def execute(self):
         """Add the shape to canvas and label list."""
         self.main_window.canvas.shapes.append(self.shape)
+        _rebuild_spatial(self.main_window.canvas)
         self.main_window.add_label(self.shape)
         self.main_window.canvas.update()
 
@@ -57,6 +96,7 @@ class CreateShapeCommand(Command):
         """Remove the shape from canvas and label list."""
         if self.shape in self.main_window.canvas.shapes:
             self.main_window.canvas.shapes.remove(self.shape)
+            _rebuild_spatial(self.main_window.canvas)
         self.main_window.remove_label(self.shape)
         if self.main_window.canvas.selected_shape == self.shape:
             self.main_window.canvas.selected_shape = None
@@ -90,6 +130,7 @@ class DeleteShapeCommand(Command):
         """Remove the shape from canvas and label list."""
         if self.shape in self.main_window.canvas.shapes:
             self.main_window.canvas.shapes.remove(self.shape)
+            _rebuild_spatial(self.main_window.canvas)
         # Capture the label-list row so undo can restore the exact ordering.
         self._list_row = self.main_window.remove_label(self.shape)
         if self.main_window.canvas.selected_shape == self.shape:
@@ -102,6 +143,7 @@ class DeleteShapeCommand(Command):
             self.main_window.canvas.shapes.insert(self.index, self.shape)
         else:
             self.main_window.canvas.shapes.append(self.shape)
+        _rebuild_spatial(self.main_window.canvas)
         self.main_window.add_label(self.shape, row=self._list_row)
         self.main_window.canvas.update()
 
@@ -134,11 +176,13 @@ class MoveShapeCommand(Command):
     def execute(self):
         """Move shape to new position."""
         self.shape.points = [QPointF(p.x(), p.y()) for p in self.new_points]
+        _reindex(self.main_window.canvas, self.shape)
         self.main_window.canvas.update()
 
     def undo(self):
         """Restore shape to original position."""
         self.shape.points = [QPointF(p.x(), p.y()) for p in self.old_points]
+        _reindex(self.main_window.canvas, self.shape)
         self.main_window.canvas.update()
 
     @property
@@ -217,11 +261,13 @@ class EditPolygonVerticesCommand(Command):
     def execute(self):
         """Apply the post-mutation point list."""
         self.shape.points = [QPointF(p.x(), p.y()) for p in self.new_points]
+        _reindex(self.main_window.canvas, self.shape)
         self.main_window.canvas.update()
 
     def undo(self):
         """Restore the pre-mutation point list."""
         self.shape.points = [QPointF(p.x(), p.y()) for p in self.old_points]
+        _reindex(self.main_window.canvas, self.shape)
         self.main_window.canvas.update()
 
     @property

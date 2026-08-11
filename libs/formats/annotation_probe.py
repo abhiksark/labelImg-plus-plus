@@ -19,9 +19,10 @@ image's own directory:
 """
 import json
 import os
+import threading
+from collections import OrderedDict
 
-from libs.formats.create_ml_io import CreateMLReader, JSON_EXT
-from libs.formats.coco_io import COCOReader
+from libs.formats.create_ml_io import JSON_EXT
 from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
 from libs.formats.yolo_io import YoloReader
 from libs.formats.annotation_paths import find_existing_annotation
@@ -81,7 +82,7 @@ def _first_existing(dirs, name):
     return None
 
 
-def _resolve(image_path, save_dir, image_list=None):
+def _resolve(image_path, save_dir, image_list=None, resolver=None):
     """Return (path, fmt) for the first matching annotation, or (None, None)."""
     dirs = _search_dirs(image_path, save_dir)
 
@@ -90,6 +91,7 @@ def _resolve(image_path, save_dir, image_list=None):
         save_dir=save_dir,
         image_list=image_list,
         extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+        resolver=resolver,
     )
     if path:
         extension = os.path.splitext(path)[1].lower()
@@ -106,12 +108,16 @@ def _resolve(image_path, save_dir, image_list=None):
         img_dir = os.path.dirname(image_path)
         sibling = os.path.join(os.path.dirname(img_dir), 'labels',
                                basename + TXT_EXT)
-        if os.path.isfile(sibling):
+        if resolver is not None:
+            txt = resolver.conventional_yolo_path(image_path)
+        elif os.path.isfile(sibling):
             txt = sibling
     if txt:
         return txt, 'yolo'
 
-    coco_json = _first_existing(dirs, COCO_JSON_NAME)
+    coco_json = (resolver.named_file(image_path, COCO_JSON_NAME)
+                 if resolver is not None
+                 else _first_existing(dirs, COCO_JSON_NAME))
     if coco_json:
         return coco_json, 'json'
 
@@ -148,24 +154,173 @@ def _is_coco(data):
             and 'annotations' in data and 'images' in data)
 
 
-def _read_json(path, image_path):
+class SharedJsonCache:
+    """Fingerprint-keyed LRU for shared COCO/CreateML catalog reads."""
+
+    def __init__(self, max_size=8):
+        self.max_size = max(1, int(max_size))
+        self._cache = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def fingerprint(path):
+        stat = os.stat(path)
+        return (os.path.abspath(path), stat.st_mtime_ns, stat.st_size)
+
+    def _get_entry(self, path):
+        fingerprint = self.fingerprint(path)
+        with self._lock:
+            cached = self._cache.get(fingerprint)
+            if cached is not None:
+                self._cache.move_to_end(fingerprint)
+                return cached
+            with open(path, 'r') as json_file:
+                data = json.load(json_file)
+            entry = (data, _build_shared_json_index(data))
+            # Remove old fingerprints of the same path during invalidation.
+            for key in list(self._cache):
+                if key[0] == fingerprint[0] and key != fingerprint:
+                    self._cache.pop(key, None)
+            self._cache[fingerprint] = entry
+            self._cache.move_to_end(fingerprint)
+            while len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
+        return entry
+
+    def get(self, path):
+        return self._get_entry(path)[0]
+
+    def get_index(self, path):
+        return self._get_entry(path)[1]
+
+    def invalidate(self, path=None):
+        with self._lock:
+            if path is None:
+                self._cache.clear()
+                return
+            target = os.path.abspath(path)
+            for key in list(self._cache):
+                if key[0] == target:
+                    self._cache.pop(key, None)
+
+
+shared_json_cache = SharedJsonCache()
+
+
+def _build_shared_json_index(data):
+    """Build constant-time per-image lookups for one shared JSON document."""
+    if _is_coco(data):
+        categories = {
+            entry.get('id'): entry.get('name', 'unknown')
+            for entry in data.get('categories', [])
+            if isinstance(entry, dict)
+        }
+        labels_by_image_id = {}
+        for annotation in data.get('annotations', []):
+            if not isinstance(annotation, dict):
+                continue
+            image_id = annotation.get('image_id')
+            category_id = annotation.get('category_id')
+            if image_id is None or category_id is None:
+                continue
+            labels_by_image_id.setdefault(image_id, []).append(
+                categories.get(category_id, 'unknown'))
+        by_name = {}
+        for image in data.get('images', []):
+            if not isinstance(image, dict):
+                continue
+            filename = image.get('file_name')
+            if not filename:
+                continue
+            labels = tuple(labels_by_image_id.get(image.get('id'), ()))
+            normalized = str(filename).replace('\\', '/')
+            by_name.setdefault(normalized, labels)
+            by_name.setdefault(os.path.basename(normalized), labels)
+        return 'coco', by_name
+
+    by_name = {}
+    if isinstance(data, list):
+        for image in data:
+            if not isinstance(image, dict) or not image.get('image'):
+                continue
+            labels = tuple(
+                annotation.get('label')
+                for annotation in image.get('annotations', [])
+                if isinstance(annotation, dict)
+                and annotation.get('label') is not None
+            )
+            value = (labels, bool(image.get('verified', False)))
+            normalized = str(image['image']).replace('\\', '/')
+            by_name.setdefault(normalized, value)
+            by_name.setdefault(os.path.basename(normalized), value)
+    return 'createml', by_name
+
+
+def _read_json(path, image_path, json_cache=None):
     """Return (fmt, has_labels, verified, labels) for a CreateML or COCO file."""
-    with open(path, 'r') as f:
-        data = json.load(f)
+    if json_cache is not None:
+        data = json_cache.get(path)
+        indexed_format, by_name = json_cache.get_index(path)
+        relative_name = os.path.relpath(
+            image_path, os.path.dirname(path)).replace(os.sep, '/')
+        image_name = relative_name if relative_name in by_name else \
+            os.path.basename(image_path)
+        if indexed_format == 'coco':
+            labels = list(by_name.get(image_name, ()))
+            return 'coco', bool(labels), False, labels
+        value = by_name.get(image_name)
+        if value is None:
+            return 'createml', False, False, []
+        labels, verified = value
+        labels = list(labels)
+        return 'createml', bool(labels), verified, labels
+    else:
+        with open(path, 'r') as f:
+            data = json.load(f)
 
     if _is_coco(data):
-        shapes = COCOReader(path, os.path.basename(image_path)).get_shapes()
-        labels = [shape[0] for shape in shapes]
+        target_name = os.path.basename(image_path)
+        image = next(
+            (entry for entry in data.get('images', [])
+             if isinstance(entry, dict)
+             and entry.get('file_name') == target_name),
+            None)
+        image_id = image.get('id') if image else None
+        categories = {
+            entry.get('id'): entry.get('name', 'unknown')
+            for entry in data.get('categories', [])
+            if isinstance(entry, dict)
+        }
+        labels = [
+            categories.get(annotation.get('category_id'), 'unknown')
+            for annotation in data.get('annotations', [])
+            if isinstance(annotation, dict)
+            and image_id is not None
+            and annotation.get('image_id') == image_id
+            and annotation.get('category_id') is not None
+        ]
         return 'coco', bool(labels), False, labels  # COCO has no verified flag
 
     # CreateML: a list of image objects, possibly sharing one file.
-    reader = CreateMLReader(path, image_path)
-    shapes = reader.get_shapes()
-    labels = [shape[0] for shape in shapes]
-    return 'createml', bool(labels), bool(reader.verified), labels
+    if not isinstance(data, list):
+        raise ValueError('CreateML annotation file must be a JSON array')
+    target_name = os.path.basename(image_path)
+    image = next(
+        (entry for entry in data
+         if isinstance(entry, dict) and entry.get('image') == target_name),
+        None)
+    if image is None:
+        return 'createml', False, False, []
+    labels = [
+        annotation.get('label')
+        for annotation in image.get('annotations', [])
+        if isinstance(annotation, dict) and annotation.get('label') is not None
+    ]
+    return 'createml', bool(labels), bool(image.get('verified', False)), labels
 
 
-def probe(image_path, save_dir=None, want_labels=False, image_list=None):
+def probe(image_path, save_dir=None, want_labels=False, image_list=None,
+          resolver=None, json_cache=None):
     """Resolve and read an image's annotation.
 
     Args:
@@ -179,7 +334,8 @@ def probe(image_path, save_dir=None, want_labels=False, image_list=None):
     Returns:
         An :class:`AnnotationInfo`.
     """
-    path, fmt = _resolve(image_path, save_dir, image_list=image_list)
+    path, fmt = _resolve(
+        image_path, save_dir, image_list=image_list, resolver=resolver)
     info = AnnotationInfo(path=path, fmt=fmt)
     if not path:
         return info
@@ -197,7 +353,7 @@ def probe(image_path, save_dir=None, want_labels=False, image_list=None):
                 info.labels = _read_yolo_labels(image_path, path)
         else:  # 'json' - CreateML or COCO, auto-detected
             info.fmt, info.has_labels, info.verified, info.labels = \
-                _read_json(path, image_path)
+                _read_json(path, image_path, json_cache=json_cache)
     except Exception:
         # Malformed annotation: report "no labels" rather than crashing the
         # caller (gallery scan, stats worker). Format-level readers already

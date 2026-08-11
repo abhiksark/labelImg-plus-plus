@@ -67,6 +67,30 @@ class TestCOCOWriter(unittest.TestCase):
 
         self.assertEqual(len(data['categories']), 1)
 
+    def test_save_updates_one_image_without_dropping_shared_document(self):
+        first = COCOWriter('folder', 'first.jpg', [480, 640, 3])
+        first.add_bnd_box(0, 0, 50, 50, 'cat', False)
+        first.save(self.out_path)
+        second = COCOWriter('folder', 'second.jpg', [480, 640, 3])
+        second.add_bnd_box(10, 10, 60, 60, 'dog', False)
+        second.save(self.out_path)
+
+        replacement = COCOWriter('folder', 'first.jpg', [480, 640, 3])
+        replacement.add_bnd_box(5, 5, 25, 25, 'dog', False)
+        replacement.save(self.out_path)
+
+        with open(self.out_path) as stream:
+            data = json.load(stream)
+        self.assertCountEqual(
+            [image['file_name'] for image in data['images']],
+            ['first.jpg', 'second.jpg'])
+        self.assertEqual(len(data['annotations']), 2)
+        self.assertEqual(
+            len({annotation['id'] for annotation in data['annotations']}), 2)
+        self.assertCountEqual(
+            [category['name'] for category in data['categories']],
+            ['cat', 'dog'])
+
 
 class TestCOCOReader(unittest.TestCase):
 

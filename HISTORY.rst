@@ -1,6 +1,74 @@
 History
 =======
 
+3.1.0 (2026-08-11)
+------------------
+
+Feature release adding smart video annotation, direct Ultralytics dataset
+export, a versioned installed-plugin platform, and a bounded asynchronous
+runtime for responsive work on large datasets. Python 3.8 through 3.13 remain
+supported, and existing image formats, annotation naming, command entry points,
+and synchronous extension-facing methods remain compatible.
+
+Highlights
+~~~~~~~~~~
+
+* Add optional smart video annotation for MP4, MOV, MKV, and AVI sources with
+  exact presentation-timestamp navigation, rectangle keyframes and
+  interpolation, reviewable optical-flow propagation, project persistence,
+  verified-frame tracking, and export to all five annotation formats.
+* Export image datasets directly to an Ultralytics-ready YOLO detection layout
+  with deterministic train/validation/test splits, copy or absolute-symlink
+  modes, validated class mappings, and transactional publication.
+* Add API-major-1 installed Python plugins with PyPA entry-point discovery,
+  transactional activation, host-owned commands and shortcuts, JSON-only
+  settings, bounded generation-scoped tasks, read-only document descriptors,
+  structured diagnostics, a restart-oriented manager, and safe-mode recovery.
+
+Runtime and Performance
+~~~~~~~~~~~~~~~~~~~~~~~
+
+* Add bounded interactive, background, and dedicated SAM task lanes plus a
+  dataset index, progressive annotation catalog, fingerprinted image-load
+  cache, and cached shared annotation documents.
+* Route navigation, prefetch, gallery loading, annotation status, durable
+  saves, bulk dataset operations, and SAM work through generation-aware or
+  revision-aware asynchronous paths while preserving synchronous compatibility
+  methods.
+* Cache canvas geometry, bound frame and gallery memory, add opt-in local trace
+  recording, and publish reproducible five-run profiling and teardown gates for
+  real 4K/8K images and 10,000-image datasets.
+
+Plugin Hardening
+~~~~~~~~~~~~~~~~
+
+* Keep new and disabled plugins import-free, preserve unavailable
+  configuration until explicitly forgotten, and document that enabled plugins
+  are trusted in-process code rather than sandboxed extensions.
+* Qualify a separately installed fixture wheel on Python 3.8 through 3.13 and
+  add five-run startup, 100-entry discovery/manager, cancellation, and teardown
+  gates.
+* Restrict plugin tasks to a plain cancellation/progress facade, preserve
+  worker tracebacks through GUI-thread error delivery, validate diagnostic
+  fields transactionally, and render malformed diagnostics defensively.
+* Apply empty shortcut values to active plugin actions after reset/import and
+  make the plugin qualification profiler runnable directly from outside the
+  repository.
+
+Compatibility and Release Engineering
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Keep the base installation free of video and plugin-only dependencies.
+  ``[video]`` is an optional, Python-version-pinned PyAV/OpenCV extra, while
+  ``[sam]`` remains independently installable and both extras can be combined.
+* Package the stable ``labelimgplusplus`` public namespace alongside ``libs``
+  and test a separately built fixture distribution so entry-point discovery is
+  qualified from installed metadata rather than the source tree.
+* Exercise ordinary, plugin, and video behavior across Python 3.8 through 3.13,
+  SAM and combined SAM/video paths on the oldest and newest supported Python,
+  safe-mode import isolation, PyInstaller base-only boot, wheel/sdist contents,
+  and five-run performance, cancellation, and teardown budgets.
+
 3.0.0 (2026-08-09)
 ------------------
 

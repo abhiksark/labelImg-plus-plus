@@ -2,18 +2,22 @@
 """Canvas widget for drawing and editing bounding box annotations."""
 
 try:
-    from PyQt5.QtGui import QColor, QPixmap, QPainter, QCursor, QBrush, QPen
-    from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint
+    from PyQt5.QtGui import (QColor, QPixmap, QPainter, QCursor, QBrush,
+                             QPen, QPicture)
+    from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
     from PyQt5.QtWidgets import QWidget, QMenu, QApplication
 except ImportError:
     from PyQt4.QtGui import (
-        QColor, QPixmap, QPainter, QCursor, QBrush, QWidget, QMenu, QApplication
+        QColor, QPixmap, QPainter, QCursor, QBrush, QPicture,
+        QWidget, QMenu, QApplication
     )
-    from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint
+    from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
 
 import math
+from collections import defaultdict
 
 from libs.core.shape import Shape, ShapeType
+from libs.core.profiling import recorder as trace_recorder
 from libs.utils.dpi import scale_px
 from libs.utils.utils import distance, douglas_peucker
 from libs.utils.styles import Theme
@@ -23,6 +27,103 @@ CURSOR_POINT = Qt.PointingHandCursor
 CURSOR_DRAW = Qt.CrossCursor
 CURSOR_MOVE = Qt.ClosedHandCursor
 CURSOR_GRAB = Qt.OpenHandCursor
+
+
+class _ShapeSpatialGrid:
+    """Small image-space index for hover/containment candidates."""
+
+    def __init__(self, cell_size=256):
+        self.cell_size = max(1, int(cell_size))
+        self.cells = defaultdict(set)
+        self.shape_cells = {}
+        self.order = {}
+        self.x_vertices = defaultdict(set)
+        self.y_vertices = defaultdict(set)
+        self.shape_vertex_buckets = {}
+
+    def clear(self):
+        self.cells.clear()
+        self.shape_cells.clear()
+        self.order.clear()
+        self.x_vertices.clear()
+        self.y_vertices.clear()
+        self.shape_vertex_buckets.clear()
+
+    def rebuild(self, shapes):
+        self.clear()
+        for index, shape in enumerate(shapes):
+            self.order[shape] = index
+            self.update(shape)
+
+    def _cells_for_rect(self, rect, margin=0.0):
+        left = int(math.floor((rect.left() - margin) / self.cell_size))
+        right = int(math.floor((rect.right() + margin) / self.cell_size))
+        top = int(math.floor((rect.top() - margin) / self.cell_size))
+        bottom = int(math.floor((rect.bottom() + margin) / self.cell_size))
+        return {
+            (x, y)
+            for x in range(left, right + 1)
+            for y in range(top, bottom + 1)
+        }
+
+    def update(self, shape):
+        self.remove(shape, forget_order=False)
+        cells = self._cells_for_rect(shape.bounding_rect())
+        self.shape_cells[shape] = cells
+        for cell in cells:
+            self.cells[cell].add(shape)
+        x_buckets = {
+            int(math.floor(point.x() / self.cell_size))
+            for point in shape.points
+        }
+        y_buckets = {
+            int(math.floor(point.y() / self.cell_size))
+            for point in shape.points
+        }
+        self.shape_vertex_buckets[shape] = (x_buckets, y_buckets)
+        for bucket in x_buckets:
+            self.x_vertices[bucket].add(shape)
+        for bucket in y_buckets:
+            self.y_vertices[bucket].add(shape)
+
+    def remove(self, shape, forget_order=True):
+        for cell in self.shape_cells.pop(shape, ()):
+            values = self.cells.get(cell)
+            if values is not None:
+                values.discard(shape)
+                if not values:
+                    self.cells.pop(cell, None)
+        x_buckets, y_buckets = self.shape_vertex_buckets.pop(
+            shape, ((), ()))
+        for bucket in x_buckets:
+            self.x_vertices[bucket].discard(shape)
+            if not self.x_vertices[bucket]:
+                self.x_vertices.pop(bucket, None)
+        for bucket in y_buckets:
+            self.y_vertices[bucket].discard(shape)
+            if not self.y_vertices[bucket]:
+                self.y_vertices.pop(bucket, None)
+        if forget_order:
+            self.order.pop(shape, None)
+
+    def query(self, point, margin=0.0):
+        rect = QRectF(point.x(), point.y(), 0, 0)
+        candidates = set()
+        for cell in self._cells_for_rect(rect, margin=margin):
+            candidates.update(self.cells.get(cell, ()))
+        return sorted(candidates, key=lambda shape: self.order.get(shape, -1))
+
+    def alignment_candidates(self, point, margin):
+        """Return shapes with an x or y vertex near the requested point."""
+        candidates = set()
+        for coordinate, buckets in (
+                (point.x(), self.x_vertices),
+                (point.y(), self.y_vertices)):
+            first = int(math.floor((coordinate - margin) / self.cell_size))
+            last = int(math.floor((coordinate + margin) / self.cell_size))
+            for bucket in range(first, last + 1):
+                candidates.update(buckets.get(bucket, ()))
+        return sorted(candidates, key=lambda shape: self.order.get(shape, -1))
 
 
 class Canvas(QWidget):
@@ -100,6 +201,13 @@ class Canvas(QWidget):
         self._grid_size = 32
         self._edge_alignment = False
         self._alignment_guides = []
+        self._spatial_index = _ShapeSpatialGrid(cell_size=256)
+        self._grid_overlay = None
+        self._grid_overlay_key = None
+        self._coordinate_text_pending = None
+        self._coordinate_timer = QTimer(self)
+        self._coordinate_timer.setSingleShot(True)
+        self._coordinate_timer.timeout.connect(self._flush_coordinate_text)
 
         # initialisation for panning
         self.pan_initial_pos = QPoint()
@@ -173,7 +281,7 @@ class Canvas(QWidget):
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
-        self.repaint()
+        self.update()
 
     def set_polygon_drawing(self, value=True):
         self.mode = self.CREATE_POLYGON if value else self.EDIT
@@ -181,7 +289,7 @@ class Canvas(QWidget):
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
-        self.repaint()
+        self.update()
 
     def set_sam_mode(self, value=True):
         """Enter/leave single-click SAM segmentation mode.
@@ -196,7 +304,7 @@ class Canvas(QWidget):
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
-        self.repaint()
+        self.update()
 
     def commit_polygon(self, points):
         """Build a polygon Shape from image-space (x, y) points and finalise it.
@@ -260,13 +368,25 @@ class Canvas(QWidget):
         self.update()
 
     def un_highlight(self, shape=None):
-        if shape == None or shape == self.h_shape:
+        if shape is None or shape == self.h_shape:
             if self.h_shape:
                 self.h_shape.highlight_clear()
             self.h_vertex = self.h_shape = None
 
     def selected_vertex(self):
         return self.h_vertex is not None
+
+    def _set_coordinate_text(self, text):
+        self._coordinate_text_pending = text
+        if not self._coordinate_timer.isActive():
+            self._coordinate_timer.start(16)
+
+    def _flush_coordinate_text(self):
+        text = self._coordinate_text_pending
+        self._coordinate_text_pending = None
+        window = self.parent().window() if self.parent() else None
+        if text is not None and hasattr(window, 'label_coordinates'):
+            window.label_coordinates.setText(text)
 
     def mouseMoveEvent(self, ev):
         """Update line with last point and current coordinates."""
@@ -275,9 +395,9 @@ class Canvas(QWidget):
         pos = self.transform_pos(ev.pos())
 
         # Update coordinates in status bar if image is opened
-        window = self.parent().window()
-        if window.file_path is not None:
-            self.parent().window().label_coordinates.setText(
+        window = self.parent().window() if self.parent() else self.window()
+        if getattr(window, 'file_path', None) is not None:
+            self._set_coordinate_text(
                 'X: %d; Y: %d' % (pos.x(), pos.y()))
 
         # Freehand polygon tracing
@@ -312,15 +432,14 @@ class Canvas(QWidget):
                     self.current.highlight_clear()
 
                     # Update status bar with vertex count
-                    window = self.parent().window()
                     if hasattr(window, 'label_coordinates'):
-                        window.label_coordinates.setText(
+                        self._set_coordinate_text(
                             'Vertices: %d / X: %d; Y: %d' % (len(self.current), pos.x(), pos.y()))
                 else:
                     # Rectangle mode: display annotation width and height while drawing
                     current_width = abs(self.current[0].x() - pos.x())
                     current_height = abs(self.current[0].y() - pos.y())
-                    self.parent().window().label_coordinates.setText(
+                    self._set_coordinate_text(
                             'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
 
                     if self.out_of_pixmap(pos):
@@ -356,7 +475,7 @@ class Canvas(QWidget):
                     self.current.highlight_clear()
             else:
                 self.prev_point = pos
-            self.repaint()
+            self.update()
             return
 
         # Polygon copy moving.
@@ -364,10 +483,10 @@ class Canvas(QWidget):
             if self.selected_shape_copy and self.prev_point:
                 self.override_cursor(CURSOR_MOVE)
                 self.bounded_move_shape(self.selected_shape_copy, pos)
-                self.repaint()
+                self.update()
             elif self.selected_shape:
                 self.selected_shape_copy = self.selected_shape.copy()
-                self.repaint()
+                self.update()
             return
 
         # Polygon/Vertex moving.
@@ -375,25 +494,25 @@ class Canvas(QWidget):
             if self.selected_vertex():
                 self.bounded_move_vertex(pos)
                 self.shapeMoved.emit()
-                self.repaint()
+                self.update()
 
                 # Display annotation width and height while moving vertex
                 rect = self.h_shape.bounding_rect()
                 current_width = rect.width()
                 current_height = rect.height()
-                self.parent().window().label_coordinates.setText(
+                self._set_coordinate_text(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             elif self.selected_shape and self.prev_point:
                 self.override_cursor(CURSOR_MOVE)
                 self.bounded_move_shape(self.selected_shape, pos)
                 self.shapeMoved.emit()
-                self.repaint()
+                self.update()
 
                 # Display annotation width and height while moving shape
                 rect = self.selected_shape.bounding_rect()
                 current_width = rect.width()
                 current_height = rect.height()
-                self.parent().window().label_coordinates.setText(
+                self._set_coordinate_text(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             else:
                 # pan
@@ -408,7 +527,10 @@ class Canvas(QWidget):
         # - Highlight vertex
         # Update shape/vertex fill and tooltip value accordingly.
         self.setToolTip("Image")
-        priority_list = self.shapes + ([self.selected_shape] if self.selected_shape else [])
+        priority_list = self._spatial_index.query(
+            pos, margin=self.epsilon / max(self.scale, 1e-6))
+        if self.selected_shape and self.selected_shape not in priority_list:
+            priority_list.append(self.selected_shape)
         visible_shapes = [s for s in priority_list if self.isVisible(s)]
 
         # First pass: check for nearby vertices (these take priority)
@@ -449,7 +571,7 @@ class Canvas(QWidget):
                 rect = self.h_shape.bounding_rect()
                 current_width = rect.width()
                 current_height = rect.height()
-                self.parent().window().label_coordinates.setText(
+                self._set_coordinate_text(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             else:  # Nothing found, clear highlights, reset state.
                 if self.h_shape:
@@ -652,6 +774,7 @@ class Canvas(QWidget):
                     if action == delete_action:
                         old_points = list(self.selected_shape.points)
                         self.selected_shape.remove_point(idx)
+                        self.reindex_shape(self.selected_shape)
                         self._emit_polygon_edit(
                             self.selected_shape, old_points)
                         self.shapeMoved.emit()
@@ -664,7 +787,7 @@ class Canvas(QWidget):
                and self.selected_shape_copy:
                 # Cancel the move by deleting the shadow copy.
                 self.selected_shape_copy = None
-                self.repaint()
+                self.update()
         elif ev.button() == Qt.LeftButton and self.selected_shape:
             if self.selected_vertex():
                 self.override_cursor(CURSOR_POINT)
@@ -685,9 +808,10 @@ class Canvas(QWidget):
         # del shape.line_color
         if copy:
             self.shapes.append(shape)
+            self.rebuild_spatial_index()
             self.selected_shape.selected = False
             self.selected_shape = shape
-            self.repaint()
+            self.update()
         else:
             # Snapshot before committing the dragged points so the
             # context-menu move is undoable (Issue #68).
@@ -699,6 +823,7 @@ class Canvas(QWidget):
                      or any((a.x(), a.y()) != (b.x(), b.y())
                             for a, b in zip(old_points, new_points)))
             if moved:
+                self.reindex_shape(self.selected_shape)
                 if self.selected_shape.shape_type == ShapeType.POLYGON:
                     self._emit_polygon_edit(self.selected_shape, old_points)
                 else:
@@ -711,7 +836,7 @@ class Canvas(QWidget):
             # Only hide other shapes if there is a current selection.
             # Otherwise the user will not be able to select a shape.
             self.set_hiding(True)
-            self.repaint()
+            self.update()
 
     def handle_drawing(self, pos):
         if self.mode == self.CREATE_POLYGON:
@@ -853,7 +978,7 @@ class Canvas(QWidget):
         self._alignment_guides = []
         snapped_x, snapped_y = pos.x(), pos.y()
 
-        for shape in self.shapes:
+        for shape in self._spatial_index.alignment_candidates(pos, threshold):
             if shape is exclude_shape:
                 continue
             for point in shape.points:
@@ -887,6 +1012,7 @@ class Canvas(QWidget):
             # Polygon: move vertex independently
             shift_pos = pos - point
             shape.move_vertex_by(index, shift_pos)
+            self.reindex_shape(shape)
             return
 
         # Rectangle: existing constraint logic (unchanged)
@@ -915,6 +1041,7 @@ class Canvas(QWidget):
             right_shift = QPointF(0, shift_pos.y())
         shape.move_vertex_by(right_index, right_shift)
         shape.move_vertex_by(left_index, left_shift)
+        self.reindex_shape(shape)
 
     def bounded_move_shape(self, shape, pos):
         if self.out_of_pixmap(pos):
@@ -934,6 +1061,7 @@ class Canvas(QWidget):
         dp = pos - self.prev_point
         if dp:
             shape.move_by(dp)
+            self.reindex_shape(shape)
             self.prev_point = pos
             return True
         return False
@@ -965,6 +1093,7 @@ class Canvas(QWidget):
                 self.exit_keypoint_mode()
             self.un_highlight(shape)
             self.shapes.remove(self.selected_shape)
+            self.rebuild_spatial_index()
             self.selected_shape = None
             self.update()
             return shape
@@ -977,6 +1106,7 @@ class Canvas(QWidget):
             shape.selected = True
             self.selected_shape = shape
             self.bounded_shift_shape(shape)
+            self.rebuild_spatial_index()
             return shape
 
     def bounded_shift_shape(self, shape):
@@ -1071,6 +1201,10 @@ class Canvas(QWidget):
     def paintEvent(self, event):
         if not self.pixmap:
             return super(Canvas, self).paintEvent(event)
+        trace_started = None
+        if trace_recorder is not None:
+            import time
+            trace_started = time.perf_counter_ns()
 
         p = self._painter
         p.begin(self)
@@ -1134,13 +1268,22 @@ class Canvas(QWidget):
             from libs.utils.styles import get_theme_colors, hex_to_qcolor
             colors = get_theme_colors(getattr(self, '_theme', None))
             grid_color = hex_to_qcolor(colors.get('grid_line', '#cccccc'), alpha=80)
-            p.setPen(grid_color)
-            gs = self._grid_size
-            w, h = self.pixmap.width(), self.pixmap.height()
-            for x in range(0, w + 1, gs):
-                p.drawLine(x, 0, x, h)
-            for y in range(0, h + 1, gs):
-                p.drawLine(0, y, w, y)
+            key = (
+                self.pixmap.cacheKey(), self._grid_size, grid_color.rgba())
+            if self._grid_overlay_key != key:
+                picture = QPicture()
+                grid_painter = QPainter(picture)
+                grid_painter.setPen(grid_color)
+                gs = self._grid_size
+                width, height = self.pixmap.width(), self.pixmap.height()
+                for x in range(0, width + 1, gs):
+                    grid_painter.drawLine(x, 0, x, height)
+                for y in range(0, height + 1, gs):
+                    grid_painter.drawLine(0, y, width, y)
+                grid_painter.end()
+                self._grid_overlay = picture
+                self._grid_overlay_key = key
+            p.drawPicture(0, 0, self._grid_overlay)
 
         # Draw alignment guides
         if self._alignment_guides:
@@ -1171,6 +1314,10 @@ class Canvas(QWidget):
         self.setPalette(pal)
 
         p.end()
+        if trace_recorder is not None:
+            trace_recorder.complete(
+                'canvas.paint', trace_started,
+                args={'shapes': len(self.shapes)})
 
     def transform_pos(self, point):
         """Convert from widget-logical coordinates to painter-logical coordinates."""
@@ -1199,6 +1346,7 @@ class Canvas(QWidget):
 
         self.current.close()
         self.shapes.append(self.current)
+        self.rebuild_spatial_index()
         self.current = None
         self.set_hiding(False)
         self.newShape.emit()
@@ -1313,12 +1461,14 @@ class Canvas(QWidget):
                           for p in self.selected_shape.points]
             for i in range(len(self.selected_shape.points)):
                 self.selected_shape.points[i] += step
+            self.selected_shape._invalidate_geometry()
+            self.reindex_shape(self.selected_shape)
             if self.selected_shape.shape_type == ShapeType.POLYGON:
                 self._emit_polygon_edit(self.selected_shape, old_points)
             else:
                 self.shapeMoveFinished.emit(self.selected_shape, old_points)
         self.shapeMoved.emit()
-        self.repaint()
+        self.update()
 
     def move_out_of_bound(self, step):
         points = [p + step for p in self.selected_shape.points]
@@ -1334,6 +1484,7 @@ class Canvas(QWidget):
     def undo_last_line(self):
         assert self.shapes
         self.current = self.shapes.pop()
+        self.rebuild_spatial_index()
         self.current.set_open()
         self.line.points = [self.current[-1], self.current[0]]
         self.drawingPolygon.emit(True)
@@ -1341,6 +1492,7 @@ class Canvas(QWidget):
     def reset_all_lines(self):
         assert self.shapes
         self.current = self.shapes.pop()
+        self.rebuild_spatial_index()
         self.current.set_open()
         self.line.points = [self.current[-1], self.current[0]]
         self.drawingPolygon.emit(True)
@@ -1371,16 +1523,27 @@ class Canvas(QWidget):
     def load_pixmap(self, pixmap):
         self.pixmap = pixmap
         self.shapes = []
-        self.repaint()
+        self._spatial_index.clear()
+        self._grid_overlay = None
+        self._grid_overlay_key = None
+        self.update()
 
     def load_shapes(self, shapes):
         self.shapes = list(shapes)
+        self.rebuild_spatial_index()
         self.current = None
-        self.repaint()
+        self.update()
+
+    def rebuild_spatial_index(self):
+        self._spatial_index.rebuild(self.shapes)
+
+    def reindex_shape(self, shape):
+        if shape in self.shapes:
+            self._spatial_index.update(shape)
 
     def set_shape_visible(self, shape, value):
         self.visible[shape] = value
-        self.repaint()
+        self.update()
 
     def current_cursor(self):
         cursor = QApplication.overrideCursor()

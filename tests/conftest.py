@@ -13,8 +13,29 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+_TEST_APPLICATION = None
+
+
+def pytest_sessionstart(session):
+    """Keep one strong QApplication reference for the complete test run."""
+    del session
+    global _TEST_APPLICATION
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    if QApplication.instance() is None:
+        try:
+            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        except AttributeError:
+            pass
+    _TEST_APPLICATION = QApplication.instance() or QApplication([])
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Close every top-level widget and quit QApplication before exit."""
+    del session, exitstatus
+    global _TEST_APPLICATION
     try:
         from PyQt5.QtWidgets import QApplication
     except ImportError:
@@ -39,4 +60,5 @@ def pytest_sessionfinish(session, exitstatus):
     app.processEvents()
     app.processEvents()
     app.quit()
+    _TEST_APPLICATION = None
     gc.collect()

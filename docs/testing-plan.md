@@ -2,11 +2,18 @@
 
 ## Current State
 
+The ordinary suite covers the format readers/writers, collision-safe dataset
+resolver, task coordinator priority/cancellation/generation behavior, shared
+JSON indexing, frame-cache invalidation, gallery scheduling, canvas geometry,
+SAM orchestration, bulk tools, and asynchronous MainWindow flows. Timing is
+deliberately excluded from hosted CI; `docs/performance.md` defines the fixed
+Linux workstation gate and its deterministic 10k corpora.
+
 ### Existing tests
 
 - `tests/test_commands.py`: unit tests for undo/redo command system (`libs/commands.py`)
 - `tests/test_io.py`: Pascal VOC + CreateML I/O smoke tests (`libs/pascal_voc_io.py`, `libs/create_ml_io.py`)
-- `tests/test_settings.py`: basic settings persistence (`libs/settings.py`)
+- `tests/core/test_settings.py`: isolated JSON settings persistence (`libs/core/settings.py`)
 - `tests/test_utils.py`: basic utilities (`libs/utils.py`)
 - `tests/test_stringBundle.py`: i18n bundle loading (`libs/stringBundle.py`)
 - `tests/test_qt.py`: Qt app boot (currently a no-op test)
@@ -14,13 +21,52 @@
 ### CI behavior
 
 - GitHub Actions workflow: `.github/workflows/ci.yaml`
-- Installs `pytest` and runs `pytest tests/ -v`, but currently uses `|| true` which means CI passes even when tests fail.
+- Installs `pytest` and runs `pytest tests/ -v` across Python 3.8–3.13.
+- Runs focused `[video]` jobs across Python 3.8–3.13, combined `[sam,video]`
+  jobs on Python 3.8 and 3.13, and decoder/persistence smoke tests on Windows
+  and macOS.
+- Base jobs import the application without PyAV, NumPy, or OpenCV to preserve
+  the optional-dependency boundary.
+
+### Smart-video coverage
+
+`tests/video/` covers PyAV dependency markers, PTS and VFR seeking, rotation,
+MP4/MOV/MKV/AVI decoding, corrupt media, source fingerprints, SQLite schema and
+revision behavior, track precedence/interpolation, frame-aware editing,
+tracking and review, cache/navigation behavior, export formats and atomic
+staging, CLI/project opening, and Qt GUI-thread boundaries.
+
+Temporary smoke workloads cover CFR, VFR, short/long GOP, rotation, reduced
+4K/8K navigation analogues, and optical-flow stress. Timing remains excluded
+from hosted CI; the full-resolution, five-run acceptance gate is local and is
+documented in `docs/performance.md`.
 
 ### Stability / isolation risks
 
-- `tests/test_settings.py` writes to `~/.labelImgSettings.pkl` (can pollute machines and create flaky tests)
+- Settings tests replace the default path with isolated temporary JSON files.
 - `tests/test_stringBundle.py` assumes `LC_ALL` and `LANG` exist in the environment
 - `tests/test_io.py` writes into the repository under `tests/` instead of a temporary directory
+
+## Performance correctness gates
+
+- Resolver tests use call counts and collision corpora instead of wall-clock
+  thresholds to enforce linear work in hosted CI.
+- Qt integration tests cover latest-request-wins navigation, failed loads,
+  revision-aware saves, delete/reset/shutdown, both gallery surfaces, and SAM
+  image changes.
+- `QImage` may be produced by workers, while `QPixmap`, `Shape`, and all widget
+  mutation are asserted at the application-thread boundary.
+- The workstation profiler performs one warm-up and five measured runs and
+  emits `summary.json`, `trace.json`, `resources.csv`, cProfile output, a
+  comparison report, and optionally a py-spy flamegraph.
+- The plugin qualification profiler can be executed directly by file path
+  from any working directory. From the repository root, run:
+
+  ```bash
+  repository_root=$(pwd)
+  (cd /tmp && python "$repository_root/tools/performance/profile_plugins.py" \
+    --runs 5 --assert-budgets)
+  ```
 
 ## Coverage Gaps
 

@@ -114,36 +114,104 @@ class COCOWriter:
         out_path = target_file or os.path.join(
             os.path.dirname(self.local_img_path or ''), 'annotations.json')
 
+        existing = {}
+        if os.path.isfile(out_path):
+            try:
+                with open(out_path, 'r', encoding=DEFAULT_ENCODING) as f:
+                    candidate = json.load(f)
+                if isinstance(candidate, dict):
+                    existing = candidate
+            except (OSError, ValueError):
+                existing = {}
+
+        existing_images = [
+            image for image in existing.get('images', [])
+            if isinstance(image, dict)
+        ]
+        replaced_ids = {
+            image.get('id') for image in existing_images
+            if image.get('file_name') == self.filename
+        }
+        preserved_images = [
+            image for image in existing_images
+            if image.get('file_name') != self.filename
+        ]
+        numeric_image_ids = [
+            image.get('id') for image in existing_images
+            if isinstance(image.get('id'), int)
+        ]
+        image_id = (next(iter(replaced_ids)) if replaced_ids
+                    else max(numeric_image_ids or [0]) + 1)
         image_entry = {
-            'id': 1,
+            'id': image_id,
             'file_name': self.filename,
             'width': self.img_size[1],
             'height': self.img_size[0],
         }
 
-        annotations = []
+        preserved_annotations = [
+            annotation for annotation in existing.get('annotations', [])
+            if isinstance(annotation, dict)
+            and annotation.get('image_id') not in replaced_ids
+        ]
+        existing_categories = [
+            category for category in existing.get('categories', [])
+            if isinstance(category, dict)
+            and category.get('id') is not None
+            and category.get('name') is not None
+        ]
+        category_ids = {
+            category['name']: category['id']
+            for category in existing_categories
+        }
+        next_category_id = max(
+            [value for value in category_ids.values()
+             if isinstance(value, int)] or [0]) + 1
+        for name in self._categories:
+            if name not in category_ids:
+                category_ids[name] = next_category_id
+                next_category_id += 1
+
+        numeric_annotation_ids = [
+            annotation.get('id') for annotation in preserved_annotations
+            if isinstance(annotation.get('id'), int)
+        ]
+        next_annotation_id = max(numeric_annotation_ids or [0]) + 1
+        annotations = list(preserved_annotations)
         has_keypoints = False
-        for i, ann in enumerate(self._annotations, 1):
-            entry = {'id': i, 'image_id': 1}
+        names_by_local_id = {
+            category_id: name
+            for name, category_id in self._categories.items()
+        }
+        for ann in self._annotations:
+            entry = {'id': next_annotation_id, 'image_id': image_id}
+            next_annotation_id += 1
             entry.update(ann)
+            name = names_by_local_id.get(entry['category_id'], 'unknown')
+            entry['category_id'] = category_ids[name]
             annotations.append(entry)
             if 'keypoints' in ann:
                 has_keypoints = True
 
-        categories = []
-        for name, cid in self._categories.items():
-            cat = {'id': cid, 'name': name}
+        categories_by_name = {
+            category['name']: dict(category)
+            for category in existing_categories
+        }
+        for name in self._categories:
+            cat = categories_by_name.setdefault(
+                name, {'id': category_ids[name], 'name': name})
             if name.lower() == 'person' and has_keypoints:
                 from libs.core.keypoint_config import COCO_KEYPOINT_NAMES, COCO_SKELETON
                 cat['keypoints'] = list(COCO_KEYPOINT_NAMES)
                 cat['skeleton'] = [[a + 1, b + 1] for a, b in COCO_SKELETON]
-            categories.append(cat)
+        categories = list(categories_by_name.values())
 
-        coco = {
-            'images': [image_entry],
+        coco = dict(existing)
+        coco.update({
+            'images': preserved_images + [image_entry],
             'annotations': annotations,
             'categories': categories,
-        }
+        })
 
         with open(out_path, 'w', encoding=DEFAULT_ENCODING) as f:
             json.dump(coco, f, indent=2)
@@ -152,11 +220,11 @@ class COCOWriter:
 class COCOReader:
     """Reads annotations from COCO JSON format."""
 
-    def __init__(self, file_path, target_filename=None):
+    def __init__(self, file_path, target_filename=None, data=None):
         self.shapes = []
         self.file_path = file_path
         self.verified = False
-        self._parse(target_filename)
+        self._parse(target_filename, data=data)
 
     def get_shapes(self):
         """Return parsed shapes as a list of tuples.
@@ -170,9 +238,10 @@ class COCOReader:
         """
         return self.shapes
 
-    def _parse(self, target_filename):
-        with open(self.file_path, 'r', encoding=DEFAULT_ENCODING) as f:
-            data = json.load(f)
+    def _parse(self, target_filename, data=None):
+        if data is None:
+            with open(self.file_path, 'r', encoding=DEFAULT_ENCODING) as f:
+                data = json.load(f)
 
         cat_map = {c['id']: c['name'] for c in data.get('categories', [])}
 

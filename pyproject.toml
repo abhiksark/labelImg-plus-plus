@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "labelimgplusplus"
-version = "3.0.0"
+version = "3.1.0"
 description = "labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images"
 readme = "README.rst"
 license = {file = "LICENSE"}
@@ -37,7 +37,20 @@ dependencies = [
 sam = [
     "onnxruntime",
     "numpy",
-    "opencv-python-headless",
+    "opencv-python-headless>=4.8,<6",
+]
+video = [
+    "av>=12.3,<13; python_version == '3.8'",
+    "av>=15.1,<16; python_version == '3.9'",
+    "av>=17.1,<18; python_version == '3.10'",
+    "av>=18,<19; python_version >= '3.11'",
+    "numpy",
+    "opencv-python-headless>=4.8,<6",
+]
+profile = [
+    "psutil",
+    "py-spy",
+    "pytest-benchmark",
 ]
 
 [project.urls]
@@ -54,7 +67,7 @@ py-modules = ["labelImgPlusPlus"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["libs*"]
+include = ["libs*", "labelimgplusplus*"]
 
 [tool.setuptools.package-data]
 "*" = ["data/*.txt", "resources/**/*"]

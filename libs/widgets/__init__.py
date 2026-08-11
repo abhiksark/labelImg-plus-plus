@@ -17,3 +17,6 @@ __all__ = [
     'LabelDialog', 'ColorDialog', 'ZoomWidget', 'LightWidget',
     'ComboBox', 'DefaultLabelComboBox',
 ]
+from libs.widgets.videoTimelineWidget import VideoTimelineWidget
+
+__all__ = ['VideoTimelineWidget']
