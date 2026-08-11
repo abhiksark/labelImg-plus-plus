@@ -273,6 +273,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview = {}
         self._propagation_preview_gaps = {}
         self._propagation_before_state = None
+        self._regeneration_runs = {}
         self._video_export_handle = None
         self._load_request_id = 0
         self._pending_navigation_index = None
@@ -1759,6 +1760,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.pause_video()
         if hasattr(self, '_propagation_handle'):
             self.cancel_video_propagation()
+        if hasattr(self, '_regeneration_runs'):
+            self._cancel_all_regeneration()
         if hasattr(self, '_tracking_handle'):
             self.cancel_video_tracking()
         if hasattr(self, '_video_export_handle'):
@@ -2167,13 +2170,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self._materialize_video_frame(
                     self.current_video_frame_ref.pts)
                 return
-            before = self.video_model.snapshot_state()
-            self._store_video_shape_as_manual(shape)
-            after = self.video_model.snapshot_state()
-            self.undo_stack.push(VideoModelCommand(
-                self, before, after, 'Edit video polygon keyframe'))
-            self._on_video_model_mutation()
-            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            self._commit_video_correction(
+                shape, 'Edit video polygon keyframe')
             return
         cmd = EditPolygonVerticesCommand(
             self, shape, old_points, list(shape.points))
@@ -2187,13 +2185,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self._materialize_video_frame(
                     self.current_video_frame_ref.pts)
                 return
-            before = self.video_model.snapshot_state()
-            self._store_video_shape_as_manual(shape)
-            after = self.video_model.snapshot_state()
-            self.undo_stack.push(VideoModelCommand(
-                self, before, after, 'Edit video track keyframe'))
-            self._on_video_model_mutation()
-            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            self._commit_video_correction(
+                shape, 'Edit video track keyframe')
             return
         cmd = MoveShapeCommand(self, shape, old_points, list(shape.points))
         self.undo_stack.push(cmd)
@@ -2206,13 +2199,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self._materialize_video_frame(
                     self.current_video_frame_ref.pts)
                 return
-            before = self.video_model.snapshot_state()
-            self._store_video_shape_as_manual(shape)
-            after = self.video_model.snapshot_state()
-            self.undo_stack.push(VideoModelCommand(
-                self, before, after, 'Edit video keypoints'))
-            self._on_video_model_mutation()
-            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            self._commit_video_correction(shape, 'Edit video keypoints')
             return
         cmd = EditKeypointsCommand(
             self, shape, old_keypoints,
@@ -3567,6 +3554,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def _on_video_model_mutation(self):
         if not self._ensure_video_editable():
             return
+        if self._regeneration_runs:
+            self._cancel_all_regeneration()
         if (self._active_tracking_request is not None
                 and not self._applying_tracking_batch):
             self.cancel_video_tracking()
@@ -3614,6 +3603,28 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_model.upsert_manual(
             track_id, self.current_video_frame_ref.pts,
             geometry, keypoints=keypoints)
+        return track_id
+
+    def _commit_video_correction(self, shape, description):
+        """Promote an edited generated shape, then regenerate its segments."""
+        model = self.video_model
+        frame_ref = self.current_video_frame_ref
+        track_id = getattr(shape, 'video_track_id', None)
+        if model is None or frame_ref is None or track_id not in model.tracks:
+            return None
+        current = model.observations.get((track_id, frame_ref.pts))
+        generated = (
+            getattr(shape, 'video_render_state', None) == 'interpolation'
+            or (current is not None and current.source != 'manual'))
+        before = model.snapshot_state()
+        self._store_video_shape_as_manual(shape)
+        after = model.snapshot_state()
+        self.undo_stack.push(VideoModelCommand(
+            self, before, after, description))
+        self._on_video_model_mutation()
+        self._materialize_video_frame(frame_ref.pts)
+        if generated:
+            self._start_correction_regeneration(track_id, frame_ref.pts)
         return track_id
 
     def _shape_for_materialized(self, materialized):
@@ -4034,6 +4045,170 @@ class MainWindow(QMainWindow, WindowMixin):
         if handle is not None:
             handle.cancel()
         self._clear_propagation_state()
+
+    def _start_correction_regeneration(self, track_id, correction_pts):
+        model = self.video_model
+        snapshot = self.video_snapshot
+        if model is None or snapshot is None or track_id not in model.tracks:
+            return None
+        seed = model.observations.get((track_id, int(correction_pts)))
+        if (seed is None or seed.source != 'manual'
+                or seed.review_state != 'accepted' or not seed.anchor):
+            return None
+        anchors = tuple(sorted(
+            (item for item in model.observations.values()
+             if item.track_id == track_id and item.source == 'manual'
+             and item.review_state == 'accepted' and item.anchor),
+            key=lambda item: item.pts))
+        media_start = int(snapshot.start_pts or 0)
+        media_end = media_start + int(snapshot.duration_pts or 0)
+        left = next((item.pts for item in reversed(anchors)
+                     if item.pts < correction_pts), media_start)
+        right = next((item.pts for item in anchors
+                      if item.pts > correction_pts), media_end)
+        intervals = tuple(
+            value for value in ((left, int(correction_pts)),
+                                (int(correction_pts), right))
+            if value[1] > value[0])
+        directions = tuple(
+            (-1 if end == correction_pts else 1)
+            for _start, end in intervals)
+        if not intervals:
+            return None
+
+        self._cancel_regeneration(track_id)
+        self._tracking_request_id += 1
+        track_revision = model.tracks[track_id].revision
+        request = PropagationRequest(
+            request_id=self._tracking_request_id,
+            generation=self._dataset_generation,
+            document_revision=model.revision,
+            source_path=snapshot.source_path,
+            fingerprint=snapshot.fingerprint,
+            stream_index=snapshot.stream_index,
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den,
+            start_pts=left, end_pts=right,
+            current_pts=int(correction_pts), direction=0,
+            seeds=(seed,), manual_anchors=anchors,
+            track_revisions=((track_id, track_revision),),
+            average_rate_num=snapshot.average_rate_num,
+            average_rate_den=snapshot.average_rate_den)
+        run = {
+            'request': request, 'intervals': intervals,
+            'before': model.snapshot_state(), 'handle': None,
+        }
+        self._regeneration_runs[track_id] = run
+        backend = OpenCVPropagationBackend()
+
+        def regenerate(handle):
+            results = []
+            for direction in directions:
+                handle.check_cancelled()
+                directional = replace(request, direction=direction)
+                results.append(backend.propagate(
+                    directional, direction, handle.is_cancelled,
+                    lambda _batch: handle.check_cancelled()))
+            observations = {}
+            gaps = {}
+            failures = {}
+            for result in results:
+                observations.update(
+                    ((item.track_id, item.pts), item)
+                    for item in result.observations)
+                gaps.update(
+                    ((item.track_id, item.start_pts, item.end_pts), item)
+                    for item in result.gaps)
+                failures.update(result.failures)
+            return PropagationResult(
+                request.request_id, request.generation,
+                request.document_revision,
+                observations=tuple(observations.values()),
+                gaps=tuple(gaps.values()),
+                failures=tuple(sorted(failures.items())))
+
+        handle = self.task_coordinator.submit(
+            'background', regenerate, priority=JobPriority.BULK,
+            key='video-regeneration-' + track_id, latest=True,
+            generation=self._dataset_generation)
+        run['handle'] = handle
+        handle.result.connect(
+            lambda result, tid=track_id, rid=request.request_id:
+            self._on_regeneration_result(tid, rid, result))
+        handle.error.connect(
+            lambda message, tid=track_id, rid=request.request_id:
+            self._on_regeneration_error(tid, rid, message))
+        handle.finished.connect(
+            lambda current=handle, tid=track_id:
+            self._on_regeneration_finished(tid, current))
+        self.status('Regenerating corrected track segments…')
+        return handle
+
+    def _regeneration_is_current(self, track_id, request_id, result):
+        run = self._regeneration_runs.get(track_id)
+        model = self.video_model
+        snapshot = self.video_snapshot
+        if run is None or model is None or snapshot is None:
+            return False
+        request = run['request']
+        track = model.tracks.get(track_id)
+        return (
+            request.request_id == request_id
+            and result.request_id == request_id
+            and result.generation == request.generation
+            and request.generation == self._dataset_generation
+            and result.document_revision == request.document_revision
+            and model.revision == request.document_revision
+            and track is not None
+            and track.revision == request.track_revisions[0][1]
+            and snapshot.source_path == request.source_path
+            and snapshot.fingerprint == request.fingerprint
+            and snapshot.stream_index == request.stream_index
+            and snapshot.time_base_num == request.time_base_num
+            and snapshot.time_base_den == request.time_base_den)
+
+    def _on_regeneration_result(self, track_id, request_id, result):
+        if not self._regeneration_is_current(track_id, request_id, result):
+            self._cancel_regeneration(track_id)
+            return
+        run = self._regeneration_runs.pop(track_id)
+        model = self.video_model
+        applied = model.apply_regeneration_result(
+            result, track_id, run['intervals'])
+        after = model.snapshot_state()
+        if run['before'] != after:
+            self.undo_stack.push(VideoModelCommand(
+                self, run['before'], after,
+                'Regenerate corrected video segments'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(
+                self.current_video_frame_ref.pts)
+        self.status(
+            'Correction regeneration complete: %s observations, %s gaps' % (
+                len(applied.observations), len(applied.gaps)))
+
+    def _on_regeneration_error(self, track_id, request_id, message):
+        run = self._regeneration_runs.get(track_id)
+        if run is None or run['request'].request_id != request_id:
+            return
+        self._regeneration_runs.pop(track_id, None)
+        self.status(
+            'Correction kept; segment regeneration failed: ' + message,
+            delay=10000)
+
+    def _on_regeneration_finished(self, track_id, handle):
+        run = self._regeneration_runs.get(track_id)
+        if run is not None and run['handle'] is handle:
+            self._regeneration_runs.pop(track_id, None)
+
+    def _cancel_regeneration(self, track_id):
+        run = self._regeneration_runs.pop(track_id, None)
+        if run is not None and run.get('handle') is not None:
+            run['handle'].cancel()
+
+    def _cancel_all_regeneration(self):
+        for track_id in tuple(self._regeneration_runs):
+            self._cancel_regeneration(track_id)
 
     def _video_track_item_changed(self, item):
         """Legacy entry point retained for controller compatibility."""
@@ -6551,6 +6726,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
             return
+        if self.document_kind == DocumentKind.VIDEO:
+            self._cancel_all_regeneration()
         if self.undo_stack.can_undo():
             self.undo_stack.undo()
             self.set_dirty()
@@ -6561,6 +6738,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
             return
+        if self.document_kind == DocumentKind.VIDEO:
+            self._cancel_all_regeneration()
         if self.undo_stack.can_redo():
             self.undo_stack.redo()
             self.set_dirty()
