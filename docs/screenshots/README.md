@@ -1,5 +1,12 @@
 # Screenshots
 
+## Workspace 3.2
+
+`workspace-3.2-balanced/` contains the accepted browser-lab contract for the
+Balanced workspace at 1366x768 and 1440x900. Dense and Canvas-first remain
+archived comparison studies in the interactive prototype and are not runtime
+themes.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots
