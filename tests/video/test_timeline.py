@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QAction, QApplication
 
 from libs.core.video_decoder import VideoDecoderSession
 from libs.widgets.videoTimelineWidget import (
@@ -68,4 +68,31 @@ def test_invalid_timecode_does_not_emit():
     widget.time_edit.setText('not-a-time')
     widget._emit_time_seek()
     assert len(spy) == 0
+    widget.close()
+
+
+def test_propagation_actions_and_progress_replace_each_other():
+    widget = VideoTimelineWidget()
+    propagate_all = QAction('Propagate across video', widget)
+    propagate_selected = QAction('Propagate selected object', widget)
+    cancel = QAction('Cancel', widget)
+    widget.set_propagation_actions(
+        propagate_all, propagate_selected, cancel)
+    assert widget.propagate_all_button.defaultAction() is propagate_all
+    assert widget.propagate_selected_button.defaultAction() is \
+        propagate_selected
+
+    widget.set_propagation_progress(
+        12, 40, 2, 1, 3.25, 4, running=True)
+    assert widget.progress_label.isHidden() is False
+    assert widget.cancel_propagation_button.isHidden() is False
+    assert widget.propagate_all_button.isHidden() is True
+    assert '12/40 frames' in widget.progress_label.text()
+    assert '4 gaps/failures' in widget.progress_label.text()
+
+    widget.set_propagation_progress(
+        0, 0, 0, 0, None, 0, running=False)
+    assert widget.progress_label.isHidden() is True
+    assert widget.cancel_propagation_button.isHidden() is True
+    assert widget.propagate_all_button.isHidden() is False
     widget.close()

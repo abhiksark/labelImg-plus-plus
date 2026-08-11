@@ -164,6 +164,9 @@ class Canvas(QWidget):
         # ``shapes`` so saves, inspectors, plugins, dirty state, and undo do
         # not observe it before the user commits a class.
         self.provisional_shape = None
+        # Worker output staged for review while whole-video propagation runs.
+        # These shapes are paint-only and never enter canonical collections.
+        self.propagation_preview_shapes = []
         self.selected_shape = None  # save the selected shape here
         self.selected_shape_copy = None
         self.drawing_line_color = QColor(0, 0, 255)
@@ -1279,6 +1282,16 @@ class Canvas(QWidget):
             self.provisional_shape.paint(p)
             p.restore()
 
+        if self.propagation_preview_shapes:
+            p.save()
+            p.setOpacity(.58)
+            for shape in self.propagation_preview_shapes:
+                shape.fill = False
+                shape.paint(p)
+                if shape.keypoints:
+                    self._draw_keypoints(p, shape)
+            p.restore()
+
         if self.current:
             self.current.paint(p)
             self.line.paint(p)
@@ -1612,6 +1625,7 @@ class Canvas(QWidget):
         self.pixmap = pixmap
         self.shapes = []
         self.provisional_shape = None
+        self.propagation_preview_shapes = []
         self._spatial_index.clear()
         self._grid_overlay = None
         self._grid_overlay_key = None
@@ -1622,6 +1636,10 @@ class Canvas(QWidget):
         self.rebuild_spatial_index()
         self.current = None
         self.provisional_shape = None
+        self.update()
+
+    def set_propagation_preview_shapes(self, shapes):
+        self.propagation_preview_shapes = list(shapes)
         self.update()
 
     def rebuild_spatial_index(self):
@@ -1664,6 +1682,7 @@ class Canvas(QWidget):
         self._freehand_points = []
         self.current = None
         self.provisional_shape = None
+        self.propagation_preview_shapes = []
         changed = self.mode != self.EDIT
         self.mode = self.EDIT
 

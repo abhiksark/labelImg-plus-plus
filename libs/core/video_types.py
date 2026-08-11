@@ -163,6 +163,8 @@ class PropagationRequest:
     seeds: tuple
     manual_anchors: tuple
     track_revisions: tuple
+    average_rate_num: object = None
+    average_rate_den: object = None
 
 
 @dataclass(frozen=True)

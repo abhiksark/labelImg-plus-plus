@@ -3,11 +3,16 @@
 import math
 import time
 
+from libs.core.video_propagation import PropagationBackend
+from libs.core.video_project import fingerprint_video
 from libs.core.video_decoder import (
     _oriented_array, _rotation_for_frame, _rotation_for_stream,
     load_video_dependencies,
 )
-from libs.core.video_types import ObservationRecord, TrackingBatch
+from libs.core.video_types import (
+    ObservationRecord, PropagationBatch, PropagationResult, TrackGapRecord,
+    TrackingBatch,
+)
 
 
 MAX_WORKING_EDGE = 1280
@@ -286,3 +291,338 @@ def track_optical_flow(request, handle):
             tuple(pending), finished=True, stop_reason=stop_reason)
     finally:
         container.close()
+
+
+class PropagationCancelled(RuntimeError):
+    """Internal cooperative-cancellation sentinel."""
+
+
+class _CancellationHandle:
+    def __init__(self, cancelled):
+        self._cancelled = cancelled
+
+    def check_cancelled(self):
+        if self._cancelled():
+            raise PropagationCancelled('propagation cancelled')
+
+
+def _propagation_frames(container, stream, request, direction, rotation,
+                        cv2, np, cancelled):
+    handle = _CancellationHandle(cancelled)
+    if direction > 0:
+        yield from _decoded_frames(
+            container, stream, request.current_pts, request.end_pts,
+            rotation, cv2, np, handle)
+        return
+    time_base = float(stream.time_base)
+    chunk_pts = max(1, int(round(BACKWARD_CHUNK_SECONDS / time_base)))
+    cursor = request.current_pts
+    first_chunk = True
+    while cursor > request.start_pts:
+        handle.check_cancelled()
+        chunk_start = max(request.start_pts, cursor - chunk_pts)
+        frames = list(_decoded_frames(
+            container, stream, chunk_start, cursor, rotation,
+            cv2, np, handle))
+        for value in reversed(frames):
+            if value[0] < cursor or (first_chunk and value[0] == cursor):
+                yield value
+        first_chunk = False
+        cursor = chunk_start
+
+
+def _geometry_bounds(geometry):
+    if geometry is None:
+        return None
+    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
+        return [float(value) for value in geometry]
+    if len(geometry) < 3:
+        return None
+    xs = [float(point[0]) for point in geometry]
+    ys = [float(point[1]) for point in geometry]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _scaled_geometry(geometry, scale):
+    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
+        return [float(value) * scale for value in geometry]
+    return [[float(point[0]) * scale, float(point[1]) * scale]
+            for point in geometry]
+
+
+def _transform_geometry(geometry, matrix, cv2, np):
+    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
+        return _transform_rectangle(geometry, matrix, cv2, np)
+    points = np.asarray([geometry], dtype=np.float32)
+    transformed = cv2.transform(points, matrix)[0]
+    return [[float(point[0]), float(point[1])] for point in transformed]
+
+
+def _unscaled_geometry(geometry, scale):
+    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
+        return [float(value) / scale for value in geometry]
+    return [[float(point[0]) / scale, float(point[1]) / scale]
+            for point in geometry]
+
+
+def _stable_gap_reason(reason):
+    reason = str(reason or '').lower()
+    if 'scene cut' in reason:
+        return 'scene_cut'
+    if 'flow failed' in reason:
+        return 'occluded'
+    if 'frame' in reason or 'rectangle became' in reason:
+        return 'out_of_frame'
+    return 'low_confidence'
+
+
+def _estimated_frames(request, direction):
+    if not request.average_rate_num or not request.average_rate_den:
+        return 0
+    endpoint = request.end_pts if direction > 0 else request.start_pts
+    seconds = abs(endpoint - request.current_pts) * \
+        request.time_base_num / request.time_base_den
+    return max(0, int(round(
+        seconds * request.average_rate_num / request.average_rate_den)))
+
+
+class OpenCVPropagationBackend(PropagationBackend):
+    """Portable multi-track Lucas-Kanade and affine propagation."""
+
+    name = 'opencv'
+
+    def propagate(self, request, direction, cancelled, emit_batch):
+        if direction not in (-1, 1):
+            raise ValueError('propagation direction must be -1 or 1')
+        if not request.seeds:
+            raise ValueError('propagation requires at least one seed')
+        current_fingerprint = fingerprint_video(request.source_path)
+        if (current_fingerprint is None
+                or not request.fingerprint.content_matches(
+                    current_fingerprint)):
+            raise RuntimeError(
+                'video media changed after propagation was requested')
+        av, np = load_video_dependencies()
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError(
+                'Video propagation requires labelimgplusplus[video]: %s' %
+                exc)
+        cv2.setRNGSeed(0)
+        container = av.open(request.source_path, mode='r')
+        try:
+            stream = next((item for item in container.streams.video
+                           if item.index == request.stream_index), None)
+            if stream is None:
+                raise RuntimeError('video stream is no longer available')
+            if (int(stream.time_base.numerator) != request.time_base_num
+                    or int(stream.time_base.denominator)
+                    != request.time_base_den):
+                raise RuntimeError(
+                    'video time base changed after propagation was requested')
+            rotation = _rotation_for_stream(stream)
+            frames = _propagation_frames(
+                container, stream, request, direction, rotation,
+                cv2, np, cancelled)
+            first = next(frames, None)
+            if first is None:
+                return PropagationResult(
+                    request.request_id, request.generation,
+                    request.document_revision)
+
+            first_pts, previous_gray, working_scale, width, height = first
+            if first_pts != request.current_pts:
+                raise RuntimeError(
+                    'current propagation frame is no longer decodable')
+            anchors = {}
+            for anchor in request.manual_anchors:
+                anchors[(anchor.track_id, int(anchor.pts))] = anchor
+            states = {}
+            for seed in request.seeds:
+                bounds = _geometry_bounds(seed.geometry)
+                if (not seed.present or seed.geometry is None
+                        or bounds is None):
+                    raise ValueError(
+                        'propagation seeds must be present accepted geometry')
+                geometry = _scaled_geometry(seed.geometry, working_scale)
+                scaled_bounds = _geometry_bounds(geometry)
+                states[seed.track_id] = {
+                    'active': True,
+                    'geometry': geometry,
+                    'keypoints': seed.keypoints,
+                    'points': _feature_points(
+                        previous_gray, scaled_bounds, cv2, np),
+                    'gap_start': None,
+                    'gap_end': None,
+                    'gap_reason': None,
+                    'steps': 0,
+                }
+
+            observations = []
+            gaps = []
+            failures = {}
+            pending_observations = []
+            pending_gaps = []
+            processed = 0
+            total = _estimated_frames(request, direction)
+            started = time.monotonic()
+            last_emit = started
+            previous_histogram = _histogram(previous_gray, cv2)
+
+            def close_gap(track_id, state):
+                if state['gap_start'] is None:
+                    return
+                start_pts = min(state['gap_start'], state['gap_end'])
+                end_pts = max(state['gap_start'], state['gap_end'])
+                gap = TrackGapRecord(
+                    track_id, start_pts, end_pts, state['gap_reason'],
+                    self.name, request.document_revision)
+                gaps.append(gap)
+                pending_gaps.append(gap)
+                failures[track_id] = state['gap_reason']
+                state['gap_start'] = None
+                state['gap_end'] = None
+                state['gap_reason'] = None
+
+            def deactivate(track_id, state, pts, reason):
+                if state['gap_start'] is None:
+                    state['gap_start'] = int(pts)
+                    state['gap_reason'] = reason
+                state['gap_end'] = int(pts)
+                state['active'] = False
+                failures[track_id] = reason
+
+            for pts, current_gray, scale, width, height in frames:
+                if cancelled():
+                    raise PropagationCancelled('propagation cancelled')
+                if pts == request.current_pts:
+                    continue
+                if abs(scale - working_scale) > 1e-9:
+                    raise RuntimeError(
+                        'decoded working scale changed during propagation')
+                processed += 1
+                current_histogram = _histogram(current_gray, cv2)
+                scene_cut = cv2.compareHist(
+                    previous_histogram, current_histogram,
+                    cv2.HISTCMP_CORREL) < MIN_HISTOGRAM_CORRELATION
+
+                for track_id, state in states.items():
+                    anchor = anchors.get((track_id, int(pts)))
+                    if anchor is not None:
+                        close_gap(track_id, state)
+                        if not anchor.present or anchor.geometry is None:
+                            deactivate(
+                                track_id, state, pts, 'occluded')
+                            continue
+                        state['geometry'] = _scaled_geometry(
+                            anchor.geometry, working_scale)
+                        state['keypoints'] = anchor.keypoints
+                        state['points'] = _feature_points(
+                            current_gray,
+                            _geometry_bounds(state['geometry']), cv2, np)
+                        state['active'] = True
+                        state['steps'] = 0
+                        continue
+                    if not state['active']:
+                        state['gap_end'] = int(pts)
+                        continue
+                    if scene_cut:
+                        deactivate(
+                            track_id, state, pts, 'scene_cut')
+                        continue
+                    bounds = _geometry_bounds(state['geometry'])
+                    propagated, reason = _propagate_pair(
+                        previous_gray, current_gray, bounds,
+                        state['points'], cv2, np)
+                    if propagated is None:
+                        deactivate(
+                            track_id, state, pts,
+                            _stable_gap_reason(reason))
+                        continue
+                    _bounds, matrix, points, quality = propagated
+                    geometry = _transform_geometry(
+                        state['geometry'], matrix, cv2, np)
+                    transformed_bounds = _geometry_bounds(geometry)
+                    if (transformed_bounds[2] - transformed_bounds[0] < 4
+                            or transformed_bounds[3]
+                            - transformed_bounds[1] < 4
+                            or _inside_ratio(
+                                transformed_bounds,
+                                current_gray.shape[1],
+                                current_gray.shape[0]) < .5):
+                        deactivate(
+                            track_id, state, pts, 'out_of_frame')
+                        continue
+                    state['geometry'] = geometry
+                    state['points'] = points
+                    state['keypoints'] = _transform_keypoints(
+                        state['keypoints'], matrix, working_scale,
+                        cv2, np)
+                    state['steps'] += 1
+                    if state['steps'] % 5 == 0:
+                        state['points'] = _feature_points(
+                            current_gray, transformed_bounds, cv2, np)
+                    observation = ObservationRecord(
+                        track_id, int(pts),
+                        _unscaled_geometry(geometry, working_scale),
+                        keypoints=state['keypoints'], present=True,
+                        source='tracker', review_state='accepted',
+                        anchor=False, quality=quality,
+                        revision=request.document_revision)
+                    observations.append(observation)
+                    pending_observations.append(observation)
+
+                previous_gray = current_gray
+                previous_histogram = current_histogram
+                now = time.monotonic()
+                if (len(pending_observations) >= 16
+                        or now - last_emit >= .20):
+                    active = sum(
+                        1 for state in states.values() if state['active'])
+                    elapsed = max(1e-9, now - started)
+                    eta = (elapsed / processed * max(0, total - processed)
+                           if total else None)
+                    emit_batch(PropagationBatch(
+                        request.request_id, request.generation, direction,
+                        observations=tuple(pending_observations),
+                        gaps=tuple(pending_gaps),
+                        processed_frames=processed, total_frames=total,
+                        active_tracks=active,
+                        completed_tracks=len(states) - active,
+                        eta_seconds=eta))
+                    pending_observations = []
+                    pending_gaps = []
+                    last_emit = now
+
+            boundary_pts = (
+                request.end_pts if direction > 0 else request.start_pts)
+            for track_id, state in states.items():
+                if state['gap_start'] is not None:
+                    if state['gap_end'] is None:
+                        state['gap_end'] = boundary_pts
+                    close_gap(track_id, state)
+            active = sum(1 for state in states.values() if state['active'])
+            elapsed = max(1e-9, time.monotonic() - started)
+            eta = (elapsed / processed * max(0, total - processed)
+                   if total and processed else None)
+            emit_batch(PropagationBatch(
+                request.request_id, request.generation, direction,
+                observations=tuple(pending_observations),
+                gaps=tuple(pending_gaps), processed_frames=processed,
+                total_frames=total, active_tracks=active,
+                completed_tracks=len(states) - active,
+                eta_seconds=eta, finished=True))
+            final_fingerprint = fingerprint_video(request.source_path)
+            if (final_fingerprint is None
+                    or not request.fingerprint.content_matches(
+                        final_fingerprint)):
+                raise RuntimeError(
+                    'video media changed during propagation')
+            return PropagationResult(
+                request.request_id, request.generation,
+                request.document_revision,
+                observations=tuple(observations), gaps=tuple(gaps),
+                failures=tuple(sorted(failures.items())))
+        finally:
+            container.close()

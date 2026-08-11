@@ -4,7 +4,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
-    QStyle, QVBoxLayout, QWidget,
+    QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from libs.core.video_types import VideoFrameRef
@@ -112,6 +112,17 @@ class VideoTimelineWidget(QWidget):
             self.speed_combo.addItem('%gx' % speed, speed)
         self.speed_combo.setCurrentIndex(2)
         self.position_label = QLabel('PTS — · Frame ~—')
+        self.propagate_all_button = QToolButton()
+        self.propagate_selected_button = QToolButton()
+        self.cancel_propagation_button = QToolButton()
+        for button in (
+                self.propagate_all_button, self.propagate_selected_button,
+                self.cancel_propagation_button):
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.progress_label = QLabel()
+        self.progress_label.setObjectName('videoPropagationProgress')
+        self.progress_label.hide()
+        self.cancel_propagation_button.hide()
         self.slider = _MarkerSlider()
         self.slider.setRange(0, TIMELINE_MAX)
 
@@ -124,6 +135,10 @@ class VideoTimelineWidget(QWidget):
         top.addWidget(self.speed_combo)
         top.addWidget(self.position_label)
         top.addStretch(1)
+        top.addWidget(self.progress_label)
+        top.addWidget(self.propagate_all_button)
+        top.addWidget(self.propagate_selected_button)
+        top.addWidget(self.cancel_propagation_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(1)
@@ -140,6 +155,29 @@ class VideoTimelineWidget(QWidget):
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
         self.slider.valueChanged.connect(self._slider_changed)
+
+    def set_propagation_actions(self, all_action, selected_action,
+                                cancel_action):
+        self.propagate_all_button.setDefaultAction(all_action)
+        self.propagate_selected_button.setDefaultAction(selected_action)
+        self.cancel_propagation_button.setDefaultAction(cancel_action)
+
+    def set_propagation_progress(self, processed, total, active, completed,
+                                 eta_seconds, failures, running=True):
+        self.propagate_all_button.setVisible(not running)
+        self.propagate_selected_button.setVisible(not running)
+        self.cancel_propagation_button.setVisible(running)
+        self.progress_label.setVisible(running)
+        if not running:
+            self.progress_label.clear()
+            return
+        eta = ('—' if eta_seconds is None
+               else format_timecode(float(eta_seconds)))
+        total_text = str(total) if total else '—'
+        self.progress_label.setText(
+            '%s/%s frames · %s active · %s complete · ETA %s · '
+            '%s gaps/failures' % (
+                processed, total_text, active, completed, eta, failures))
 
     def set_session(self, snapshot):
         self._snapshot = snapshot
