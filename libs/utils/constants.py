@@ -39,3 +39,8 @@ DEFAULT_ENCODING = 'utf-8'
 SETTING_SAM_ENCODER = 'sam/encoderPath'     # encoder .onnx; '' = bundled default
 SETTING_SAM_DECODER = 'sam/decoderPath'     # decoder .onnx; '' = bundled default
 SETTING_SAM_OUTPUT_MODE = 'sam/outputMode'  # 'polygon' (default) or 'box'
+# Whole-video propagation settings. Torch, SAM 2, checkpoints, and configs are
+# user-managed optional components and are never downloaded by labelImg++.
+SETTING_VIDEO_PROPAGATION_BACKEND = 'video/propagationBackend'
+SETTING_VIDEO_SAM2_CHECKPOINT = 'video/sam2Checkpoint'
+SETTING_VIDEO_SAM2_CONFIG = 'video/sam2Config'

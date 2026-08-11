@@ -68,6 +68,9 @@ def test_packaged_plugin_lifecycle_and_removal(tmp_path):
         assert 'av' not in sys.modules
         assert 'cv2' not in sys.modules
         assert 'numpy' not in sys.modules
+        assert 'torch' not in sys.modules
+        assert 'torchvision' not in sys.modules
+        assert 'sam2' not in sys.modules
         candidates = discover_plugins()
         candidate = next(item for item in candidates
                          if item.id == 'org.labelimgpp.fixture')

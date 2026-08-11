@@ -53,6 +53,14 @@ and associated keypoint previews are painted separately from canonical model
 geometry while the integrated timeline reports processed frames, active and
 completed objects, ETA, gap/failure count, and the accessible Cancel action.
 
+## Workspace 3.5
+
+`workspace-3.5-sam2-settings/` contains the fixed Linux light/dark and 1x/2x
+matrix for the combined Smart Select and whole-video propagation settings.
+The captures verify that backend choice, local checkpoint/config paths, the
+no-bundle explanation, and all dialog actions remain readable and unclipped at
+1366x768 and 1440x900 logical sizes.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots

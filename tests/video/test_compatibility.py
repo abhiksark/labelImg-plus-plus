@@ -13,6 +13,10 @@ def test_video_dependency_markers_cover_each_python_line():
     assert 'av>=17.1,<18; python_version == \'3.10\'' in metadata
     assert 'av>=18,<19; python_version >= \'3.11\'' in metadata
     assert metadata.count('opencv-python-headless>=4.8,<6') == 2
+    lowered = metadata.lower()
+    assert '"torch' not in lowered
+    assert '"sam-2' not in lowered
+    assert '"sam2' not in lowered
 
 
 def test_base_application_imports_without_optional_video_modules():
@@ -20,7 +24,8 @@ def test_base_application_imports_without_optional_video_modules():
 import builtins
 original_import = builtins.__import__
 def guarded_import(name, *args, **kwargs):
-    if name.split('.', 1)[0] in ('av', 'cv2', 'numpy'):
+    if name.split('.', 1)[0] in (
+            'av', 'cv2', 'numpy', 'torch', 'torchvision', 'sam2'):
         raise AssertionError('optional video module imported at base startup')
     return original_import(name, *args, **kwargs)
 builtins.__import__ = guarded_import
