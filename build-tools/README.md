@@ -11,8 +11,8 @@ Normal releases are published by the tag workflow. The tag must exactly match
 the package version, point to a commit on ``origin/master``, and be pushed only
 after the release pull request and ``master`` CI pass:
 ```bash
-git tag -a v3.3.0 -m "labelImg++ 3.3.0"
-git push origin v3.3.0
+git tag -a v3.4.0 -m "labelImg++ 3.4.0"
+git push origin v3.4.0
 ```
 
 The workflow tests Python 3.8 through 3.13, tests the optional SAM dependency
