@@ -1,5 +1,9 @@
+import pytest
+
 from libs.core.video_model import VideoProjectModel
-from libs.core.video_types import ObservationRecord, TrackGapRecord
+from libs.core.video_types import (
+    ObservationRecord, PropagationResult, TrackGapRecord,
+)
 
 
 def _track(model, shape_type='rectangle'):
@@ -156,3 +160,61 @@ def test_gap_replacement_deletion_and_track_cascade_are_revisioned():
         track.track_id, 20, 30, 'out_of_frame', 'opencv'))
     model.delete_track(track.track_id)
     assert model.gaps == {}
+
+
+def test_propagation_result_is_one_revision_and_protects_manual_anchors():
+    model = VideoProjectModel()
+    track = _track(model)
+    manual = model.upsert_manual(track.track_id, 10, [10, 0, 20, 10])
+    previous_revision = model.revision
+    applied = model.apply_propagation_result(PropagationResult(
+        1, 2, previous_revision,
+        observations=(
+            ObservationRecord(
+                track.track_id, 5, [5, 0, 15, 10], source='tracker',
+                review_state='accepted', anchor=False),
+            ObservationRecord(
+                track.track_id, 10, [99, 99, 100, 100], source='tracker',
+                review_state='accepted', anchor=False),
+        ),
+        gaps=(TrackGapRecord(
+            track.track_id, 15, 20, 'occluded', 'opencv'),)))
+    assert model.revision == previous_revision + 1
+    assert model.observations[(track.track_id, 10)] == manual
+    assert model.observations[(track.track_id, 5)].revision == model.revision
+    assert model.gaps[(track.track_id, 15, 20)].revision == model.revision
+    assert model.tracks[track.track_id].revision == model.revision
+    assert [item.pts for item in applied.observations] == [5]
+
+
+def test_propagation_gap_removes_stale_tracker_but_not_manual_data():
+    model = VideoProjectModel()
+    track = _track(model)
+    model.upsert_tracker(ObservationRecord(
+        track.track_id, 5, [5, 0, 15, 10], source='tracker',
+        review_state='accepted', anchor=False))
+    manual = model.upsert_manual(track.track_id, 7, [7, 0, 17, 10])
+    model.apply_propagation_result(PropagationResult(
+        1, 1, model.revision,
+        gaps=(TrackGapRecord(
+            track.track_id, 4, 8, 'scene_cut', 'opencv'),)))
+    assert (track.track_id, 5) not in model.observations
+    assert model.observations[(track.track_id, 7)] == manual
+    assert model.materialize_one(track.track_id, 6) is None
+
+
+def test_invalid_propagation_result_cannot_partially_mutate_model():
+    model = VideoProjectModel()
+    track = _track(model)
+    baseline = model.snapshot_state()
+    revision = model.revision
+    with pytest.raises(KeyError):
+        model.apply_propagation_result(PropagationResult(
+            1, 1, revision,
+            observations=(ObservationRecord(
+                track.track_id, 5, [0, 0, 10, 10], source='tracker',
+                review_state='accepted', anchor=False),),
+            gaps=(TrackGapRecord(
+                'missing', 6, 7, 'occluded', 'opencv'),)))
+    assert model.revision == revision
+    assert model.snapshot_state() == baseline

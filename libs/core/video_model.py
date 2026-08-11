@@ -4,8 +4,8 @@ from dataclasses import dataclass, replace
 import uuid
 
 from libs.core.video_types import (
-    FrameStateRecord, ObservationRecord, TrackGapRecord, TrackRecord,
-    VideoSaveRequest,
+    FrameStateRecord, ObservationRecord, PropagationResult, TrackGapRecord,
+    TrackRecord, VideoSaveRequest,
 )
 
 
@@ -233,6 +233,89 @@ class VideoProjectModel:
         self.tracks[gap.track_id] = track
         self._changed_tracks[gap.track_id] = track
         return value
+
+    def apply_propagation_result(self, result):
+        """Atomically apply accepted generated observations and gaps.
+
+        Validation is completed before the model advances. Existing manual
+        observations are immutable barriers, and gaps replace generated data
+        in their inclusive intervals without affecting other tracks.
+        """
+        if not isinstance(result, PropagationResult):
+            raise TypeError('result must be a PropagationResult')
+        observations = {}
+        for item in result.observations:
+            if item.track_id not in self.tracks:
+                raise KeyError(item.track_id)
+            if (item.source != 'tracker'
+                    or item.review_state != 'accepted' or item.anchor):
+                raise ValueError(
+                    'propagation observations must be accepted tracker data')
+            observations[(item.track_id, int(item.pts))] = item
+        gaps = {}
+        for item in result.gaps:
+            if not isinstance(item, TrackGapRecord):
+                raise TypeError('propagation gaps must be TrackGapRecord values')
+            if item.track_id not in self.tracks:
+                raise KeyError(item.track_id)
+            if int(item.end_pts) < int(item.start_pts):
+                raise ValueError(
+                    'gap end_pts must be greater than or equal to start_pts')
+            key = (item.track_id, int(item.start_pts), int(item.end_pts))
+            gaps[key] = item
+
+        accepted = {}
+        for key, item in observations.items():
+            existing = self.observations.get(key)
+            if existing is not None and existing.source == 'manual':
+                continue
+            if any(gap.track_id == item.track_id
+                   and gap.start_pts <= item.pts <= gap.end_pts
+                   for gap in gaps.values()):
+                continue
+            accepted[key] = item
+        if not accepted and not gaps:
+            return result
+
+        revision = self._advance()
+        touched_tracks = set()
+        for gap in gaps.values():
+            for key, current in tuple(self.observations.items()):
+                if (key[0] == gap.track_id
+                        and gap.start_pts <= key[1] <= gap.end_pts
+                        and current.source != 'manual'):
+                    del self.observations[key]
+                    self._changed_observations.pop(key, None)
+                    self._deleted_observations[key] = revision
+            key = (gap.track_id, int(gap.start_pts), int(gap.end_pts))
+            value = replace(gap, start_pts=key[1], end_pts=key[2],
+                            revision=revision)
+            self.gaps[key] = value
+            self._changed_gaps[key] = value
+            self._deleted_gaps.pop(key, None)
+            touched_tracks.add(gap.track_id)
+        for key, item in accepted.items():
+            for gap_key, gap in tuple(self.gaps.items()):
+                if (gap.track_id == item.track_id
+                        and gap.start_pts <= item.pts <= gap.end_pts):
+                    del self.gaps[gap_key]
+                    self._changed_gaps.pop(gap_key, None)
+                    self._deleted_gaps[gap_key] = revision
+            value = replace(item, pts=key[1], revision=revision)
+            self.observations[key] = value
+            self._changed_observations[key] = value
+            self._deleted_observations.pop(key, None)
+            touched_tracks.add(item.track_id)
+        for track_id in touched_tracks:
+            track = replace(self.tracks[track_id], revision=revision)
+            self.tracks[track_id] = track
+            self._changed_tracks[track_id] = track
+        return PropagationResult(
+            result.request_id, result.generation, revision,
+            observations=tuple(
+                self.observations[key] for key in accepted),
+            gaps=tuple(self.gaps[key] for key in gaps),
+            failures=result.failures)
 
     def delete_gap(self, track_id, start_pts, end_pts):
         key = (track_id, int(start_pts), int(end_pts))
