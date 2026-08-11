@@ -7,6 +7,7 @@ from PyQt5.QtCore import QPointF
 from PyQt5.QtWidgets import QApplication
 
 from libs.core.sam_controller import SamController
+from libs.core.sam_types import SamResult
 
 app = QApplication.instance() or QApplication([])
 
@@ -14,9 +15,13 @@ app = QApplication.instance() or QApplication([])
 class _FakeCanvas:
     def __init__(self):
         self.committed = []
+        self.rectangles = []
 
     def commit_polygon(self, points):
         self.committed.append(points)
+
+    def commit_rectangle(self, bounds):
+        self.rectangles.append(bounds)
 
 
 class _FakeMain:
@@ -25,6 +30,7 @@ class _FakeMain:
         self.file_path = "/img/a.jpg"
         self.image = None
         self.settings = {}
+        self.sam_output_mode = 'polygon'
         self.messages = []
 
     def status(self, message, delay=5000):
@@ -81,6 +87,34 @@ def test_happy_path_commits_polygon():
     app.processEvents()
     assert len(mw.canvas.committed) == 1
     assert len(mw.canvas.committed[0]) >= 3
+
+
+def test_worker_returns_frozen_polygon_and_tight_component_bounds():
+    pytest.importorskip("numpy")
+    pytest.importorskip("cv2")
+    from libs.core.sam_controller import _SamTask
+
+    task = _SamTask(
+        4, _FakeBackend(), {}, None, QPointF(50, 50), None)
+    generation, result, created = task.execute()
+    assert generation == 4
+    assert created is None
+    assert isinstance(result, SamResult)
+    assert isinstance(result.polygon, tuple)
+    assert len(result.polygon) >= 3
+    assert result.bounds == (20.0, 20.0, 80.0, 80.0)
+
+
+def test_box_output_routes_bounds_instead_of_polygon():
+    mw = _FakeMain()
+    mw.sam_output_mode = 'box'
+    ctrl = SamController(mw)
+    result = SamResult(
+        polygon=((1.0, 1.0), (9.0, 1.0), (9.0, 7.0)),
+        bounds=(1.0, 1.0, 10.0, 8.0))
+    ctrl._on_finished(0, result, None)
+    assert mw.canvas.rectangles == [(1.0, 1.0, 10.0, 8.0)]
+    assert mw.canvas.committed == []
 
 
 def test_on_image_changed_invalidates_embedding():

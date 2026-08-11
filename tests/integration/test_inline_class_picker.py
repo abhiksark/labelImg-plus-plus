@@ -3,6 +3,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app
+from libs.core.sam_types import SamResult
 from libs.core.shape import Shape, ShapeType
 from libs.core.video_types import DocumentKind
 
@@ -142,6 +143,33 @@ def test_document_reset_cancels_picker_and_drops_only_provisional_geometry(
         assert window.canvas.provisional_shape is None
         assert window.canvas.shapes == []
         assert not window.dirty
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_sam_picker_escape_discards_result_without_mutation(tmp_path):
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window.sam_output_mode = 'polygon'
+        result = SamResult(
+            polygon=((10.0, 10.0), (80.0, 10.0), (80.0, 60.0)),
+            bounds=(10.0, 10.0, 81.0, 61.0))
+        window.sam_controller._on_finished(
+            window.sam_controller._gen, result, None)
+        assert window.canvas.provisional_shape is not None
+        assert window.class_picker.isVisible()
+
+        QTest.keyClick(window.class_picker.edit, Qt.Key_Escape)
+        app.processEvents()
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.shapes == []
+        assert window.annotation_model.rowCount() == 0
+        assert not window.dirty
+        assert not window.undo_stack.can_undo()
     finally:
         window.dirty = False
         window.close()

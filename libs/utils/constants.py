@@ -38,3 +38,4 @@ DEFAULT_ENCODING = 'utf-8'
 # SAM-assisted polygon settings
 SETTING_SAM_ENCODER = 'sam/encoderPath'     # encoder .onnx; '' = bundled default
 SETTING_SAM_DECODER = 'sam/decoderPath'     # decoder .onnx; '' = bundled default
+SETTING_SAM_OUTPUT_MODE = 'sam/outputMode'  # 'polygon' (default) or 'box'

@@ -86,6 +86,7 @@ from libs.core.workspace_settings import (
     clamp_inspector_width, load_workspace_settings,
 )
 from libs.core.sam_controller import SamController
+from libs.core.sam_types import normalize_sam_output_mode
 from libs.core.annotation_catalog import AnnotationCatalog
 from libs.core.dataset import DatasetSnapshot
 from libs.core.image_pipeline import FrameCache, load_image_result
@@ -145,7 +146,7 @@ from libs.utils.constants import (
     SETTING_WIN_POSE, SETTING_WIN_SIZE,
     FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
-    SETTING_SAM_ENCODER, SETTING_SAM_DECODER,
+    SETTING_SAM_ENCODER, SETTING_SAM_DECODER, SETTING_SAM_OUTPUT_MODE,
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -204,6 +205,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings.load()
         settings = self.settings
         self.workspace_settings = load_workspace_settings(settings)
+        self.sam_output_mode = normalize_sam_output_mode(
+            settings.get(SETTING_SAM_OUTPUT_MODE, 'polygon'))
 
         self.shortcut_config = ShortcutConfig()
         if settings.get(SETTING_SHORTCUTS):
@@ -630,7 +633,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.toggle_sam_mode,
             self.shortcut_config.get('sam_mode'),
             'tool-smart-select',
-            'Click an object to auto-generate a polygon '
+            'Click an object to auto-generate the selected geometry '
             '(requires: pip install labelimgplusplus[sam])',
             enabled=False)
         sam_settings_action = action(
@@ -1130,6 +1133,9 @@ class MainWindow(QMainWindow, WindowMixin):
              self.label_zoom, self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.workspace_pages.sam_output_toggle.set_mode(self.sam_output_mode)
+        self.workspace_pages.sam_output_toggle.modeChanged.connect(
+            self._set_sam_output_mode)
         self.workspace_pages.empty_page.recentActivated.connect(
             self._open_workspace_recent)
         for tool_action in (
@@ -2047,7 +2053,18 @@ class MainWindow(QMainWindow, WindowMixin):
         }
         active = mapping.get(self.canvas.mode, self.actions.editMode)
         active.setChecked(True)
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.sam_output_toggle.setVisible(
+                self.canvas.mode == self.canvas.CREATE_SAM)
         self._update_active_tool_status()
+
+    def _set_sam_output_mode(self, mode):
+        """Persist the contextual Smart Select geometry choice."""
+        self.sam_output_mode = normalize_sam_output_mode(mode)
+        self.workspace_pages.sam_output_toggle.set_mode(self.sam_output_mode)
+        self.settings[SETTING_SAM_OUTPUT_MODE] = self.sam_output_mode
+        self.settings.save()
+        self._restore_canvas_focus()
 
     def _update_active_tool_status(self):
         if not hasattr(self, 'label_active_tool'):
@@ -4926,6 +4943,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_GRID_SIZE] = self.canvas._grid_size if self.canvas else 32
         settings[SETTING_EDGE_ALIGNMENT] = self.edge_alignment_option.isChecked()
         settings[SETTING_SHORTCUTS] = self.shortcut_config.to_dict()
+        settings[SETTING_SAM_OUTPUT_MODE] = self.sam_output_mode
         settings.save()
         self._shutdown_workers()
 

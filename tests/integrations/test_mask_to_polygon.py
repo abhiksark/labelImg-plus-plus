@@ -6,7 +6,9 @@ import pytest
 np = pytest.importorskip("numpy")
 pytest.importorskip("cv2")
 
-from libs.integrations.mask_to_polygon import mask_to_polygon
+from libs.integrations.mask_to_polygon import (  # noqa: E402
+    mask_to_polygon, mask_to_sam_result,
+)
 
 
 def _square(size=200, lo=40, hi=160):
@@ -42,6 +44,15 @@ def test_two_blobs_keeps_only_the_largest():
     pts = mask_to_polygon(m)
     xs = [p[0] for p in pts]
     assert min(xs) >= 70                # only the large blob survives
+
+
+def test_result_bounds_are_tight_and_match_largest_component():
+    m = np.zeros((200, 200), dtype=bool)
+    m[5:25, 5:25] = True
+    m[80:180, 70:170] = True
+    result = mask_to_sam_result(m)
+    assert result.bounds == (70.0, 80.0, 170.0, 180.0)
+    assert min(point[0] for point in result.polygon) >= 70.0
 
 
 def test_point_cap_is_honored():

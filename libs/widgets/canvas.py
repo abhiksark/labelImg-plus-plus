@@ -336,6 +336,20 @@ class Canvas(QWidget):
             self.current.add_point(QPointF(float(x), float(y)))
         self.finalise()
 
+    def commit_rectangle(self, bounds):
+        """Build a rectangle from half-open image-space mask bounds."""
+        if not bounds or len(bounds) != 4:
+            return
+        left, top, right, bottom = (float(value) for value in bounds)
+        if right <= left or bottom <= top:
+            return
+        self.current = Shape(shape_type=ShapeType.RECTANGLE)
+        for x, y in (
+                (left, top), (right, top),
+                (right, bottom), (left, bottom)):
+            self.current.add_point(QPointF(x, y))
+        self.finalise()
+
     def set_keypoint_mode(self, shape, template_name='person'):
         """Enter keypoint placement mode for the given shape."""
         from libs.core.keypoint_config import get_template
