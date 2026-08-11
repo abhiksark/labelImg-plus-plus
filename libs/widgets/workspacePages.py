@@ -185,7 +185,9 @@ class WorkspacePages(QWidget):
 
     def resizeEvent(self, event):
         super(WorkspacePages, self).resizeEvent(event)
-        width = event.size().width()
+        self._update_status_visibility(event.size().width())
+
+    def _update_status_visibility(self, width):
         # Preserve warnings/state/zoom first as the canvas column narrows.
         hidden = set()
         if width < scale_px(650):

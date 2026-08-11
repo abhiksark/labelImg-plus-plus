@@ -662,6 +662,39 @@ QStatusBar QLabel {{
 """
 
 
+def get_workspace_pages_style(theme: Theme) -> str:
+    """Generate central-page, canvas-chrome, and slim-strip styling."""
+    c = _get_colors(theme)
+    return f"""
+QWidget#canvasChrome, QWidget#workspaceStatusStrip {{
+    background: {c['surface']};
+    color: {c['text']};
+}}
+QWidget#canvasChrome {{
+    border-bottom: {scale_px(1)}px solid {c['border']};
+}}
+QWidget#workspaceStatusStrip {{
+    border-top: {scale_px(1)}px solid {c['border']};
+}}
+QWidget#workspaceStatusStrip QLabel {{
+    color: {c['text_secondary']};
+    font-size: {scale_px(10)}px;
+}}
+QWidget#emptyWorkspacePage {{
+    background: {c['background']};
+}}
+QLabel#emptyWorkspaceTitle {{
+    color: {c['text']};
+    font-size: {scale_px(24)}px;
+    font-weight: 600;
+}}
+QLabel#emptyRecentTitle {{
+    color: {c['text_secondary']};
+    font-weight: 600;
+}}
+"""
+
+
 def get_canvas_background(theme: Theme) -> str:
     """Get canvas background color for the given theme."""
     return _get_colors(theme)['canvas_bg']
@@ -774,7 +807,8 @@ def get_stylesheet(theme: Theme) -> str:
     return (
         get_toolbar_style(theme) +
         get_main_window_style(theme) +
-        get_status_bar_style(theme)
+        get_status_bar_style(theme) +
+        get_workspace_pages_style(theme)
     )
 
 
