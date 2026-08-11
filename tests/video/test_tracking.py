@@ -1,3 +1,4 @@
+from dataclasses import replace
 import threading
 
 import pytest
@@ -291,5 +292,27 @@ def test_portable_backend_backward_and_cancellation(tmp_path, make_video):
         with pytest.raises(PropagationCancelled):
             OpenCVPropagationBackend().propagate(
                 request, -1, lambda: True, lambda _batch: None)
+    finally:
+        decoder.close()
+
+
+def test_portable_backend_rejects_changed_media_identity(tmp_path, make_video):
+    path = make_video(
+        tmp_path / 'changed.mp4', width=128, height=96,
+        tracking_stress=True)
+    decoder = VideoDecoderSession(path)
+    try:
+        first = decoder.decode_first()
+        seed = ObservationRecord(
+            'track-1', first.frame_ref.pts, [16, 14, 52, 50],
+            source='manual', review_state='accepted', anchor=True)
+        request = _propagation_request(
+            path, decoder, first, first.frame_ref.pts + 10, (seed,))
+        request = replace(
+            request, fingerprint=replace(
+                request.fingerprint, sampled_sha256='not-the-same-media'))
+        with pytest.raises(RuntimeError, match='media changed'):
+            OpenCVPropagationBackend().propagate(
+                request, 1, lambda: False, lambda _batch: None)
     finally:
         decoder.close()

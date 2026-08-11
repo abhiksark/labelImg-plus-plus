@@ -4,6 +4,7 @@ import math
 import time
 
 from libs.core.video_propagation import PropagationBackend
+from libs.core.video_project import fingerprint_video
 from libs.core.video_decoder import (
     _oriented_array, _rotation_for_frame, _rotation_for_stream,
     load_video_dependencies,
@@ -395,6 +396,12 @@ class OpenCVPropagationBackend(PropagationBackend):
             raise ValueError('propagation direction must be -1 or 1')
         if not request.seeds:
             raise ValueError('propagation requires at least one seed')
+        current_fingerprint = fingerprint_video(request.source_path)
+        if (current_fingerprint is None
+                or not request.fingerprint.content_matches(
+                    current_fingerprint)):
+            raise RuntimeError(
+                'video media changed after propagation was requested')
         av, np = load_video_dependencies()
         try:
             import cv2
@@ -409,6 +416,11 @@ class OpenCVPropagationBackend(PropagationBackend):
                            if item.index == request.stream_index), None)
             if stream is None:
                 raise RuntimeError('video stream is no longer available')
+            if (int(stream.time_base.numerator) != request.time_base_num
+                    or int(stream.time_base.denominator)
+                    != request.time_base_den):
+                raise RuntimeError(
+                    'video time base changed after propagation was requested')
             rotation = _rotation_for_stream(stream)
             frames = _propagation_frames(
                 container, stream, request, direction, rotation,
@@ -601,6 +613,12 @@ class OpenCVPropagationBackend(PropagationBackend):
                 total_frames=total, active_tracks=active,
                 completed_tracks=len(states) - active,
                 eta_seconds=eta, finished=True))
+            final_fingerprint = fingerprint_video(request.source_path)
+            if (final_fingerprint is None
+                    or not request.fingerprint.content_matches(
+                        final_fingerprint)):
+                raise RuntimeError(
+                    'video media changed during propagation')
             return PropagationResult(
                 request.request_id, request.generation,
                 request.document_revision,
