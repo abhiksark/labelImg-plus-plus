@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 3.1.0
+Version: 3.2.0
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -78,7 +78,7 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Version 3.1.0 (stable).** Install with
+    **Version 3.2.0 (stable).** Install with
     ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
@@ -107,9 +107,12 @@ Workflow and Interface
     Full undo/redo for annotation actions. Press **Ctrl+Z** to undo and
     **Ctrl+Shift+Z** to redo.
 
-**Gallery Mode with Annotation Preview**
-    Visual thumbnail gallery showing all images with bounding box and polygon
-    overlays directly on thumbnails across all five annotation formats.
+**Balanced Modern Workspace**
+    A fixed annotation-tool rail, compact command bar, unified Objects/Files
+    inspector, integrated video timeline, and visible document status keep the
+    active canvas uncluttered. Gallery Mode is embedded in the same workspace,
+    so the annotation tools, inspector, and status remain available while
+    browsing thumbnail previews across all five annotation formats.
 
     - Colored borders indicate status: Gray (no labels), Blue (has labels), Green (verified)
     - Bounding boxes use compact corner markers; polygons use outline previews
@@ -118,16 +121,16 @@ Workflow and Interface
     - Press **Ctrl+G** to toggle gallery mode
 
 **Modern UI with Feather Icons**
-    Clean, modern interface with beautiful Feather icons and improved visual design.
+    Official Feather icons provide a consistent, accessible tool vocabulary.
 
 **Responsive DPI Scaling**
     Icons and UI elements scale properly on high-DPI displays (4K, Retina).
 
-**Expandable Toolbar**
-    Click the chevron at the bottom of the toolbar to expand/collapse and show full button labels.
-
-**Consolidated File Menu**
-    Open File, Open Dir, and Change Save Dir combined into a single dropdown for cleaner toolbar.
+**Unified Object Inspector**
+    Search and edit rectangles, polygons, keypoints, and video tracks in one
+    Objects view. The Files view keeps the compact file list, thumbnails, and
+    annotation-status filter close at hand, and the inspector can be collapsed
+    when maximum canvas space is needed.
 
 **Direct Ultralytics Dataset Export**
     Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
@@ -398,7 +401,7 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.1.0**, the stable 3.1 release. See
+This source tree identifies itself as **3.2.0**, the stable 3.2 release. See
 the `release history
 <https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases

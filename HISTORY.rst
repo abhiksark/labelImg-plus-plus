@@ -1,6 +1,66 @@
 History
 =======
 
+3.2.0 (2026-08-11)
+------------------
+
+Workspace release replacing the legacy toolbar-and-dock layout with the
+Balanced modern annotation workspace. Existing annotation formats, filenames,
+command-line entry points, plugin APIs, document methods, shortcut identifiers,
+and Python 3.8 through 3.13 support remain compatible.
+
+Balanced Workspace
+~~~~~~~~~~~~~~~~~~
+
+* Replace the legacy toolbar with a fixed 52-logical-pixel tool rail for
+  Select, Bounding Box, Polygon, Smart Select, and Keypoints. The rail binds
+  directly to the existing authoritative actions, reflects their live enabled
+  and checked states, and always shows configured shortcuts in its tooltips.
+* Add a responsive 44-logical-pixel command bar and compact action-backed
+  canvas controls for zoom, fit modes, 100 percent scale, and annotation
+  visibility.
+* Replace the floating right docks with a fixed, collapsible Objects/Files
+  inspector. Its validated width, selected tab, and collapsed state persist
+  independently while obsolete dock and toolbar settings remain serialized for
+  downgrade compatibility.
+* Embed Empty, Canvas, and Gallery pages in the central workspace. Gallery Mode
+  no longer opens a detached maximized window, and the video timeline now sits
+  directly beneath the canvas instead of in a dock.
+* Add an Empty page with existing recent paths and direct image, folder, and
+  video entry points. Exactly one supported local file or directory can also be
+  opened by drag and drop; rejected drops leave the current document unchanged.
+* Keep the native status bar alive as a hidden compatibility message bus while
+  mirroring saved, dirty, read-only, dimensions, object count, progress,
+  warning, active-tool, shortcut, and zoom state into a slim visible strip.
+
+Unified Annotation Inspector
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Replace the nested Rectangle, Polygon, and Track tabs with one model-backed,
+  searchable object list. Image rows represent canonical canvas shapes; video
+  rows represent stable track identifiers, including tracks absent from the
+  current frame.
+* Synchronize canvas and inspector selection with guarded identity updates and
+  route contextual class, difficult, color, keypoint, span, keyframe, and
+  pending-review edits through undoable model mutations.
+* Keep annotation geometry owned exclusively by the canvas and video model,
+  preserve ``label_list`` as a compatibility alias, and retain legacy pending
+  video observations and their accept/reject workflow.
+
+Visual and Compatibility Qualification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Vendor only the five required official Feather SVGs and their MIT license in
+  Qt resources; Smart Select now defaults to ``S`` under the existing
+  ``sam_mode`` shortcut identifier.
+* Preserve the hidden legacy status-bar API, settings round-tripping, plugin
+  snapshots, and GUI-thread boundaries while removing all runtime floating
+  docks, detached Gallery windows, nested annotation tabs, and text-under-icon
+  toolbar presentation.
+* Qualify Empty, Image, Gallery, Video, collapsed-inspector, read-only, dark,
+  and true 2x-DPI states at 1366x768 and 1440x900, alongside structural Qt,
+  settings, selection, undo, plugin, SAM, and video coverage.
+
 3.1.0 (2026-08-11)
 ------------------
 
