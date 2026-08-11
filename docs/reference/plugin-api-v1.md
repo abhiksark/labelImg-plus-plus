@@ -43,7 +43,9 @@ Python 3.8/3.9 collection shapes and selectable Python 3.10–3.13 collections.
 
 Structured diagnostics contain `plugin_id`, `phase`, `code`, `message`,
 `details`, and `severity`. The manager preserves tracebacks in `details` for
-load, lifecycle, task, and callback failures.
+load, lifecycle, task, and callback failures. Plugin-reported `code`,
+`message`, `details`, and `severity` values must all be strings; `code` and
+`severity` must be non-empty.
 
 ### `DocumentDescriptor`
 
@@ -111,9 +113,18 @@ submit(
 
 Work runs on the existing bounded background lane and receives a handle with
 `cancel()`, `is_cancelled()`, `check_cancelled()`, and
-`report_progress(value)`. Callbacks return to the GUI thread. Keys are
-plugin-namespaced; results from an old generation or shutting-down plugin are
-discarded.
+`report_progress(value)`. The submitter and worker receive the same plain
+Python facade. It is not a `QObject` or the coordinator's internal job handle,
+and it exposes no Qt signals, parent, job metadata, or non-cancellable phase.
+The host weakly attaches it to internal work and detaches it after completion
+or shutdown, so retaining a finished handle cannot retain host internals.
+
+`check_cancelled()` raises `concurrent.futures.CancelledError`. Callbacks
+return to the GUI thread. Keys are plugin-namespaced; results from an old
+generation or shutting-down plugin are discarded. A worker exception records
+a `task_failed` diagnostic whose `details` preserve the formatted worker
+traceback. `on_error`, when supplied, receives the exception message on the
+GUI thread; `on_result` is not called for failures.
 
 ### `settings`
 
@@ -132,7 +143,10 @@ changes, resets, and close transitions.
 ### `diagnostics`
 
 `report(code, message, details="", severity="error")` adds a plugin-scoped
-diagnostic visible in **Tools → Plugins…**.
+diagnostic visible in **Tools → Plugins…**. Every argument must be a string,
+and `code` and `severity` must be non-empty. Invalid reporting during
+activation rejects and rolls back the activation. Invalid reporting from a
+runtime callback is contained as that callback's diagnostic.
 
 ## Thread and trust contract
 

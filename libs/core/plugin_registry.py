@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
+from dataclasses import dataclass
 from copy import deepcopy
 import math
 import re
 import threading
+import traceback
 from types import MappingProxyType
+from typing import Optional
+import weakref
 
 from PyQt5.QtCore import QObject, Qt, pyqtSlot
 
 from labelimgplusplus.plugins import CommandSpec
-from libs.core.task_coordinator import JobPriority
+from libs.core.task_coordinator import JobCancelled, JobPriority
 
 
 _VALID_COMMAND_ID = re.compile(r"^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
@@ -219,6 +224,65 @@ class PluginDiagnosticService:
             self._record, "plugin", code, message, details, severity)
 
 
+class _PluginTaskHandle:
+    """Plain plugin task facade with no Qt or coordinator surface."""
+
+    __slots__ = ("_cancelled", "_handle_ref")
+
+    def __init__(self, handle):
+        self._cancelled = threading.Event()
+        self._handle_ref = weakref.ref(handle)
+
+    def cancel(self):
+        self._cancelled.set()
+        handle = self._handle_ref() if self._handle_ref is not None else None
+        if handle is not None:
+            handle.cancel()
+
+    def is_cancelled(self):
+        if self._cancelled.is_set():
+            return True
+        handle = self._handle_ref() if self._handle_ref is not None else None
+        if handle is not None and handle.is_cancelled():
+            self._cancelled.set()
+            return True
+        return False
+
+    def check_cancelled(self):
+        if self.is_cancelled():
+            raise CancelledError()
+
+    def report_progress(self, value):
+        handle = self._handle_ref() if self._handle_ref is not None else None
+        if handle is not None and not self._cancelled.is_set():
+            handle.report_progress(value)
+
+
+def _detach_task_handle(handle):
+    coordinator_handle = (
+        handle._handle_ref() if handle._handle_ref is not None else None)
+    if coordinator_handle is not None and coordinator_handle.is_cancelled():
+        handle._cancelled.set()
+    handle._handle_ref = None
+
+
+@dataclass(frozen=True)
+class _TaskOutcome:
+    result: object = None
+    message: Optional[str] = None
+    details: str = ""
+
+    @property
+    def failed(self):
+        return self.message is not None
+
+    @classmethod
+    def from_exception(cls, exc):
+        details = "".join(traceback.format_exception(
+            type(exc), exc, exc.__traceback__))
+        return cls(message=str(exc), details=details)
+
+
 class _TaskBridge(QObject):
     """QObject receiver that fences callbacks to the application thread."""
 
@@ -247,9 +311,23 @@ class _TaskBridge(QObject):
         )
 
     @pyqtSlot(object)
-    def result(self, value):
-        if self._deliverable() and self._result_callback is not None:
-            self._service._invoke_callback("result", self._result_callback, value)
+    def result(self, outcome):
+        if not self._deliverable():
+            return
+        if outcome.failed:
+            self._service._manager._record_diagnostic(
+                self._service._record,
+                "task",
+                "task_failed",
+                outcome.message,
+                outcome.details,
+            )
+            if self._error_callback is not None:
+                self._service._invoke_callback(
+                    "error", self._error_callback, outcome.message)
+        elif self._result_callback is not None:
+            self._service._invoke_callback(
+                "result", self._result_callback, outcome.result)
 
     @pyqtSlot(str)
     def error(self, message):
@@ -275,8 +353,6 @@ class _TaskBridge(QObject):
         if self._service is None:
             return
         self._service._finished(self._handle)
-        self.detach()
-        self.deleteLater()
 
     def detach(self):
         self._result_callback = None
@@ -294,6 +370,7 @@ class PluginTaskServiceImpl:
         self._record = record
         self._accepting = False
         self._bridges = {}
+        self._latest_by_key = {}
 
     @property
     def accepting(self):
@@ -325,12 +402,19 @@ class PluginTaskServiceImpl:
             if key is not None else None)
         ready = threading.Event()
 
-        def connected_work(handle):
-            ready.wait()
-            handle.check_cancelled()
-            return work(handle)
+        facade = None
 
-        handle = self._manager.coordinator.submit(
+        def connected_work(_coordinator_handle):
+            ready.wait()
+            try:
+                facade.check_cancelled()
+                return _TaskOutcome(result=work(facade))
+            except CancelledError as exc:
+                raise JobCancelled() from exc
+            except Exception as exc:
+                return _TaskOutcome.from_exception(exc)
+
+        coordinator_handle = self._manager.coordinator.submit(
             "background",
             connected_work,
             priority=JobPriority.BULK,
@@ -338,38 +422,56 @@ class PluginTaskServiceImpl:
             latest=latest,
             generation=generation,
         )
-        bridge = _TaskBridge(self, handle, generation)
+        facade = _PluginTaskHandle(coordinator_handle)
+        bridge = _TaskBridge(self, facade, generation)
         try:
             bridge.configure(on_result, on_error, on_progress)
-            self._bridges[handle] = bridge
-            handle.result.connect(bridge.result, Qt.QueuedConnection)
-            handle.error.connect(bridge.error, Qt.QueuedConnection)
-            handle.progress.connect(bridge.progress, Qt.QueuedConnection)
-            handle.finished.connect(bridge.finished, Qt.QueuedConnection)
+            if latest and namespaced_key is not None:
+                previous = self._latest_by_key.get(namespaced_key)
+                if previous is not None:
+                    previous.cancel()
+                    self._release(previous)
+                self._latest_by_key[namespaced_key] = facade
+            self._bridges[facade] = bridge
+            coordinator_handle.result.connect(bridge.result, Qt.QueuedConnection)
+            coordinator_handle.error.connect(bridge.error, Qt.QueuedConnection)
+            coordinator_handle.progress.connect(
+                bridge.progress, Qt.QueuedConnection)
+            coordinator_handle.finished.connect(
+                bridge.finished, Qt.QueuedConnection)
         except Exception:
-            self._bridges.pop(handle, None)
-            handle.cancel()
-            bridge.detach()
-            bridge.deleteLater()
+            facade.cancel()
+            self._release(facade, bridge)
             raise
         finally:
             ready.set()
-        return handle
+        return facade
 
     def cancel_all(self):
         for handle in tuple(self._bridges):
             handle.cancel()
+            self._release(handle)
 
     def shutdown(self):
         self._accepting = False
-        for handle, bridge in tuple(self._bridges.items()):
+        for handle in tuple(self._bridges):
             handle.cancel()
-            bridge.detach()
-            bridge.deleteLater()
-        self._bridges.clear()
+            self._release(handle)
+        self._latest_by_key.clear()
 
     def _finished(self, handle):
+        self._release(handle)
+
+    def _release(self, handle, bridge=None):
+        bridge = bridge or self._bridges.pop(handle, None)
         self._bridges.pop(handle, None)
+        for key, latest_handle in tuple(self._latest_by_key.items()):
+            if latest_handle is handle:
+                self._latest_by_key.pop(key, None)
+        _detach_task_handle(handle)
+        if bridge is not None:
+            bridge.detach()
+            bridge.deleteLater()
 
     def _invoke_callback(self, kind, callback, value):
         try:

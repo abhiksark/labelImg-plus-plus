@@ -10,6 +10,7 @@ import labelImgPlusPlus as application_module
 from labelimgplusplus.plugins import (
     CommandSpec,
     PluginCapability,
+    PluginDiagnostic,
     PluginMetadata,
 )
 from libs.core.plugin_discovery import PluginCandidate
@@ -338,6 +339,47 @@ def test_manager_homepage_allows_only_escaped_web_links(tmp_path):
         assert rendered.startswith('<a href="https://')
         assert "&quot;&gt;&lt;script&gt;" in rendered
         assert "<script>" not in rendered
+    finally:
+        dialog.close()
+        manager.shutdown()
+        coordinator.shutdown()
+
+
+def test_manager_renders_malformed_diagnostics_defensively(tmp_path):
+    plugin = _QtPlugin([])
+    settings = Settings()
+    settings.path = str(tmp_path / "settings.json")
+    settings.data = {"plugins": {
+        "enabled": [plugin.metadata.id], "config": {}}}
+    coordinator = TaskCoordinator(logical_cpus=1)
+    manager = PluginManager(
+        settings, coordinator, candidates=[_candidate(lambda: plugin)])
+    manager.activate_enabled()
+    record = manager.record_for(plugin.metadata.id)
+    record.diagnostics.extend([
+        PluginDiagnostic(
+            plugin_id=plugin.metadata.id,
+            phase="runtime",
+            code="missing-severity",
+            message="severity was None",
+            severity=None,
+        ),
+        {
+            "phase": None,
+            "code": "",
+            "message": None,
+            "details": None,
+            "severity": None,
+        },
+        object(),
+    ])
+    dialog = PluginManagerDialog(manager)
+    try:
+        dialog._selection_changed(0, 0, -1, -1)
+        rendered = dialog.diagnostics.toPlainText()
+        assert "[ERROR] runtime/missing-severity: severity was None" in rendered
+        assert "unknown/invalid_diagnostic" in rendered
+        assert "Malformed plugin diagnostic." in rendered
     finally:
         dialog.close()
         manager.shutdown()

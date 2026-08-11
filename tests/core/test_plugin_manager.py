@@ -1,8 +1,12 @@
+from concurrent.futures import CancelledError
+import gc
 import sys
 import threading
 import time
+import weakref
 
-from PyQt5.QtCore import QCoreApplication
+from PyQt5.QtCore import QCoreApplication, QEvent, QObject, QThread
+from PyQt5.QtWidgets import QApplication
 
 from labelimgplusplus.plugins import (
     CommandSpec,
@@ -14,7 +18,7 @@ from libs.core.plugin_discovery import PluginCandidate
 from libs.core.plugin_manager import PluginManager, PluginState
 from libs.core.plugin_registry import validate_json_value
 from libs.core.settings import Settings
-from libs.core.task_coordinator import TaskCoordinator
+from libs.core.task_coordinator import JobHandle, TaskCoordinator
 
 
 def _wait_until(predicate, timeout=2.0):
@@ -319,6 +323,12 @@ def test_document_generation_cancels_and_discards_stale_task(tmp_path):
         handle = plugin.context.tasks.submit(work, on_result=delivered.append)
         manager.publish_document(DocumentDescriptor(generation=1))
         assert handle.is_cancelled()
+        try:
+            handle.check_cancelled()
+        except CancelledError:
+            pass
+        else:
+            raise AssertionError("plugin cancellation did not use CancelledError")
         gate.set()
         assert _wait_until(lambda: coordinator.queue_depths()["background"] == 0)
         assert delivered == []
@@ -378,6 +388,116 @@ def test_immediate_task_progress_is_delivered(tmp_path):
         _shutdown(manager, coordinator)
 
 
+def test_plugin_task_uses_same_plain_restricted_facade_in_worker(tmp_path):
+    worker_handles = []
+    results = []
+    plugin = _Plugin("com.example.facade")
+    _settings, coordinator, manager = _host(
+        tmp_path, [plugin.metadata.id],
+        [_candidate(plugin.metadata.id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+
+        def work(handle):
+            worker_handles.append(handle)
+            return "done"
+
+        caller_handle = plugin.context.tasks.submit(
+            work, on_result=results.append)
+        assert _wait_until(lambda: results == ["done"])
+        assert worker_handles == [caller_handle]
+        assert not isinstance(caller_handle, (QObject, JobHandle))
+        for name in (
+            "parent",
+            "thread",
+            "job_id",
+            "generation",
+            "key",
+            "result",
+            "error",
+            "progress",
+            "finished",
+            "begin_non_cancellable",
+        ):
+            assert not hasattr(caller_handle, name)
+        assert {
+            name for name in dir(type(caller_handle)) if not name.startswith("_")
+        } == {
+            "cancel", "check_cancelled", "is_cancelled", "report_progress"}
+    finally:
+        _shutdown(manager, coordinator)
+
+
+def test_latest_plugin_task_cancels_and_releases_previous_facade(tmp_path):
+    first_started = threading.Event()
+    first_cancelled = threading.Event()
+    results = []
+    plugin = _Plugin("com.example.latest")
+    _settings, coordinator, manager = _host(
+        tmp_path, [plugin.metadata.id],
+        [_candidate(plugin.metadata.id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+
+        def first_work(handle):
+            first_started.set()
+            try:
+                while True:
+                    handle.check_cancelled()
+                    time.sleep(0.001)
+            except CancelledError:
+                first_cancelled.set()
+                raise
+
+        first = plugin.context.tasks.submit(
+            first_work, key="scan", latest=True, on_result=results.append)
+        assert first_started.wait(1)
+        second = plugin.context.tasks.submit(
+            lambda handle: "current",
+            key="scan",
+            latest=True,
+            on_result=results.append,
+        )
+        assert first is not second
+        assert _wait_until(lambda: results == ["current"])
+        assert first.is_cancelled()
+        assert first_cancelled.wait(1)
+        assert plugin.context.tasks.handles == ()
+    finally:
+        _shutdown(manager, coordinator)
+
+
+def test_task_failure_preserves_traceback_and_reports_on_gui_thread(tmp_path):
+    errors = []
+    results = []
+    plugin = _Plugin("com.example.task-failure")
+    _settings, coordinator, manager = _host(
+        tmp_path, [plugin.metadata.id],
+        [_candidate(plugin.metadata.id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+
+        def worker_frame(_handle):
+            raise LookupError("worker exploded")
+
+        plugin.context.tasks.submit(
+            worker_frame,
+            on_result=results.append,
+            on_error=lambda message: errors.append(
+                (message, QThread.currentThread())),
+        )
+        assert _wait_until(lambda: bool(errors))
+        diagnostic = manager.record_for(plugin.metadata.id).diagnostics[-1]
+        assert diagnostic.code == "task_failed"
+        assert diagnostic.message == "worker exploded"
+        assert "LookupError: worker exploded" in diagnostic.details
+        assert "in worker_frame" in diagnostic.details
+        assert errors == [("worker exploded", QApplication.instance().thread())]
+        assert results == []
+    finally:
+        _shutdown(manager, coordinator)
+
+
 def test_shutdown_cancels_live_work_and_releases_task_handles(tmp_path):
     progress_queued = threading.Event()
     unexpected = []
@@ -412,6 +532,129 @@ def test_shutdown_cancels_live_work_and_releases_task_handles(tmp_path):
         coordinator.shutdown()
         QCoreApplication.processEvents()
         sys.excepthook = previous_excepthook
+
+
+def test_retained_plugin_facade_detaches_after_host_shutdown(tmp_path):
+    started = threading.Event()
+    stopped = threading.Event()
+
+    def work(handle):
+        started.set()
+        try:
+            while True:
+                handle.check_cancelled()
+                time.sleep(0.001)
+        except CancelledError:
+            stopped.set()
+            raise
+
+    def run_host():
+        plugin = _Plugin("com.example.retained-facade")
+        _settings, coordinator, manager = _host(
+            tmp_path, [plugin.metadata.id],
+            [_candidate(plugin.metadata.id, lambda: plugin)])
+        manager.activate_enabled()
+        retained = plugin.context.tasks.submit(work)
+        assert started.wait(1)
+        coordinator_handle_ref = weakref.ref(retained._handle_ref())
+        manager.shutdown()
+        coordinator.shutdown()
+        assert stopped.wait(1)
+        assert _wait_until(
+            lambda: coordinator.queue_depths()["background"] == 0)
+        assert retained.is_cancelled()
+        assert retained._handle_ref is None
+        plugin.context = None
+        manager.deleteLater()
+        coordinator.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        return retained, coordinator_handle_ref
+
+    retained, coordinator_handle_ref = run_host()
+    gc.collect()
+    assert retained.is_cancelled()
+    assert coordinator_handle_ref() is None
+
+
+def test_invalid_activation_diagnostic_rolls_back_transaction(tmp_path):
+    def activate(context):
+        context.settings.set("partial", True)
+        context.diagnostics.report("bad", "invalid", severity=None)
+
+    plugin = _Plugin("com.example.invalid-activation-diagnostic", activate)
+    settings, coordinator, manager = _host(
+        tmp_path, [plugin.metadata.id],
+        [_candidate(plugin.metadata.id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+        record = manager.record_for(plugin.metadata.id)
+        assert record.state == PluginState.FAILED
+        assert settings.get("plugins")["config"] == {}
+        assert record.diagnostics[-1].code == "activation_failed"
+        assert "diagnostic severity must be a string" in (
+            record.diagnostics[-1].details)
+    finally:
+        _shutdown(manager, coordinator)
+
+
+def test_invalid_runtime_diagnostic_becomes_callback_failure(tmp_path):
+    def activate(context):
+        context.commands.register(CommandSpec(
+            id="report",
+            title="Report",
+            callback=lambda: context.diagnostics.report(
+                "runtime", "invalid", severity=None),
+        ))
+
+    plugin = _Plugin("com.example.invalid-runtime-diagnostic", activate)
+    _settings, coordinator, manager = _host(
+        tmp_path, [plugin.metadata.id],
+        [_candidate(plugin.metadata.id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+        assert not manager.invoke_command(
+            "plugin.com.example.invalid-runtime-diagnostic.report")
+        record = manager.record_for(plugin.metadata.id)
+        assert record.state == PluginState.ACTIVE
+        assert record.diagnostics[-1].code == "command_callback_failed"
+        assert "diagnostic severity must be a string" in (
+            record.diagnostics[-1].details)
+    finally:
+        _shutdown(manager, coordinator)
+
+
+def test_plugin_diagnostic_report_requires_valid_string_fields(tmp_path):
+    plugin = _Plugin("com.example.diagnostic-fields")
+    _settings, coordinator, manager = _host(
+        tmp_path, [plugin.metadata.id],
+        [_candidate(plugin.metadata.id, lambda: plugin)])
+    try:
+        manager.activate_enabled()
+        diagnostics = plugin.context.diagnostics
+        invalid = (
+            ((None, "message", "", "error"), TypeError),
+            (("code", None, "", "error"), TypeError),
+            (("code", "message", None, "error"), TypeError),
+            (("code", "message", "", None), TypeError),
+            (("", "message", "", "error"), ValueError),
+            (("code", "message", "", ""), ValueError),
+        )
+        for arguments, exception_type in invalid:
+            try:
+                diagnostics.report(*arguments)
+            except exception_type:
+                pass
+            else:
+                raise AssertionError(
+                    "invalid diagnostic fields were accepted: %r" % (
+                        arguments,))
+        diagnostics.report("valid", "message", "details", "warning")
+        recorded = manager.record_for(plugin.metadata.id).diagnostics
+        assert len(recorded) == 1
+        assert recorded[0].code == "valid"
+        assert recorded[0].severity == "warning"
+    finally:
+        _shutdown(manager, coordinator)
 
 
 def test_callback_failures_become_diagnostics(tmp_path):
