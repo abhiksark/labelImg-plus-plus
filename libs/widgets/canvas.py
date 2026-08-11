@@ -134,6 +134,7 @@ class Canvas(QWidget):
     selectionChanged = pyqtSignal(bool)
     shapeMoved = pyqtSignal()
     drawingPolygon = pyqtSignal(bool)
+    modeChanged = pyqtSignal(int)
     # Emitted on polygon vertex insert / remove / drag-move with the
     # pre-mutation points list so MainWindow can push an undo command.
     polygonVerticesEdited = pyqtSignal(object, object)  # (shape, old_points)
@@ -276,20 +277,28 @@ class Canvas(QWidget):
         return self.mode == self.CREATE_POLYGON
 
     def set_editing(self, value=True):
-        self.mode = self.EDIT if value else self.CREATE
+        new_mode = self.EDIT if value else self.CREATE
+        changed = self.mode != new_mode
+        self.mode = new_mode
         if not value:  # Create
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
         self.update()
+        if changed:
+            self.modeChanged.emit(self.mode)
 
     def set_polygon_drawing(self, value=True):
-        self.mode = self.CREATE_POLYGON if value else self.EDIT
+        new_mode = self.CREATE_POLYGON if value else self.EDIT
+        changed = self.mode != new_mode
+        self.mode = new_mode
         if value:
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
         self.update()
+        if changed:
+            self.modeChanged.emit(self.mode)
 
     def set_sam_mode(self, value=True):
         """Enter/leave single-click SAM segmentation mode.
@@ -298,13 +307,17 @@ class Canvas(QWidget):
         signal drives toggle_drawing_sensitive, which in beginner mode would flip
         the canvas straight back to EDIT and silently cancel SAM mode.
         """
-        self.mode = self.CREATE_SAM if value else self.EDIT
+        new_mode = self.CREATE_SAM if value else self.EDIT
+        changed = self.mode != new_mode
+        self.mode = new_mode
         self.current = None
         if value:
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
         self.update()
+        if changed:
+            self.modeChanged.emit(self.mode)
 
     def commit_polygon(self, points):
         """Build a polygon Shape from image-space (x, y) points and finalise it.
@@ -326,8 +339,11 @@ class Canvas(QWidget):
         self._keypoint_template_name = template_name
         self._keypoint_template = get_template(template_name)
         self._keypoint_index = self._next_unplaced_keypoint(0)
+        changed = self.mode != self.KEYPOINT_MODE
         self.mode = self.KEYPOINT_MODE
         self.update()
+        if changed:
+            self.modeChanged.emit(self.mode)
 
     def exit_keypoint_mode(self):
         """Exit keypoint mode, return to edit."""
@@ -336,8 +352,11 @@ class Canvas(QWidget):
         self._hovered_keypoint = -1
         self._keypoint_template_name = None
         self._keypoint_template = None
+        changed = self.mode != self.EDIT
         self.mode = self.EDIT
         self.update()
+        if changed:
+            self.modeChanged.emit(self.mode)
 
     def _keypoint_count(self):
         """Return the number of keypoints in the current template."""
@@ -1573,11 +1592,14 @@ class Canvas(QWidget):
         self._freehand_active = False
         self._freehand_points = []
         self.current = None
+        changed = self.mode != self.EDIT
         self.mode = self.EDIT
 
         self.restore_cursor()
         self.pixmap = None
         self.update()
+        if changed:
+            self.modeChanged.emit(self.mode)
 
     def set_drawing_shape_to_square(self, status):
         self.draw_square = status

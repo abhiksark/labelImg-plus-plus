@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>labelImg++ Workspace 3.2 Lab</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --surface-subtle: #f1f3f6;
+      --surface-raised: #ffffff;
+      --border: #dfe3e8;
+      --border-strong: #c8d0da;
+      --text: #182230;
+      --muted: #5d6b7a;
+      --disabled: #9aa4b2;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --accent-soft: #dbeafe;
+      --success: #16803c;
+      --warning: #b45309;
+      --danger: #c73737;
+      --canvas: #e9edf2;
+      --shadow: 0 12px 30px rgba(24, 34, 48, .13);
+      --bar-h: 48px;
+      --rail-w: 52px;
+      --inspector-w: 304px;
+      --timeline-h: 0px;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      font: 12px/1.35 Inter, ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .icon {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .app {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--inspector-w);
+      grid-template-rows: var(--bar-h) minmax(0, 1fr) auto 24px;
+      grid-template-areas:
+        "bar bar bar"
+        "rail canvas inspector"
+        "rail timeline inspector"
+        "status status status";
+      background: var(--bg);
+      transition: grid-template-columns .2s ease;
+    }
+
+    .command-bar {
+      grid-area: bar;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-raised);
+      min-width: 0;
+      z-index: 5;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 8px 0 5px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      color: white;
+      background: linear-gradient(145deg, #3b82f6, #1d4ed8);
+      font-size: 11px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.2);
+    }
+    .command-separator { width: 1px; height: 22px; background: var(--border); margin: 0 3px; }
+    .command {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 9px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      white-space: nowrap;
+    }
+    .command:hover { background: var(--surface-subtle); border-color: var(--border); }
+    .command.primary { color: white; background: var(--accent); }
+    .command.primary:hover { background: var(--accent-hover); }
+    .command.icon-only { width: 32px; padding: 0; }
+    .command.muted { color: var(--muted); }
+    .document {
+      min-width: 120px;
+      max-width: 280px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 8px;
+      overflow: hidden;
+    }
+    .document-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; }
+    .spacer { flex: 1 1 auto; min-width: 4px; }
+    .position-chip {
+      padding: 4px 7px;
+      border-radius: 5px;
+      background: var(--surface-subtle);
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .tool-rail {
+      grid-area: rail;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      padding: 8px 5px;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      z-index: 3;
+    }
+    .tool-button {
+      position: relative;
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .tool-button:hover { color: var(--text); background: var(--surface-subtle); }
+    .tool-button.active { color: var(--accent); background: var(--accent-soft); }
+    .tool-button.active::before {
+      content: "";
+      position: absolute;
+      left: -6px;
+      width: 3px;
+      height: 22px;
+      border-radius: 0 3px 3px 0;
+      background: var(--accent);
+    }
+    .tool-button::after {
+      content: attr(data-label) "  " attr(data-key);
+      position: absolute;
+      left: 48px;
+      top: 50%;
+      transform: translateY(-50%) translateX(-3px);
+      padding: 6px 8px;
+      color: white;
+      background: #172033;
+      border-radius: 5px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: .12s ease;
+      z-index: 20;
+    }
+    .tool-button:hover::after { opacity: 1; transform: translateY(-50%) translateX(0); }
+    .rail-divider { width: 28px; height: 1px; background: var(--border); margin: 3px 0; }
+    .rail-spacer { flex: 1; }
+
+    .canvas-shell {
+      grid-area: canvas;
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background:
+        linear-gradient(45deg, rgba(255,255,255,.35) 25%, transparent 25%) 0 0/18px 18px,
+        linear-gradient(-45deg, rgba(255,255,255,.35) 25%, transparent 25%) 0 9px/18px 18px,
+        var(--canvas);
+    }
+    .view { position: absolute; inset: 0; display: none; }
+    .view.active { display: flex; }
+    .image-view, .video-view { align-items: center; justify-content: center; padding: 44px 40px 36px; }
+    .stage {
+      position: relative;
+      width: min(82%, 920px);
+      aspect-ratio: 16 / 10;
+      overflow: hidden;
+      background: #b8c4d2;
+      border: 1px solid rgba(24,34,48,.12);
+      box-shadow: 0 4px 18px rgba(24,34,48,.15);
+    }
+    .scene {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 20% 26%, #f9c784 0 5%, transparent 5.4%),
+        linear-gradient(162deg, transparent 0 52%, rgba(21,67,47,.88) 52.3% 58%, transparent 58.3%),
+        linear-gradient(18deg, transparent 0 54%, rgba(28,98,69,.78) 54.2% 61%, transparent 61.2%),
+        linear-gradient(#a8d8f0 0 48%, #7ba36d 48% 63%, #575d66 63% 100%);
+    }
+    .road-line { position: absolute; left: 43%; top: 62%; width: 8px; height: 42%; background: #f5d64f; transform: skewX(-22deg); opacity: .8; }
+    .vehicle {
+      position: absolute;
+      border-radius: 18px 24px 7px 7px;
+      box-shadow: inset 0 -10px 0 rgba(0,0,0,.13);
+    }
+    .vehicle.one { left: 19%; top: 51%; width: 25%; height: 16%; background: #e65748; }
+    .vehicle.two { right: 14%; top: 42%; width: 23%; height: 15%; background: #e8aa3a; }
+    .vehicle::before, .vehicle::after {
+      content: ""; position: absolute; bottom: -10px; width: 19px; height: 19px;
+      border-radius: 50%; background: #202936; box-shadow: inset 0 0 0 5px #79818b;
+    }
+    .vehicle::before { left: 14%; } .vehicle::after { right: 14%; }
+    .annotation-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .bbox { fill: rgba(37,99,235,.08); stroke: #3b82f6; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .bbox.secondary { fill: rgba(22,128,60,.08); stroke: #22a35a; }
+    .poly { fill: rgba(234,88,12,.12); stroke: #ea580c; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .handle { fill: white; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+    .tag { position: absolute; padding: 3px 6px; border-radius: 4px 4px 4px 0; color: white; background: #2563eb; font-size: 11px; font-weight: 600; }
+    .tag.truck { left: 19%; top: calc(51% - 23px); }
+    .tag.car { right: 28%; top: calc(42% - 23px); background: #16803c; }
+    .tag.road { left: 50%; top: 68%; background: #ea580c; }
+
+    .canvas-controls {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 5px 16px rgba(24,34,48,.13);
+      backdrop-filter: blur(8px);
+      z-index: 4;
+    }
+    .canvas-controls button { height: 28px; min-width: 28px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+    .canvas-controls button:hover { color: var(--text); background: var(--surface-subtle); }
+    .canvas-controls .text-control { padding: 0 8px; }
+
+    .empty-view { align-items: center; justify-content: center; padding: 40px; }
+    .empty-card { width: min(620px, 90%); text-align: center; }
+    .empty-icon { width: 58px; height: 58px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 15px; color: var(--accent); background: var(--accent-soft); }
+    .empty-icon .icon { width: 28px; height: 28px; }
+    .empty-card h1 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
+    .empty-card p { margin: 7px 0 20px; color: var(--muted); font-size: 13px; }
+    .open-actions { display: flex; justify-content: center; gap: 8px; }
+    .recent { margin-top: 28px; text-align: left; }
+    .recent-title { margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .recent-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .recent-item { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.72); }
+    .recent-item .icon { color: var(--accent); }
+    .recent-item strong, .recent-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recent-item span { color: var(--muted); font-size: 10px; margin-top: 2px; }
+
+    .gallery-view { padding: 20px 22px 46px; overflow: auto; align-content: flex-start; flex-wrap: wrap; gap: 12px; }
+    .gallery-card { width: calc(25% - 9px); min-width: 170px; padding: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+    .gallery-card.selected { border: 2px solid var(--accent); padding: 6px; box-shadow: 0 0 0 3px var(--accent-soft); }
+    .thumb { height: 118px; border-radius: 6px; background: linear-gradient(155deg, #badbf0 0 48%, #709d6d 48% 64%, #5d6570 64%); position: relative; overflow: hidden; }
+    .thumb::before { content: ""; position: absolute; left: 18%; top: 52%; width: 34%; height: 19%; border: 2px solid #3b82f6; background: rgba(230,87,72,.75); }
+    .thumb.alt { filter: hue-rotate(45deg); } .thumb.warm { filter: sepia(.25) saturate(1.2); }
+    .thumb-meta { display: flex; justify-content: space-between; padding: 7px 2px 1px; }
+    .thumb-meta span:last-child { color: var(--muted); }
+
+    .inspector {
+      grid-area: inspector;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: var(--surface);
+      z-index: 4;
+      transition: transform .2s ease, opacity .2s ease;
+    }
+    .inspector-head { display: flex; align-items: center; height: 46px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); }
+    .tabs { display: flex; gap: 3px; padding: 3px; border-radius: 7px; background: var(--surface-subtle); }
+    .tab { height: 28px; padding: 0 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-weight: 600; }
+    .tab.active { color: var(--text); background: var(--surface); box-shadow: 0 1px 3px rgba(24,34,48,.1); }
+    .collapse { margin-left: auto; width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+    .collapse:hover { background: var(--surface-subtle); }
+    .inspector-body { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+    .search-wrap { position: relative; margin: 10px 10px 8px; }
+    .search-wrap .icon { position: absolute; left: 9px; top: 8px; width: 15px; height: 15px; color: var(--muted); }
+    .search { width: 100%; height: 32px; padding: 0 9px 0 30px; border: 1px solid var(--border); border-radius: 6px; outline: 0; color: var(--text); background: var(--surface); }
+    .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .section-label { padding: 5px 12px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+    .object-list { padding: 0 7px 8px; }
+    .object-row { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; align-items: center; gap: 7px; min-height: 44px; padding: 6px 7px; border: 1px solid transparent; border-radius: 7px; }
+    .object-row:hover { background: var(--surface-subtle); }
+    .object-row.selected { border-color: #b8d3ff; background: #eff6ff; }
+    .object-type { width: 16px; height: 16px; border: 2px solid #3b82f6; border-radius: 2px; }
+    .object-type.poly { border: 0; background: #ea580c; clip-path: polygon(50% 0, 100% 34%, 80% 100%, 10% 82%, 0 23%); }
+    .object-main { min-width: 0; }
+    .object-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .object-meta { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .eye { width: 25px; height: 25px; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
+    .eye .icon { width: 15px; height: 15px; }
+    .properties { margin-top: auto; border-top: 1px solid var(--border); }
+    .properties-title { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 12px; font-weight: 700; }
+    .form { display: grid; grid-template-columns: 76px minmax(0,1fr); gap: 8px; padding: 0 12px 12px; align-items: center; }
+    .form label { color: var(--muted); }
+    .field { height: 30px; display: flex; align-items: center; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+    .swatch { width: 14px; height: 14px; margin-right: 7px; border-radius: 4px; background: #3b82f6; }
+    .toggle { width: 30px; height: 18px; padding: 2px; border-radius: 20px; background: var(--border-strong); }
+    .toggle::after { content: ""; display: block; width: 14px; height: 14px; border-radius: 50%; background: white; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+
+    .timeline {
+      grid-area: timeline;
+      display: none;
+      height: 82px;
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      z-index: 2;
+    }
+    .app[data-state="video"] .timeline { display: block; }
+    .timeline-top { display: flex; align-items: center; gap: 7px; height: 28px; }
+    .timecode { font-variant-numeric: tabular-nums; color: var(--muted); }
+    .timeline-spacer { flex: 1; }
+    .propagate { height: 28px; padding: 0 10px; border: 1px solid #b8d3ff; border-radius: 6px; color: var(--accent); background: #eff6ff; font-weight: 600; }
+    .track { position: relative; height: 28px; margin-top: 7px; border-radius: 5px; background: var(--surface-subtle); overflow: hidden; }
+    .segment { position: absolute; top: 7px; left: 13%; right: 17%; height: 14px; border-radius: 4px; background: #93c5fd; }
+    .segment::before, .segment::after { content: ""; position: absolute; top: -3px; width: 4px; height: 20px; border-radius: 3px; background: var(--accent); }
+    .segment::before { left: 0; } .segment::after { right: 0; }
+    .playhead { position: absolute; left: 43%; top: 0; bottom: 0; width: 2px; background: var(--danger); }
+
+    .status-strip {
+      grid-area: status;
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      padding: 0 9px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--surface);
+      font-size: 10px;
+      z-index: 5;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+    .status-strip .right { margin-left: auto; display: flex; gap: 13px; }
+
+    .review-panel {
+      position: fixed;
+      left: 50%;
+      bottom: 37px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      max-width: calc(100vw - 20px);
+      padding: 5px;
+      border: 1px solid rgba(200,208,218,.95);
+      border-radius: 11px;
+      background: rgba(255,255,255,.94);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      z-index: 50;
+    }
+    .review-label { padding: 0 7px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .review-group { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--surface-subtle); }
+    .review-panel button { height: 28px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); white-space: nowrap; }
+    .review-panel button.active { color: white; background: var(--accent); }
+    .review-panel button:hover:not(.active) { color: var(--text); background: var(--surface); }
+    .review-note { min-width: 170px; padding: 0 8px; color: var(--muted); font-size: 10px; }
+
+    .app.inspector-collapsed { grid-template-columns: var(--rail-w) minmax(0,1fr) 0; }
+    .app.inspector-collapsed .inspector { transform: translateX(100%); opacity: 0; pointer-events: none; }
+    .reopen-inspector { position: absolute; right: 10px; top: 12px; display: none; z-index: 8; }
+    .app.inspector-collapsed .reopen-inspector { display: inline-flex; }
+
+    /* Direction B: higher information density for experienced annotators. */
+    .app[data-variant="dense"] {
+      --bar-h: 42px;
+      --rail-w: 48px;
+      --inspector-w: 284px;
+      --radius: 5px;
+    }
+    .app[data-variant="dense"] .command-bar { padding-inline: 5px; }
+    .app[data-variant="dense"] .command { height: 28px; padding-inline: 7px; }
+    .app[data-variant="dense"] .brand { height: 30px; padding-inline: 3px 6px; }
+    .app[data-variant="dense"] .brand-mark { width: 21px; height: 21px; border-radius: 5px; }
+    .app[data-variant="dense"] .tool-rail { gap: 2px; padding: 5px 3px; }
+    .app[data-variant="dense"] .tool-button { width: 36px; height: 36px; }
+    .app[data-variant="dense"] .object-row { min-height: 36px; padding-block: 3px; }
+    .app[data-variant="dense"] .properties-title { height: 32px; }
+    .app[data-variant="dense"] .form { gap: 5px; padding-bottom: 8px; }
+    .app[data-variant="dense"] .field { height: 26px; }
+
+    /* Direction C: canvas dominance, while preserving the same feature map. */
+    .app[data-variant="canvas"] {
+      --bar-h: 46px;
+      --rail-w: 54px;
+      --inspector-w: 322px;
+      grid-template-columns: var(--rail-w) minmax(0, 1fr);
+      grid-template-areas:
+        "bar bar"
+        "rail canvas"
+        "rail timeline"
+        "status status";
+    }
+    .app[data-variant="canvas"] .inspector {
+      position: absolute;
+      top: calc(var(--bar-h) + 12px);
+      right: 12px;
+      bottom: 38px;
+      width: var(--inspector-w);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .app[data-variant="canvas"].inspector-collapsed .inspector { transform: translateX(calc(100% + 18px)); }
+    .app[data-variant="canvas"] .stage { width: min(88%, 1040px); }
+    .app[data-variant="canvas"] .image-view,
+    .app[data-variant="canvas"] .video-view { padding-right: 58px; }
+
+    .app[data-state="empty"] .empty-view,
+    .app[data-state="image"] .image-view,
+    .app[data-state="gallery"] .gallery-view,
+    .app[data-state="video"] .video-view { display: flex; }
+    .app[data-state="empty"] .document-name { color: var(--muted); font-weight: 500; }
+    .app[data-state="empty"] .dirty-dot { display: none; }
+    .app[data-state="empty"] .position-chip { opacity: .6; }
+    .app[data-state="empty"] #saveCommand {
+      color: var(--disabled);
+      background: var(--surface-subtle);
+      pointer-events: none;
+    }
+    .app[data-state="empty"] .object-list,
+    .app[data-state="empty"] .properties { display: none; }
+    .app[data-state="empty"] .section-label { font-size: 0; }
+    .app[data-state="empty"] .section-label::after {
+      content: "No annotations";
+      font-size: 10px;
+    }
+    .app[data-state="empty"] .inspector-body::after {
+      content: "Open a source to inspect its annotations.";
+      margin: 40px 24px;
+      color: var(--muted);
+      text-align: center;
+    }
+    body:not(.review-hidden) .canvas-controls { bottom: 58px; }
+    body.review-hidden .review-panel { display: none; }
+
+    @media (max-width: 1080px) {
+      .command .label, .format-label, .verify-label { display: none; }
+      .command { width: 32px; padding: 0; }
+      .document { min-width: 90px; }
+      .review-note, .review-label { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 10 4-2v8l-4-2z"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h12l3 3v15H4V3z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="m9 7-5 5 5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M20 12h-9a7 7 0 0 0-7 7"/></symbol>
+    <symbol id="i-cursor" viewBox="0 0 24 24"><path d="m5 3 14 8-6 2-3 6z"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
+    <symbol id="i-polygon" viewBox="0 0 24 24"><path d="m12 3 9 6-3 11H6L3 9z"/><circle cx="12" cy="3" r="1"/><circle cx="21" cy="9" r="1"/><circle cx="18" cy="20" r="1"/><circle cx="6" cy="20" r="1"/><circle cx="3" cy="9" r="1"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2zM18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8zM6 14l.7 1.8 1.8.7-1.8.7L6 19l-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
+    <symbol id="i-nodes" viewBox="0 0 24 24"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="m8.6 6.2 2.7 10.9M15.4 6.2l-2.7 10.9M9 5h6"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></symbol>
+  </svg>
+
+  <main class="app" id="app" data-variant="balanced" data-state="image">
+    <header class="command-bar">
+      <button class="brand"><span class="brand-mark">L+</span><span>labelImg++</span><svg class="icon"><use href="#i-chevron-down"/></svg></button>
+      <span class="command-separator"></span>
+      <button class="command"><svg class="icon"><use href="#i-folder"/></svg><span class="label">Open</span><svg class="icon" style="width:13px"><use href="#i-chevron-down"/></svg></button>
+      <div class="document"><span class="dirty-dot"></span><span class="document-name">street-sequence-042.jpg</span></div>
+      <div class="spacer"></div>
+      <button class="command icon-only muted" title="Previous"><svg class="icon"><use href="#i-chevron-left"/></svg></button>
+      <span class="position-chip" id="position">42 / 180</span>
+      <button class="command icon-only muted" title="Next"><svg class="icon"><use href="#i-chevron-right"/></svg></button>
+      <span class="command-separator"></span>
+      <button class="command primary" id="saveCommand"><svg class="icon"><use href="#i-save"/></svg><span class="label">Save</span></button>
+      <button class="command"><svg class="icon"><use href="#i-check"/></svg><span class="verify-label">Verify</span></button>
+      <button class="command muted"><span class="format-label">Pascal VOC</span><svg class="icon" style="width:13px"><use href="#i-chevron-down"/></svg></button>
+      <button class="command icon-only muted" title="Undo"><svg class="icon"><use href="#i-undo"/></svg></button>
+      <button class="command icon-only muted" title="Redo"><svg class="icon"><use href="#i-redo"/></svg></button>
+      <button class="command icon-only muted" title="More"><svg class="icon"><use href="#i-more"/></svg></button>
+    </header>
+
+    <nav class="tool-rail" aria-label="Annotation tools">
+      <button class="tool-button active" data-tool="Select" data-label="Select" data-key="V"><svg class="icon"><use href="#i-cursor"/></svg></button>
+      <button class="tool-button" data-tool="Bounding Box" data-label="Bounding Box" data-key="W"><svg class="icon"><use href="#i-box"/></svg></button>
+      <button class="tool-button" data-tool="Polygon" data-label="Polygon" data-key="P"><svg class="icon"><use href="#i-polygon"/></svg></button>
+      <button class="tool-button" data-tool="Smart Select" data-label="Smart Select" data-key="S"><svg class="icon"><use href="#i-sparkles"/></svg></button>
+      <button class="tool-button" data-tool="Keypoints" data-label="Keypoints" data-key="K"><svg class="icon"><use href="#i-nodes"/></svg></button>
+      <div class="rail-divider"></div>
+      <button class="tool-button" data-label="Toggle annotations" data-key="H"><svg class="icon"><use href="#i-eye"/></svg></button>
+      <div class="rail-spacer"></div>
+      <button class="tool-button" data-label="Gallery" data-key="G" data-state-jump="gallery"><svg class="icon"><use href="#i-grid"/></svg></button>
+    </nav>
+
+    <section class="canvas-shell">
+      <button class="command reopen-inspector" id="reopenInspector"><svg class="icon"><use href="#i-panel"/></svg><span>Inspector</span></button>
+
+      <div class="view empty-view">
+        <div class="empty-card">
+          <div class="empty-icon"><svg class="icon"><use href="#i-image"/></svg></div>
+          <h1>Start annotating</h1>
+          <p>Open an image, a folder, or a video. You can also drop one source here.</p>
+          <div class="open-actions">
+            <button class="command primary"><svg class="icon"><use href="#i-image"/></svg>Open image</button>
+            <button class="command"><svg class="icon"><use href="#i-folder"/></svg>Open folder</button>
+            <button class="command"><svg class="icon"><use href="#i-video"/></svg>Open video</button>
+          </div>
+          <div class="recent">
+            <div class="recent-title">Recent</div>
+            <div class="recent-grid">
+              <div class="recent-item"><svg class="icon"><use href="#i-folder"/></svg><div><strong>Road scenes</strong><span>~/datasets/roads</span></div></div>
+              <div class="recent-item"><svg class="icon"><use href="#i-video"/></svg><div><strong>crossing.mp4</strong><span>Video project</span></div></div>
+              <div class="recent-item"><svg class="icon"><use href="#i-image"/></svg><div><strong>frame-018.jpg</strong><span>Pascal VOC</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="view image-view">
+        <div class="stage">
+          <div class="scene"><span class="road-line"></span><span class="vehicle one"></span><span class="vehicle two"></span></div>
+          <svg class="annotation-layer" viewBox="0 0 1000 625" preserveAspectRatio="none">
+            <rect class="bbox" x="185" y="290" width="270" height="170"/>
+            <rect class="bbox secondary" x="625" y="235" width="245" height="160"/>
+            <path class="poly" d="M360 420 L610 370 L735 610 L245 610 Z"/>
+          </svg>
+          <span class="tag truck">truck</span><span class="tag car">car</span><span class="tag road">road</span>
+        </div>
+      </div>
+
+      <div class="view video-view">
+        <div class="stage">
+          <div class="scene" style="filter:saturate(.82) brightness(.88)"><span class="road-line"></span><span class="vehicle one" style="left:30%"></span><span class="vehicle two" style="right:20%"></span></div>
+          <svg class="annotation-layer" viewBox="0 0 1000 625" preserveAspectRatio="none">
+            <rect class="bbox" x="295" y="290" width="270" height="170"/>
+            <rect class="bbox secondary" x="565" y="235" width="245" height="160"/>
+          </svg>
+          <span class="tag truck" style="left:30%">truck · manual</span><span class="tag car" style="right:34%">car · tracker</span>
+        </div>
+      </div>
+
+      <div class="view gallery-view">
+        <article class="gallery-card selected"><div class="thumb"></div><div class="thumb-meta"><strong>frame-042.jpg</strong><span>3 objects</span></div></article>
+        <article class="gallery-card"><div class="thumb alt"></div><div class="thumb-meta"><strong>frame-043.jpg</strong><span>2 objects</span></div></article>
+        <article class="gallery-card"><div class="thumb warm"></div><div class="thumb-meta"><strong>frame-044.jpg</strong><span>Verified</span></div></article>
+        <article class="gallery-card"><div class="thumb"></div><div class="thumb-meta"><strong>frame-045.jpg</strong><span>1 object</span></div></article>
+        <article class="gallery-card"><div class="thumb warm"></div><div class="thumb-meta"><strong>frame-046.jpg</strong><span>Unlabeled</span></div></article>
+        <article class="gallery-card"><div class="thumb alt"></div><div class="thumb-meta"><strong>frame-047.jpg</strong><span>4 objects</span></div></article>
+        <article class="gallery-card"><div class="thumb"></div><div class="thumb-meta"><strong>frame-048.jpg</strong><span>2 objects</span></div></article>
+        <article class="gallery-card"><div class="thumb warm"></div><div class="thumb-meta"><strong>frame-049.jpg</strong><span>Verified</span></div></article>
+      </div>
+
+      <div class="canvas-controls">
+        <button title="Zoom out"><svg class="icon"><use href="#i-minus"/></svg></button>
+        <button class="text-control">78%</button>
+        <button title="Zoom in"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <span class="command-separator"></span>
+        <button class="text-control">Fit window</button>
+        <button class="text-control">100%</button>
+        <span class="command-separator"></span>
+        <button title="Toggle annotations"><svg class="icon"><use href="#i-eye"/></svg></button>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="inspector-head">
+        <div class="tabs"><button class="tab active">Objects</button><button class="tab">Files</button></div>
+        <button class="collapse" id="collapseInspector" title="Collapse inspector"><svg class="icon"><use href="#i-chevron-right"/></svg></button>
+      </div>
+      <div class="inspector-body">
+        <div class="search-wrap"><svg class="icon"><use href="#i-search"/></svg><input class="search" placeholder="Search annotations"></div>
+        <div class="section-label">3 annotations</div>
+        <div class="object-list">
+          <div class="object-row selected"><span class="object-type"></span><div class="object-main"><div class="object-name">truck</div><div class="object-meta">Bounding box · manual</div></div><button class="eye"><svg class="icon"><use href="#i-eye"/></svg></button></div>
+          <div class="object-row"><span class="object-type"></span><div class="object-main"><div class="object-name">car</div><div class="object-meta">Bounding box · manual</div></div><button class="eye"><svg class="icon"><use href="#i-eye"/></svg></button></div>
+          <div class="object-row"><span class="object-type poly"></span><div class="object-main"><div class="object-name">road</div><div class="object-meta">Polygon · manual</div></div><button class="eye"><svg class="icon"><use href="#i-eye"/></svg></button></div>
+        </div>
+        <div class="properties">
+          <div class="properties-title"><span>Selected annotation</span><svg class="icon" style="width:14px"><use href="#i-chevron-down"/></svg></div>
+          <div class="form">
+            <label>Class</label><div class="field">truck</div>
+            <label>Color</label><div class="field"><span class="swatch"></span>#3B82F6</div>
+            <label>Difficult</label><div class="toggle"></div>
+            <label>Provenance</label><div class="field">Manual</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="timeline">
+      <div class="timeline-top"><button class="command icon-only"><svg class="icon"><use href="#i-play"/></svg></button><span class="timecode">00:00:07.420 / 00:00:31.005</span><div class="timeline-spacer"></div><button class="propagate"><svg class="icon" style="width:14px;vertical-align:middle"><use href="#i-sparkles"/></svg> Propagate across video</button></div>
+      <div class="track"><span class="segment"></span><span class="playhead"></span></div>
+    </section>
+
+    <footer class="status-strip"><span class="status-dot"></span><span>Saved</span><span>1920 × 1080</span><span>3 objects</span><div class="right"><span>Select · V</span><span>Zoom · 78%</span></div></footer>
+  </main>
+
+  <section class="review-panel" aria-label="Prototype controls">
+    <span class="review-label">Direction</span>
+    <div class="review-group" id="variantControls">
+      <button class="active" data-variant="balanced">A · Balanced</button>
+      <button data-variant="dense">B · Dense</button>
+      <button data-variant="canvas">C · Canvas-first</button>
+    </div>
+    <span class="review-label">State</span>
+    <div class="review-group" id="stateControls">
+      <button data-state="empty">Empty</button>
+      <button class="active" data-state="image">Image</button>
+      <button data-state="gallery">Gallery</button>
+      <button data-state="video">Video</button>
+    </div>
+    <div class="review-note" id="reviewNote">Balanced hierarchy · fixed 304 px inspector</div>
+  </section>
+
+  <script>
+    const app = document.getElementById('app');
+    const notes = {
+      balanced: 'Balanced hierarchy · fixed 304 px inspector',
+      dense: 'Higher density · more canvas at laptop sizes',
+      canvas: 'Canvas dominance · floating inspector card'
+    };
+    const stateLabels = {
+      empty: ['No document', '— / —'],
+      image: ['street-sequence-042.jpg', '42 / 180'],
+      gallery: ['Road scenes', '42 / 180'],
+      video: ['crossing.mp4', 'PTS 18.55 s']
+    };
+
+    function activate(group, button) {
+      group.querySelectorAll('button').forEach(item => item.classList.remove('active'));
+      button.classList.add('active');
+    }
+
+    document.getElementById('variantControls').addEventListener('click', event => {
+      const button = event.target.closest('[data-variant]');
+      if (!button) return;
+      app.dataset.variant = button.dataset.variant;
+      document.getElementById('reviewNote').textContent = notes[button.dataset.variant];
+      activate(event.currentTarget, button);
+    });
+
+    document.getElementById('stateControls').addEventListener('click', event => {
+      const button = event.target.closest('[data-state]');
+      if (!button) return;
+      setState(button.dataset.state);
+      activate(event.currentTarget, button);
+    });
+
+    function setState(state) {
+      app.dataset.state = state;
+      document.querySelector('.document-name').textContent = stateLabels[state][0];
+      document.getElementById('position').textContent = stateLabels[state][1];
+    }
+
+    document.querySelectorAll('.tool-button[data-tool]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.tool-button[data-tool]').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+      });
+    });
+
+    document.querySelector('[data-state-jump="gallery"]').addEventListener('click', () => {
+      setState('gallery');
+      const button = document.querySelector('#stateControls [data-state="gallery"]');
+      activate(document.getElementById('stateControls'), button);
+    });
+
+    function toggleInspector() { app.classList.toggle('inspector-collapsed'); }
+    document.getElementById('collapseInspector').addEventListener('click', toggleInspector);
+    document.getElementById('reopenInspector').addEventListener('click', toggleInspector);
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedVariant = params.get('variant');
+    const requestedState = params.get('state');
+    if (notes[requestedVariant]) {
+      app.dataset.variant = requestedVariant;
+      document.getElementById('reviewNote').textContent = notes[requestedVariant];
+      activate(
+        document.getElementById('variantControls'),
+        document.querySelector(`[data-variant="${requestedVariant}"]`));
+    }
+    if (stateLabels[requestedState]) {
+      setState(requestedState);
+      activate(
+        document.getElementById('stateControls'),
+        document.querySelector(`#stateControls [data-state="${requestedState}"]`));
+    }
+    if (params.get('inspector') === 'collapsed') {
+      app.classList.add('inspector-collapsed');
+    }
+    if (params.get('review') === 'hidden') {
+      document.body.classList.add('review-hidden');
+    }
+  </script>
+</body>
+</html>

@@ -37,6 +37,11 @@
 <file alias="resetall">resources/icons/feather/refresh-cw.svg</file>
 <file alias="verify">resources/icons/feather/check-circle.svg</file>
 <file alias="settings">resources/icons/feather/settings.svg</file>
+<file alias="tool-select">resources/icons/feather/mouse-pointer.svg</file>
+<file alias="tool-box">resources/icons/feather/square.svg</file>
+<file alias="tool-polygon">resources/icons/feather/hexagon.svg</file>
+<file alias="tool-smart-select">resources/icons/feather/crosshair.svg</file>
+<file alias="tool-keypoints">resources/icons/feather/share-2.svg</file>
 
 <!-- Keep original app icon and format icons -->
 <file alias="app">resources/icons/app.png</file>

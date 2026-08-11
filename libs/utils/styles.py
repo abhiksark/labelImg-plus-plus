@@ -292,6 +292,39 @@ QToolButton:disabled {{
 """
 
 
+def get_tool_rail_style(theme: Theme) -> str:
+    """Generate the fixed modern annotation-rail stylesheet."""
+    c = _get_colors(theme)
+    return f"""
+QWidget#annotationToolRail {{
+    background: {c['surface']};
+    border-right: {scale_px(1)}px solid {c['border']};
+}}
+
+QWidget#annotationToolRail QToolButton {{
+    background: transparent;
+    border: {scale_px(1)}px solid transparent;
+    border-radius: {scale_px(7)}px;
+    color: {c['text_secondary']};
+    padding: 0;
+}}
+
+QWidget#annotationToolRail QToolButton:hover {{
+    background: {c['hover']};
+    color: {c['text']};
+}}
+
+QWidget#annotationToolRail QToolButton:checked {{
+    background: {c['accent_light']};
+    color: {c['accent_text']};
+}}
+
+QWidget#annotationToolRail QToolButton:disabled {{
+    color: {c['text_disabled']};
+}}
+"""
+
+
 def get_main_window_style(theme: Theme) -> str:
     """Generate main window stylesheet for the given theme."""
     c = _get_colors(theme)

@@ -62,6 +62,7 @@ from libs.widgets import view_scaling
 from libs.widgets.videoTimelineWidget import VideoTimelineWidget
 from libs.widgets.videoExportDialog import VideoExportDialog
 from libs.widgets.commandBar import CommandBar
+from libs.widgets.toolRail import AnnotationToolRail, WorkspaceShell
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -127,8 +128,7 @@ from libs.utils.constants import (
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
     SETTING_LINE_COLOR, SETTING_LOCK_ON_VERIFY, SETTING_PAINT_LABEL,
     SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SHORTCUTS,
-    SETTING_SINGLE_CLASS,
-    SETTING_TOOLBAR_EXPANDED, SETTING_WIN_POSE, SETTING_WIN_SIZE,
+    SETTING_SINGLE_CLASS, SETTING_WIN_POSE, SETTING_WIN_SIZE,
     SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
     SETTING_SAM_ENCODER, SETTING_SAM_DECODER,
@@ -552,20 +552,20 @@ class MainWindow(QMainWindow, WindowMixin):
                         self.shortcut_config.get('color1'), 'color_line', get_str('boxLineColorDetail'))
 
         create_mode = action(get_str('crtBox'), self.set_create_mode,
-                             self.shortcut_config.get('create_mode'), 'new', get_str('crtBoxDetail'), enabled=False)
+                             self.shortcut_config.get('create_mode'), 'tool-box', get_str('crtBoxDetail'), enabled=False)
         edit_mode = action(get_str('editBox'), self.set_edit_mode,
-                           self.shortcut_config.get('edit_mode'), 'edit', get_str('editBoxDetail'), enabled=False)
+                           self.shortcut_config.get('edit_mode'), 'tool-select', get_str('editBoxDetail'), enabled=False)
 
         create = action(get_str('crtBox'), self.create_shape,
-                        self.shortcut_config.get('create'), 'new', get_str('crtBoxDetail'), enabled=False)
+                        self.shortcut_config.get('create'), 'tool-box', get_str('crtBoxDetail'), enabled=False)
         create_polygon = action(get_str('crtPolygon'), self.create_polygon_mode,
                                 self.shortcut_config.get('create_polygon'),
-                                'objects', get_str('crtPolygonDetail'), enabled=False)
+                                'tool-polygon', get_str('crtPolygonDetail'), enabled=False)
         keypoint_mode_action = action(
             get_str('addKeypoints'),
             self.toggle_keypoint_mode,
             self.shortcut_config.get('keypoint_mode'),
-            'verify',
+            'tool-keypoints',
             get_str('addKeypointsDetail'),
             enabled=False)
         video_add_keyframe = action(
@@ -634,7 +634,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'SAM Segment',
             self.toggle_sam_mode,
             self.shortcut_config.get('sam_mode'),
-            'objects',
+            'tool-smart-select',
             'Click an object to auto-generate a polygon '
             '(requires: pip install labelimgplusplus[sam])',
             enabled=False)
@@ -849,6 +849,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'light_org': light_org,
             'edit_label': edit,
             'keypoint_mode': keypoint_mode_action,
+            'sam_mode': sam_mode_action,
             'video_add_keyframe': video_add_keyframe,
             'video_track_forward': video_track_forward,
             'video_track_backward': video_track_backward,
@@ -1069,13 +1070,23 @@ class MainWindow(QMainWindow, WindowMixin):
             action('&Copy here', self.copy_shape),
             action('&Move here', self.move_shape)))
 
-        self.tools = self.toolbar('Tools')
-        # Toolbar style will be set by _apply_theme() below
-
-        # Apply saved icon size setting
-        saved_icon_size = settings.get(SETTING_ICON_SIZE, 0)
-        if saved_icon_size > 0:
-            self.tools.update_icon_size(saved_icon_size)
+        # The modern rail is a fixed projection of existing QActions. The
+        # former QToolBar settings remain serialized for downgrade use, but no
+        # legacy toolbar is instantiated or configured in the modern shell.
+        self.tools = None
+        self.tool_rail = AnnotationToolRail((
+            ('select', 'Select', edit_mode),
+            ('box', 'Bounding Box', create),
+            ('polygon', 'Polygon', create_polygon),
+            ('smartSelect', 'Smart Select', sam_mode_action),
+            ('keypoints', 'Keypoints', keypoint_mode_action),
+        ), self)
+        canvas_column = self.takeCentralWidget()
+        self.workspace_shell = WorkspaceShell(
+            self.tool_rail, canvas_column, self)
+        self.setCentralWidget(self.workspace_shell)
+        self.canvas.modeChanged.connect(self._sync_tool_actions)
+        self._sync_tool_actions()
 
         # Create dropdown for file/directory operations
         file_dropdown = DropdownToolButton(
@@ -1278,7 +1289,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_advanced_mode(self, value=True):
         self._beginner = not value
-        self.canvas.set_editing(True)
+        self.activate_select_tool()
         self.populate_mode_actions()
         self.edit_button.setVisible(not value)
         if value:
@@ -1377,11 +1388,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def populate_mode_actions(self):
         if self.beginner():
-            tool, menu = self.actions.beginner, self.actions.beginnerContext
+            menu = self.actions.beginnerContext
         else:
-            tool, menu = self.actions.advanced, self.actions.advancedContext
-        self.tools.clear()
-        add_actions(self.tools, tool)
+            menu = self.actions.advancedContext
         self.canvas.menus[0].clear()
         add_actions(self.canvas.menus[0], menu)
         self.menus.edit.clear()
@@ -1390,20 +1399,12 @@ class MainWindow(QMainWindow, WindowMixin):
         add_actions(self.menus.edit, actions + self.actions.editMenu)
 
     def set_beginner(self):
-        self.tools.clear()
-        add_actions(self.tools, self.actions.beginner)
-        self.tools.add_expand_button()
-        # Restore expanded state
-        if self.settings.get(SETTING_TOOLBAR_EXPANDED, False):
-            self.tools.set_expanded(True)
+        self._beginner = True
+        self.populate_mode_actions()
 
     def set_advanced(self):
-        self.tools.clear()
-        add_actions(self.tools, self.actions.advanced)
-        self.tools.add_expand_button()
-        # Restore expanded state
-        if self.settings.get(SETTING_TOOLBAR_EXPANDED, False):
-            self.tools.set_expanded(True)
+        self._beginner = False
+        self.populate_mode_actions()
 
     def _video_editable(self):
         snapshot = getattr(self, 'video_snapshot', None)
@@ -1775,43 +1776,66 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog.exec_()
 
     def create_shape(self):
-        assert self.beginner()
+        """Compatibility callback for the Bounding Box action."""
+        self.activate_box_tool()
+
+    def activate_box_tool(self):
+        """Activate rectangle drawing without depending on legacy UI mode."""
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
+            self._sync_tool_actions()
             return
+        self._leave_special_tool_modes()
         self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
         self.actions.create_polygon.setEnabled(True)
+        self.actions.editMode.setEnabled(True)
+        self._finish_tool_activation()
 
     def create_polygon_mode(self):
-        """Switch to polygon drawing mode."""
+        """Compatibility callback for the Polygon action."""
+        self.activate_polygon_tool()
+
+    def activate_polygon_tool(self):
+        """Activate polygon drawing without depending on legacy UI mode."""
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
+            self._sync_tool_actions()
             return
+        self._leave_special_tool_modes()
         self.canvas.set_polygon_drawing(True)
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(False)
         self.actions.editMode.setEnabled(True)
+        self._finish_tool_activation()
 
     def toggle_keypoint_mode(self):
         """Toggle keypoint annotation mode for the selected shape."""
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.activate_select_tool()
+            return
+        self.activate_keypoint_tool()
+
+    def activate_keypoint_tool(self):
+        """Activate keypoint placement for the selected eligible shape."""
         from libs.core.keypoint_config import get_template
 
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
-            return
-        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
-            self.canvas.exit_keypoint_mode()
-            self.keypoint_panel.hide()
+            self._sync_tool_actions()
             return
 
         shape = self.canvas.selected_shape
         if not shape or shape.shape_type != ShapeType.RECTANGLE:
+            self._sync_tool_actions()
             return
 
         template = get_template(shape.label)
         if not template:
+            self._sync_tool_actions()
             return
+
+        self.sam_controller.set_enabled(False)
 
         template_name = shape.label.lower()
         kp_count = len(template['names'])
@@ -1824,21 +1848,30 @@ class MainWindow(QMainWindow, WindowMixin):
         self.keypoint_panel.set_keypoints(shape.keypoints)
         self.keypoint_panel.set_current_index(self.canvas._keypoint_index)
         self.keypoint_panel.show()
+        self._finish_tool_activation()
 
     def toggle_sam_mode(self):
         """Enter/leave single-click SAM segmentation mode."""
+        if self.canvas.mode == self.canvas.CREATE_SAM:
+            self.activate_select_tool()
+            return
+        self.activate_smart_select_tool()
+
+    def activate_smart_select_tool(self):
+        """Activate Smart Select while keeping optional imports lazy."""
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
+            self._sync_tool_actions()
             return
         if not segmentation.sam_available():
             QMessageBox.warning(
                 self, "SAM unavailable",
                 "Install with: pip install labelimgplusplus[sam]")
+            self._sync_tool_actions()
             return
-        if self.canvas.mode == self.canvas.CREATE_SAM:
-            self.canvas.set_editing(True)
-            self.sam_controller.set_enabled(False)
-            return
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas.exit_keypoint_mode()
+            self.keypoint_panel.hide()
         self.canvas.set_sam_mode(True)
         self.sam_controller.set_enabled(True)
         # set_sam_mode does not emit drawingPolygon, so re-enable the mode-switch
@@ -1846,6 +1879,45 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(True)
         self.actions.editMode.setEnabled(True)
+        self._finish_tool_activation()
+
+    def activate_select_tool(self):
+        """Return to the neutral canvas selection/editing tool."""
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas.exit_keypoint_mode()
+            self.keypoint_panel.hide()
+        self.sam_controller.set_enabled(False)
+        self.canvas.set_editing(True)
+        editable = self._video_editable()
+        self.actions.create.setEnabled(editable and bool(self.file_path))
+        self.actions.create_polygon.setEnabled(
+            editable and bool(self.file_path))
+        self.actions.editMode.setEnabled(False)
+        self._finish_tool_activation()
+
+    def _leave_special_tool_modes(self):
+        if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+            self.canvas.exit_keypoint_mode()
+            self.keypoint_panel.hide()
+        self.sam_controller.set_enabled(False)
+
+    def _finish_tool_activation(self):
+        self._sync_tool_actions()
+        self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def _sync_tool_actions(self, _mode=None):
+        """Mirror the authoritative canvas mode into the exclusive actions."""
+        if not hasattr(self, 'actions'):
+            return
+        mapping = {
+            self.canvas.EDIT: self.actions.editMode,
+            self.canvas.CREATE: self.actions.create,
+            self.canvas.CREATE_POLYGON: self.actions.create_polygon,
+            self.canvas.CREATE_SAM: self.actions.sam_mode,
+            self.canvas.KEYPOINT_MODE: self.actions.keypoint_mode,
+        }
+        active = mapping.get(self.canvas.mode, self.actions.editMode)
+        active.setChecked(True)
 
     def open_sam_settings(self):
         """Open the SAM configuration dialog."""
@@ -1967,20 +2039,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.create_polygon.setEnabled(edit)
 
     def set_create_mode(self):
-        assert self.advanced()
-        if (self.document_kind == DocumentKind.VIDEO
-                and not self._ensure_video_editable()):
-            return
-        self.toggle_draw_mode(False)
-        self.actions.create_polygon.setEnabled(True)
+        """Compatibility callback routed to the modern box entry point."""
+        self.activate_box_tool()
 
     def set_edit_mode(self):
-        assert self.advanced()
-        if (self.document_kind == DocumentKind.VIDEO
-                and not self._ensure_video_editable()):
-            return
-        self.toggle_draw_mode(True)
-        self.actions.create_polygon.setEnabled(True)
+        """Compatibility callback routed to the modern select entry point."""
+        self.activate_select_tool()
         self.label_selection_changed()
 
     def update_file_menu(self):
@@ -4666,7 +4730,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
         settings[SETTING_LOCK_ON_VERIFY] = self.lock_on_verify_option.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
-        settings[SETTING_TOOLBAR_EXPANDED] = self.tools.is_expanded()
+        # Preserve obsolete toolbarExpanded verbatim for downgrade round trips.
         settings[SETTING_DARK_MODE] = self.dark_mode_action.isChecked()
         settings[SETTING_GRID_ENABLED] = self.show_grid_option.isChecked()
         settings[SETTING_GRID_SIZE] = self.canvas._grid_size if self.canvas else 32
@@ -6205,7 +6269,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _apply_theme(self, theme):
         """Apply the given theme to all components."""
-        from libs.utils.styles import get_toolbar_style, get_theme_colors
+        from libs.utils.styles import get_theme_colors
 
         # Resolve the palette once up front; several blocks below (including
         # the save-status refresh) read it regardless of which widgets exist.
@@ -6214,11 +6278,8 @@ class MainWindow(QMainWindow, WindowMixin):
         # Apply main stylesheet
         self.setStyleSheet(get_stylesheet(theme))
 
-        # Update toolbar style and expand button
-        if hasattr(self, 'tools') and self.tools:
-            self.tools.setStyleSheet(get_toolbar_style(theme))
-            if hasattr(self.tools, 'apply_theme'):
-                self.tools.apply_theme(theme)
+        if hasattr(self, 'tool_rail') and self.tool_rail:
+            self.tool_rail.apply_theme(theme)
 
         # Update canvas background
         if hasattr(self, 'canvas') and self.canvas:

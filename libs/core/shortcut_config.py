@@ -48,6 +48,7 @@ DEFAULT_SHORTCUTS = {
     'show_grid': 'Ctrl+Shift+G',
     'create_polygon': 'P',
     'keypoint_mode': 'K',
+    'sam_mode': 'S',
     'video_add_keyframe': 'Shift+K',
     'video_track_forward': 'T',
     'video_track_backward': 'Shift+T',
