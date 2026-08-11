@@ -218,3 +218,85 @@ def test_invalid_propagation_result_cannot_partially_mutate_model():
                 'missing', 6, 7, 'occluded', 'opencv'),)))
     assert model.revision == revision
     assert model.snapshot_state() == baseline
+
+
+def test_regeneration_replaces_only_generated_data_inside_open_segments():
+    model = VideoProjectModel()
+    track = _track(model)
+    for pts in (0, 10, 20):
+        model.upsert_manual(track.track_id, pts, [pts, 0, pts + 10, 10])
+    for pts in (3, 7, 13, 17, 25):
+        model.upsert_tracker(ObservationRecord(
+            track.track_id, pts, [pts, 0, pts + 10, 10],
+            source='tracker', review_state='accepted', anchor=False))
+    model.upsert_gap(TrackGapRecord(
+        track.track_id, 4, 6, 'occluded', 'opencv'))
+    other = model.create_track(
+        'person', 'rectangle', (255, 0, 0, 255), track_id='track-2')
+    other_value = model.upsert_tracker(ObservationRecord(
+        other.track_id, 7, [0, 0, 5, 5], source='tracker',
+        review_state='accepted', anchor=False))
+    before_revision = model.revision
+
+    applied = model.apply_regeneration_result(PropagationResult(
+        2, 3, before_revision,
+        observations=(ObservationRecord(
+            track.track_id, 5, [50, 0, 60, 10], source='tracker',
+            review_state='accepted', anchor=False),),
+        gaps=(TrackGapRecord(
+            track.track_id, 14, 18, 'scene_cut', 'opencv'),)),
+        track.track_id, ((0, 10), (10, 20)))
+
+    assert model.revision == before_revision + 1
+    assert set(pts for tid, pts in model.observations if tid == track.track_id) \
+        == {0, 5, 10, 20, 25}
+    assert model.observations[(track.track_id, 5)].geometry[0] == 50
+    assert model.observations[(other.track_id, 7)] == other_value
+    assert set(model.gaps) == {(track.track_id, 14, 18)}
+    assert applied.observations[0].revision == model.revision
+
+
+def test_regeneration_filters_segment_boundaries_and_rejects_other_tracks():
+    model = VideoProjectModel()
+    track = _track(model)
+    model.upsert_manual(track.track_id, 10, [0, 0, 10, 10])
+    result = model.apply_regeneration_result(PropagationResult(
+        1, 1, model.revision,
+        observations=(
+            ObservationRecord(
+                track.track_id, 0, [0, 0, 10, 10], source='tracker',
+                review_state='accepted', anchor=False),
+            ObservationRecord(
+                track.track_id, 5, [5, 0, 15, 10], source='tracker',
+                review_state='accepted', anchor=False),
+            ObservationRecord(
+                track.track_id, 10, [10, 0, 20, 10], source='tracker',
+                review_state='accepted', anchor=False),
+        )), track.track_id, ((0, 10),))
+    assert [item.pts for item in result.observations] == [5]
+    assert (track.track_id, 0) not in model.observations
+    assert model.observations[(track.track_id, 10)].source == 'manual'
+
+    baseline = model.snapshot_state()
+    with pytest.raises(ValueError, match='another track'):
+        model.apply_regeneration_result(PropagationResult(
+            2, 1, model.revision,
+            observations=(ObservationRecord(
+                'other', 6, [0, 0, 1, 1], source='tracker',
+                review_state='accepted', anchor=False),)),
+            track.track_id, ((0, 10),))
+    assert model.snapshot_state() == baseline
+
+
+def test_regeneration_preserves_gap_portions_outside_segments():
+    model = VideoProjectModel()
+    track = _track(model)
+    model.upsert_gap(TrackGapRecord(
+        track.track_id, 0, 20, 'occluded', 'opencv'))
+    model.apply_regeneration_result(
+        PropagationResult(1, 1, model.revision),
+        track.track_id, ((5, 15),))
+    assert set(model.gaps) == {
+        (track.track_id, 0, 5),
+        (track.track_id, 15, 20),
+    }
