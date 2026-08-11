@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError
-import importlib
+import json
+import subprocess
 import sys
 
 import pytest
@@ -43,10 +44,17 @@ def test_propagation_contracts_are_frozen_plain_data():
 
 
 def test_contract_and_backend_modules_do_not_import_qt_or_optionals():
-    before = set(sys.modules)
-    importlib.reload(importlib.import_module('libs.core.video_types'))
-    importlib.reload(importlib.import_module('libs.core.video_propagation'))
-    imported = set(sys.modules) - before
+    script = """
+import json
+import sys
+import libs.core.video_types
+import libs.core.video_propagation
+print(json.dumps(sorted(sys.modules)))
+"""
+    process = subprocess.run(
+        [sys.executable, '-c', script], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    imported = set(json.loads(process.stdout))
     assert not any(name.startswith('PyQt') for name in imported)
     assert 'av' not in imported
     assert 'cv2' not in imported

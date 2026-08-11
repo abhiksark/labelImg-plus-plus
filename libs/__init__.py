@@ -1,11 +1,18 @@
 # libs/__init__.py
 """LabelImg++ library package."""
 
+import importlib
+
 __version__ = '3.3.0'
 __version_info__ = tuple(__version__.split('.'))
 
-# Re-export subpackages for convenient access
-from libs import core as core
-from libs import formats as formats
-from libs import utils as utils
-from libs import widgets as widgets
+__all__ = ['core', 'formats', 'utils', 'widgets']
+
+
+def __getattr__(name):
+    """Retain convenient subpackage access without eager Qt imports."""
+    if name not in __all__:
+        raise AttributeError(name)
+    module = importlib.import_module('libs.' + name)
+    globals()[name] = module
+    return module
