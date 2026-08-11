@@ -4,11 +4,13 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QApplication, QToolBar
 
 from labelImgPlusPlus import MainWindow
 from libs.integrations import segmentation
 from libs.utils.dpi import scale_px
+from libs.widgets.shortcutsDialog import ShortcutsDialog
 
 
 def _window(monkeypatch, tmp_path):
@@ -91,5 +93,27 @@ def test_legacy_callbacks_route_through_neutral_entry_points(
         window.set_edit_mode()
         assert window.canvas.mode == window.canvas.EDIT
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_shortcut_dialog_updates_smart_select_action_and_tooltip(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    dialog = ShortcutsDialog(
+        window.shortcut_config, window._action_map, window)
+    try:
+        assert window.shortcut_config.get_default('sam_mode') == 'S'
+        assert window._action_map['sam_mode'] is window.actions.sam_mode
+
+        dialog._on_shortcut_changed(
+            0, 'sam_mode', QKeySequence('Alt+S'))
+        QApplication.processEvents()
+
+        assert window.actions.sam_mode.shortcut().toString() == 'Alt+S'
+        assert window.tool_rail.buttons['smartSelect'].toolTip() == \
+            'Smart Select (Alt+S)'
+    finally:
+        dialog.close()
         window.dirty = False
         window.close()

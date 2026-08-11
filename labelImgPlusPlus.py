@@ -849,6 +849,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'light_org': light_org,
             'edit_label': edit,
             'keypoint_mode': keypoint_mode_action,
+            'sam_mode': sam_mode_action,
             'video_add_keyframe': video_add_keyframe,
             'video_track_forward': video_track_forward,
             'video_track_backward': video_track_backward,
