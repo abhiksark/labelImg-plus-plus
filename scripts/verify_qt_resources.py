@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from xml.etree import ElementTree
 
-from PyQt5.QtCore import QResource
+from PyQt5.QtCore import QFile, QIODevice, QResource
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +41,15 @@ def main():
                 + ", ".join(missing_aliases),
                 file=sys.stderr,
             )
+        return 1
+
+    license_file = QFile(":/feather-license")
+    if not license_file.open(QIODevice.ReadOnly):
+        print("missing compiled Feather license", file=sys.stderr)
+        return 1
+    license_text = bytes(license_file.readAll()).decode("utf-8")
+    if "MIT License" not in license_text or "Cole Bemis" not in license_text:
+        print("invalid compiled Feather license", file=sys.stderr)
         return 1
 
     print("verified {} Qt resource aliases".format(len(aliases)))
