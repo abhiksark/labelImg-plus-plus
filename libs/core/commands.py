@@ -226,6 +226,11 @@ class EditLabelCommand(Command):
 
     def _update_list_item(self):
         """Update the label list item to reflect current shape label."""
+        model = getattr(self.main_window, 'annotation_model', None)
+        if model is not None:
+            identity = model.identity_for_shape(self.shape)
+            model.notify_identity_changed(identity)
+            return
         if self.shape in self.main_window.shapes_to_items:
             item = self.main_window.shapes_to_items[self.shape]
             item.setText(self.shape.label)
@@ -235,6 +240,35 @@ class EditLabelCommand(Command):
     @property
     def description(self):
         return f"Edit label '{self.old_label}' -> '{self.new_label}'"
+
+
+class EditShapeAttributesCommand(Command):
+    """Undo non-geometric image-shape properties through the controller."""
+
+    def __init__(self, main_window, shape, before, after, description):
+        self.main_window = main_window
+        self.shape = shape
+        self.before = dict(before)
+        self.after = dict(after)
+        self._description = description
+
+    def _apply(self, values):
+        for name, value in values.items():
+            setattr(self.shape, name, value)
+        model = getattr(self.main_window, 'annotation_model', None)
+        if model is not None:
+            model.notify_identity_changed(model.identity_for_shape(self.shape))
+        self.main_window.canvas.update()
+
+    def execute(self):
+        self._apply(self.after)
+
+    def undo(self):
+        self._apply(self.before)
+
+    @property
+    def description(self):
+        return self._description
 
 
 class EditPolygonVerticesCommand(Command):

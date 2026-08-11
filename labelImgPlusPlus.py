@@ -15,13 +15,13 @@ from functools import partial
 try:
     from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
     from PyQt5.QtCore import (
-        Qt, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
-        QVariant
+        Qt, QFileInfo, QItemSelectionModel, QProcess, QSize, QTimer, QPoint,
+        QPointF, QVariant
     )
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
         QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
-        QInputDialog, QListWidget, QMainWindow, QMenu, QMessageBox,
+        QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
         QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
@@ -36,13 +36,13 @@ except ImportError:
     from PyQt4.QtGui import (
         QColor, QCursor, QImage, QImageReader, QPixmap,
         QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
-        QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
+        QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
         QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
     from PyQt4.QtCore import (
-        Qt, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
-        QVariant
+        Qt, QFileInfo, QItemSelectionModel, QProcess, QSize, QTimer, QPoint,
+        QPointF, QVariant
     )
 
 # Widgets
@@ -66,6 +66,10 @@ from libs.widgets.toolRail import AnnotationToolRail
 from libs.widgets.workspaceInspector import (
     WorkspaceInspector, WorkspaceSplitterShell,
 )
+from libs.widgets.annotationInspector import (
+    AnnotationFilterProxyModel, AnnotationListModel, AnnotationRoles,
+    UnifiedAnnotationView,
+)
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -73,7 +77,7 @@ from libs.core.settings import Settings
 from libs.core.commands import (
     UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand,
     EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
-    VideoModelCommand,
+    EditShapeAttributesCommand, VideoModelCommand,
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
@@ -149,7 +153,6 @@ from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.stringBundle import StringBundle
 from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
-from libs.utils.hashableQListWidgetItem import HashableQListWidgetItem
 
 # Resources
 from libs.resources import *  # noqa: F403
@@ -312,8 +315,6 @@ class MainWindow(QMainWindow, WindowMixin):
         # Main widgets and related state.
         self.label_dialog = LabelDialog(parent=self, list_item=self.label_hist)
 
-        self.items_to_shapes = {}
-        self.shapes_to_items = {}
         self.prev_label_text = ''
 
         list_layout = QVBoxLayout()
@@ -346,35 +347,38 @@ class MainWindow(QMainWindow, WindowMixin):
         self.combo_box = ComboBox(self)
         list_layout.addWidget(self.combo_box)
 
-        # Create tabbed label lists for rectangles and polygons
-        self.label_tab_widget = QTabWidget()
-        self.rect_label_list = QListWidget()
-        self.poly_label_list = QListWidget()
-        self.track_list_widget = QListWidget()
-        self.label_tab_widget.addTab(self.rect_label_list, 'Rectangles (0)')
-        self.label_tab_widget.addTab(self.poly_label_list, 'Polygons (0)')
-        self.label_tab_widget.addTab(self.track_list_widget, 'Tracks (0)')
-        self.label_tab_widget.setTabEnabled(2, False)
-
-        # Keep self.label_list as alias to rect list for backward compatibility
-        self.label_list = self.rect_label_list
+        self.annotation_search = QLineEdit()
+        self.annotation_search.setObjectName('annotationSearch')
+        self.annotation_search.setPlaceholderText('Search objects…')
+        self.annotation_search.setToolTip(
+            'Search class, type, provenance, or track ID')
+        self.annotation_model = AnnotationListModel(self)
+        self.annotation_proxy = AnnotationFilterProxyModel(self)
+        self.annotation_proxy.setSourceModel(self.annotation_model)
+        self.label_list = UnifiedAnnotationView()
+        self.label_list.setObjectName('unifiedAnnotationList')
+        self.label_list.setModel(self.annotation_proxy)
+        # Compatibility aliases now intentionally resolve to the one view.
+        self.rect_label_list = self.label_list
+        self.poly_label_list = self.label_list
+        self.track_list_widget = self.label_list
 
         self.annotation_controls = QWidget()
         self.annotation_controls.setObjectName('objectsInspectorPage')
         self.annotation_controls.setLayout(list_layout)
 
-        # Connect signals for both label lists
-        for lw in (self.rect_label_list, self.poly_label_list):
-            lw.itemActivated.connect(self.label_selection_changed)
-            lw.itemSelectionChanged.connect(self.label_selection_changed)
-            lw.itemDoubleClicked.connect(self.edit_label)
-            lw.itemChanged.connect(self.label_item_changed)
-        self.track_list_widget.itemSelectionChanged.connect(
-            self._video_track_selection_changed)
-        self.track_list_widget.itemChanged.connect(
-            self._video_track_item_changed)
+        self.annotation_search.textChanged.connect(
+            self.annotation_proxy.set_search_text)
+        self.label_list.selectionModel().selectionChanged.connect(
+            self.label_selection_changed)
+        self.label_list.doubleClicked.connect(self.edit_label)
+        self.annotation_model.visibilityChangeRequested.connect(
+            self._annotation_visibility_changed)
+        self.annotation_model.classEditRequested.connect(
+            self._annotation_class_edit_requested)
 
-        list_layout.addWidget(self.label_tab_widget)
+        list_layout.addWidget(self.annotation_search)
+        list_layout.addWidget(self.label_list)
 
         # Keypoint annotation panel (shown for person shapes)
         self.keypoint_panel = KeypointPanel()
@@ -563,6 +567,10 @@ class MainWindow(QMainWindow, WindowMixin):
             'Delete Track…', self.delete_selected_track,
             None, 'delete', 'Delete the selected track on every frame',
             enabled=False)
+        video_edit_span = action(
+            'Set Track Span…', self.edit_selected_track_span,
+            None, None, 'Trim the selected track to inclusive PTS bounds',
+            enabled=False)
         video_track_forward = action(
             'Track Forward…',
             lambda _checked=False: self.track_selected_forward(
@@ -749,10 +757,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Label list context menu.
         label_menu = QMenu()
-        add_actions(label_menu, (edit, delete))
-        for lw in (self.rect_label_list, self.poly_label_list):
-            lw.setContextMenuPolicy(Qt.CustomContextMenu)
-            lw.customContextMenuRequested.connect(self.pop_label_list_menu)
+        add_actions(label_menu, (
+            edit, delete, shape_line_color, shape_fill_color, None,
+            video_add_keyframe, video_edit_span, video_accept_suggestion,
+            video_reject_suggestion, video_delete_track,
+        ))
+        self.label_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.label_list.customContextMenuRequested.connect(
+            self.pop_label_list_menu)
 
         # Draw squares/rectangles
         self.draw_squares_option = QAction(get_str('drawSquares'), self)
@@ -840,6 +852,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'keypoint_mode': keypoint_mode_action,
             'sam_mode': sam_mode_action,
             'video_add_keyframe': video_add_keyframe,
+            'video_edit_span': video_edit_span,
             'video_track_forward': video_track_forward,
             'video_track_backward': video_track_backward,
             'video_accept_suggestion': video_accept_suggestion,
@@ -858,6 +871,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               lineColor=color1, create=create, create_polygon=create_polygon,
                               keypoint_mode=keypoint_mode_action,
                               videoAddKeyframe=video_add_keyframe,
+                              videoEditSpan=video_edit_span,
                               videoDeleteTrack=video_delete_track,
                               videoTrackForward=video_track_forward,
                               videoTrackBackward=video_track_backward,
@@ -1289,7 +1303,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status(f"Format changed to {new_format}")
 
     def no_shapes(self):
-        return not self.items_to_shapes
+        return self.annotation_model.rowCount() == 0
 
     def toggle_advanced_mode(self, value=True):
         self._beginner = not value
@@ -1628,12 +1642,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self._restart_workers_if_needed()
         self._close_video_decoder()
         self._set_document_kind(DocumentKind.NONE)
-        self.items_to_shapes.clear()
-        self.shapes_to_items.clear()
-        self.rect_label_list.clear()
-        self.poly_label_list.clear()
-        self.track_list_widget.clear()
-        self._update_tab_counts()
+        self.annotation_model.clear()
+        self.annotation_search.clear()
         self.file_path = None
         self.image_data = None
         self.label_file = None
@@ -1659,12 +1669,13 @@ class MainWindow(QMainWindow, WindowMixin):
                 12 if kind == DocumentKind.VIDEO else 5)
         if hasattr(self, 'timeline_dock'):
             self.timeline_dock.setVisible(kind == DocumentKind.VIDEO)
-        if hasattr(self, 'label_tab_widget'):
-            self.label_tab_widget.setTabEnabled(
-                2, kind == DocumentKind.VIDEO)
-            if kind != DocumentKind.VIDEO \
-                    and self.label_tab_widget.currentIndex() == 2:
-                self.label_tab_widget.setCurrentIndex(0)
+        if hasattr(self, 'annotation_model'):
+            if kind == DocumentKind.VIDEO:
+                pts = (None if self.current_video_frame_ref is None else
+                       self.current_video_frame_ref.pts)
+                self.annotation_model.set_video_context(self.video_model, pts)
+            elif kind == DocumentKind.NONE:
+                self.annotation_model.clear()
         if kind != DocumentKind.VIDEO and hasattr(self, 'diffc_button'):
             self.diffc_button.setEnabled(True)
         if hasattr(self, 'actions') and hasattr(
@@ -1675,6 +1686,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.videoExport.setEnabled(
                 kind == DocumentKind.VIDEO)
             self.actions.videoAddKeyframe.setEnabled(False)
+            self.actions.videoEditSpan.setEnabled(False)
             self.actions.videoDeleteTrack.setEnabled(False)
             self.actions.videoTrackForward.setEnabled(False)
             self.actions.videoTrackBackward.setEnabled(False)
@@ -1746,12 +1758,39 @@ class MainWindow(QMainWindow, WindowMixin):
             self.full_gallery.set_task_coordinator(self.task_coordinator)
 
     def current_item(self):
-        """Return the currently selected item from either label list."""
-        for lw in (self.rect_label_list, self.poly_label_list):
-            items = lw.selectedItems()
-            if items:
-                return items[0]
-        return None
+        """Return the selected source-model index in the unified view."""
+        indexes = self.label_list.selectionModel().selectedRows()
+        if not indexes:
+            return None
+        return self.annotation_proxy.mapToSource(indexes[0])
+
+    def current_annotation_identity(self):
+        index = self.current_item()
+        return (None if index is None else
+                self.annotation_model.identity_at(index))
+
+    def current_shape(self):
+        index = self.current_item()
+        if index is None:
+            return None
+        if self.document_kind == DocumentKind.VIDEO:
+            track_id = self.annotation_model.identity_at(index)
+            return next((shape for shape in self.canvas.shapes
+                         if getattr(shape, 'video_track_id', None) == track_id),
+                        None)
+        return self.annotation_model.shape_at(index)
+
+    def _select_annotation_identity(self, identity):
+        source = self.annotation_model.index_for_identity(identity)
+        self.annotation_model.set_selected_identity(identity)
+        if not source.isValid():
+            self.label_list.clearSelection()
+            return
+        proxy = self.annotation_proxy.mapFromSource(source)
+        if proxy.isValid():
+            self.label_list.selectionModel().setCurrentIndex(
+                proxy, QItemSelectionModel.ClearAndSelect |
+                QItemSelectionModel.Rows)
 
     def add_recent_file(self, file_path):
         if file_path in self.recent_files:
@@ -2107,28 +2146,22 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_file_menu()
 
     def pop_label_list_menu(self, point):
-        sender = self.sender()
-        if sender:
-            self.menus.labelList.exec_(sender.mapToGlobal(point))
-        else:
-            self.menus.labelList.exec_(self.rect_label_list.mapToGlobal(point))
+        self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
 
-    def edit_label(self):
+    def edit_label(self, *_args):
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
             return
         if not self.canvas.editing():
             return
-        item = self.current_item()
-        if not item:
+        index = self.current_item()
+        if index is None:
             return
-        text = self.label_dialog.pop_up(item.text())
+        text = self.label_dialog.pop_up(
+            self.annotation_model.data(index, AnnotationRoles.Class))
         if text is not None:
-            item.setText(text)
-            item.setBackground(generate_color_by_text(text))
-            if self.document_kind != DocumentKind.VIDEO:
-                self.set_dirty()
-            self.update_combo_box()
+            self._annotation_class_edit_requested(
+                self.annotation_model.identity_at(index), text)
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
@@ -2316,42 +2349,46 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.canvas.editing():
             return
 
-        item = self.current_item()
-        if not item:  # If not selected Item, take the last one from rect list
-            if self.rect_label_list.count() > 0:
-                item = self.rect_label_list.item(self.rect_label_list.count() - 1)
-            elif self.poly_label_list.count() > 0:
-                item = self.poly_label_list.item(self.poly_label_list.count() - 1)
-
         difficult = self.diffc_button.isChecked()
+        identity = self.current_annotation_identity()
+        shape = self.current_shape()
 
-        shape = self.items_to_shapes.get(item)
+        if self.document_kind == DocumentKind.VIDEO:
+            track = (None if identity is None or self.video_model is None else
+                     self.video_model.tracks.get(identity))
+            if track is None:
+                return
+            if difficult == track.difficult:
+                return
+            if not self._ensure_video_editable():
+                blocked = self.diffc_button.blockSignals(True)
+                self.diffc_button.setChecked(track.difficult)
+                self.diffc_button.blockSignals(blocked)
+                return
+            before = self.video_model.snapshot_state()
+            self.video_model.update_track(identity, difficult=difficult)
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Change video track difficulty'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            return
+
+        if shape is None and self.canvas.shapes:
+            shape = self.canvas.shapes[-1]
         if shape is None:
             return
 
         # Checked and Update
         if difficult != shape.difficult:
-            if self.document_kind == DocumentKind.VIDEO:
-                if not self._ensure_video_editable():
-                    blocked = self.diffc_button.blockSignals(True)
-                    self.diffc_button.setChecked(shape.difficult)
-                    self.diffc_button.blockSignals(blocked)
-                    return
-                track_id = getattr(shape, 'video_track_id', None)
-                before = self.video_model.snapshot_state()
-                self.video_model.update_track(
-                    track_id, difficult=difficult)
-                after = self.video_model.snapshot_state()
-                self.undo_stack.push(VideoModelCommand(
-                    self, before, after, 'Change video track difficulty'))
-                self._on_video_model_mutation()
-                self._materialize_video_frame(
-                    self.current_video_frame_ref.pts)
-                return
+            old_difficult = shape.difficult
             shape.difficult = difficult
+            self.undo_stack.push(EditShapeAttributesCommand(
+                self, shape, {'difficult': old_difficult},
+                {'difficult': difficult}, 'Change shape difficulty'))
+            self.annotation_model.notify_identity_changed(
+                self.annotation_model.identity_for_shape(shape))
             self.set_dirty()
-        else:  # User probably changed item visibility
-            self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
 
     # React to canvas signals.
     def shape_selection_changed(self, selected=False):
@@ -2363,10 +2400,13 @@ class MainWindow(QMainWindow, WindowMixin):
                 if self.document_kind == DocumentKind.VIDEO:
                     self._selected_video_track_id = getattr(
                         shape, 'video_track_id', None)
-                self.shapes_to_items[shape].setSelected(True)
+                    identity = self._selected_video_track_id
+                else:
+                    identity = self.annotation_model.identity_for_shape(shape)
+                self._select_annotation_identity(identity)
             else:
-                self.rect_label_list.clearSelection()
-                self.poly_label_list.clearSelection()
+                self.label_list.clearSelection()
+                self.annotation_model.set_selected_identity(None)
         editable = self._video_editable()
         self.actions.delete.setEnabled(selected and editable)
         self.actions.copy.setEnabled(selected and editable)
@@ -2396,21 +2436,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def add_label(self, shape, row=None, refresh=True):
         shape.paint_label = self.display_label_option.isChecked()
-        item = HashableQListWidgetItem(shape.label)
-        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)
-        item.setBackground(generate_color_by_text(shape.label))
-        self.items_to_shapes[item] = shape
-        self.shapes_to_items[shape] = item
-        # Route to the appropriate label list based on shape type
-        target_list = self._label_list_for_shape(shape)
-        # Restore at a specific row (undo of a delete) when given, else append.
-        if row is not None and row >= 0:
-            target_list.insertItem(row, item)
-        else:
-            target_list.addItem(item)
+        if self.document_kind != DocumentKind.VIDEO:
+            self.annotation_model.set_image_shapes(self.canvas.shapes)
         if refresh:
-            self._update_tab_counts()
             for action in self.actions.onShapesPresent:
                 action.setEnabled(True)
             self.update_combo_box()
@@ -2420,15 +2448,11 @@ class MainWindow(QMainWindow, WindowMixin):
         (or None) so a caller can restore the exact ordering on undo."""
         if shape is None:
             return None
-        item = self.shapes_to_items[shape]
-        # Remove from whichever list contains the item
-        target_list = self._label_list_for_shape(shape)
-        row = target_list.row(item)
-        if row >= 0:
-            target_list.takeItem(row)
-        self._update_tab_counts()
-        del self.shapes_to_items[shape]
-        del self.items_to_shapes[item]
+        index = self.annotation_model.index_for_identity(
+            self.annotation_model.identity_for_shape(shape))
+        row = index.row() if index.isValid() else None
+        if self.document_kind != DocumentKind.VIDEO:
+            self.annotation_model.set_image_shapes(self.canvas.shapes)
         self.update_combo_box()
         return row
 
@@ -2437,11 +2461,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Scale factor for converting original coords to display coords (Issue #31)
         scale = self._image_scale_factor if hasattr(self, '_image_scale_factor') else 1.0
 
-        for widget in (self.rect_label_list, self.poly_label_list):
-            widget.setUpdatesEnabled(False)
-            widget.blockSignals(True)
-        try:
-            for shape_data in shapes:
+        for shape_data in shapes:
                 # Handle 5-element (legacy), 6-element (with shape_type),
                 # and 7-element (with keypoints) tuples
                 if len(shape_data) == 7:
@@ -2488,22 +2508,18 @@ class MainWindow(QMainWindow, WindowMixin):
                     shape.fill_color = generate_color_by_text(label)
 
                 self.add_label(shape, refresh=False)
-        finally:
-            for widget in (self.rect_label_list, self.poly_label_list):
-                widget.blockSignals(False)
-                widget.setUpdatesEnabled(True)
-        self._update_tab_counts()
         for action in self.actions.onShapesPresent:
             action.setEnabled(bool(s))
-        self.update_combo_box()
         self.canvas.load_shapes(s)
+        self.annotation_model.set_image_shapes(s)
+        self.update_combo_box()
 
     def update_combo_box(self):
-        # Get the unique labels from both label lists and add them to the Combobox.
-        items_text_list = []
-        for lw in (self.rect_label_list, self.poly_label_list):
-            for i in range(lw.count()):
-                items_text_list.append(str(lw.item(i).text()))
+        if self.document_kind == DocumentKind.VIDEO and self.video_model:
+            items_text_list = [
+                track.label for track in self.video_model.tracks.values()]
+        else:
+            items_text_list = [shape.label for shape in self.canvas.shapes]
 
         unique_text_list = list(set(items_text_list))
         # Add a null row for showing all the labels
@@ -2512,21 +2528,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.combo_box.update_items(unique_text_list)
 
-    def _label_list_for_shape(self, shape):
-        """Return the appropriate QListWidget for the given shape's type."""
-        if hasattr(shape, 'shape_type') and shape.shape_type == ShapeType.POLYGON:
-            return self.poly_label_list
-        return self.rect_label_list
-
     def _update_tab_counts(self):
-        """Update the tab titles to reflect the count of shapes in each list."""
-        rect_count = self.rect_label_list.count()
-        poly_count = self.poly_label_list.count()
-        self.label_tab_widget.setTabText(0, f'Rectangles ({rect_count})')
-        self.label_tab_widget.setTabText(1, f'Polygons ({poly_count})')
-        if hasattr(self, 'track_list_widget'):
-            self.label_tab_widget.setTabText(
-                2, f'Tracks ({self.track_list_widget.count()})')
+        """Compatibility hook; the unified inspector has no nested tabs."""
+        return self.annotation_model.rowCount()
 
     def _check_polygon_degradation(self, format_name):
         """Warn the user if polygons will be saved as bounding boxes.
@@ -2707,67 +2711,93 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def combo_selection_changed(self, index):
         text = self.combo_box.cb.itemText(index)
-        for lw in (self.rect_label_list, self.poly_label_list):
-            for i in range(lw.count()):
-                if text == "":
-                    lw.item(i).setCheckState(2)
-                elif text != lw.item(i).text():
-                    lw.item(i).setCheckState(0)
-                else:
-                    lw.item(i).setCheckState(2)
+        for row in range(self.annotation_model.rowCount()):
+            source = self.annotation_model.index(row, 0)
+            label = self.annotation_model.data(source, AnnotationRoles.Class)
+            self.annotation_model.setData(
+                source, Qt.Checked if not text or text == label
+                else Qt.Unchecked, Qt.CheckStateRole)
 
     def default_label_combo_selection_changed(self, index):
         self.default_label=self.label_hist[index]
 
-    def label_selection_changed(self):
-        # Guard against re-entrant calls from multiple signals (itemActivated + itemSelectionChanged)
+    def label_selection_changed(self, *_args):
+        # Guard selection feedback between the inspector and canvas.
         if hasattr(self, '_updating_label_selection') and self._updating_label_selection:
             return
         self._updating_label_selection = True
         try:
-            item = self.current_item()
-            if item and self.canvas.editing():
+            identity = self.current_annotation_identity()
+            self.annotation_model.set_selected_identity(identity)
+            if identity is None:
+                return
+            if self.document_kind == DocumentKind.VIDEO:
+                self._selected_video_track_id = identity
+                self._sync_video_track_actions(identity)
+                shape = self.current_shape()
+                track = (None if self.video_model is None else
+                         self.video_model.tracks.get(identity))
+            else:
+                shape = self.current_shape()
+                track = None
+            if shape is not None and self.canvas.editing():
                 self._no_selection_slot = True
-                self.canvas.select_shape(self.items_to_shapes[item])
-                shape = self.items_to_shapes[item]
-                # Add Chris
-                self.diffc_button.setChecked(shape.difficult)
+                self.canvas.select_shape(shape)
+            difficult = (shape.difficult if shape is not None else
+                         (track.difficult if track is not None else False))
+            blocked = self.diffc_button.blockSignals(True)
+            self.diffc_button.setChecked(difficult)
+            self.diffc_button.blockSignals(blocked)
         finally:
             self._updating_label_selection = False
 
-    def label_item_changed(self, item):
-        shape = self.items_to_shapes[item]
-        label = item.text()
-        if label != shape.label:
-            if self.document_kind == DocumentKind.VIDEO:
-                if not self._ensure_video_editable():
-                    blocked = item.listWidget().blockSignals(True)
-                    item.setText(shape.label)
-                    item.listWidget().blockSignals(blocked)
-                    return
-                track_id = getattr(shape, 'video_track_id', None)
-                if track_id is None:
-                    return
-                before = self.video_model.snapshot_state()
-                self.video_model.rename_track(track_id, label)
-                after = self.video_model.snapshot_state()
-                self.undo_stack.push(VideoModelCommand(
-                    self, before, after, 'Rename video track'))
-                self._on_video_model_mutation()
-                self._materialize_video_frame(
-                    self.current_video_frame_ref.pts)
+    def _annotation_visibility_changed(self, identity, visible):
+        if self.document_kind == DocumentKind.VIDEO:
+            shapes = [shape for shape in self.canvas.shapes
+                      if getattr(shape, 'video_track_id', None) == identity]
+        else:
+            shape = self.annotation_model.object_for_identity(identity)
+            shapes = [] if shape is None else [shape]
+        for shape in shapes:
+            self.canvas.set_shape_visible(shape, visible)
+
+    def _annotation_class_edit_requested(self, identity, label):
+        label = str(label).strip()
+        if not label:
+            return
+        if self.document_kind == DocumentKind.VIDEO:
+            if not self._ensure_video_editable() or self.video_model is None:
                 return
-            old_label = shape.label
-            shape.label = item.text()
-            shape.line_color = generate_color_by_text(shape.label)
+            track = self.video_model.tracks.get(identity)
+            if track is None or track.label == label:
+                return
+            before = self.video_model.snapshot_state()
+            self.video_model.rename_track(identity, label)
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Rename video track'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+            return
+        shape = self.annotation_model.object_for_identity(identity)
+        if shape is None or shape.label == label:
+            return
+        old_label = shape.label
+        shape.label = label
+        shape.line_color = generate_color_by_text(label)
+        self.undo_stack.push(EditLabelCommand(
+            self, shape, old_label, label))
+        self.annotation_model.notify_identity_changed(identity)
+        self.update_combo_box()
+        self.canvas.update()
+        self.set_dirty()
 
-            # Push command for undo support (change already made, so just push)
-            cmd = EditLabelCommand(self, shape, old_label, label)
-            self.undo_stack.push(cmd)
-
-            self.set_dirty()
-        else:  # User probably changed item visibility
-            self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
+    def label_item_changed(self, item):
+        """Legacy entry point routed through the unified model."""
+        index = self.current_item()
+        if index is not None:
+            self._annotation_class_edit_requested(
+                self.annotation_model.identity_at(index), str(item.text()))
 
     # Callback functions:
     def new_shape(self):
@@ -2928,8 +2958,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_light(self.light_widget.value() + increment)
 
     def toggle_polygons(self, value):
-        for item, shape in self.items_to_shapes.items():
-            item.setCheckState(Qt.Checked if value else Qt.Unchecked)
+        for row in range(self.annotation_model.rowCount()):
+            index = self.annotation_model.index(row, 0)
+            if self.annotation_model.data(index, AnnotationRoles.Type) \
+                    == ShapeType.POLYGON.value:
+                self.annotation_model.setData(
+                    index, Qt.Checked if value else Qt.Unchecked,
+                    Qt.CheckStateRole)
 
     def _video_project_target(self, source_path, project_path=None,
                               allow_dialog=False):
@@ -3162,7 +3197,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.keypoint_mode, self.actions.sam_mode,
             self.actions.shapeLineColor, self.actions.shapeFillColor,
             self.actions.undo, self.actions.redo,
-            self.actions.videoAddKeyframe,
+            self.actions.videoAddKeyframe, self.actions.videoEditSpan,
             self.actions.videoDeleteTrack,
             self.actions.videoTrackForward,
             self.actions.videoTrackBackward,
@@ -3431,24 +3466,21 @@ class MainWindow(QMainWindow, WindowMixin):
         selected = self._selected_video_track_id
         shapes = [self._shape_for_materialized(item)
                   for item in model.materialize(int(pts))]
-        for widget in (self.rect_label_list, self.poly_label_list):
-            widget.blockSignals(True)
-            widget.clear()
-        self.items_to_shapes.clear()
-        self.shapes_to_items.clear()
         self.canvas.load_shapes(shapes)
-        for shape in shapes:
-            self.add_label(shape, refresh=False)
-        for widget in (self.rect_label_list, self.poly_label_list):
-            widget.blockSignals(False)
-        self._update_tab_counts()
+        self.annotation_model.set_video_context(model, pts)
         self.update_combo_box()
         if selected:
             match = next((shape for shape in shapes
                           if shape.video_track_id == selected), None)
             if match is not None:
                 self.canvas.select_shape(match)
-        self._refresh_video_track_list()
+            self._select_annotation_identity(selected)
+        for shape in shapes:
+            identity = shape.video_track_id
+            index = self.annotation_model.index_for_identity(identity)
+            visible = self.annotation_model.data(
+                index, AnnotationRoles.Visible)
+            self.canvas.set_shape_visible(shape, visible)
         self.update_box_count()
         has_pending = any(
             item.pts == int(pts) and item.review_state == 'pending'
@@ -3472,63 +3504,39 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _refresh_video_track_list(self):
         model = self.video_model
-        if model is None or not hasattr(self, 'track_list_widget'):
+        if model is None:
             return
         selected = self._selected_video_track_id
-        self.track_list_widget.blockSignals(True)
-        self.track_list_widget.clear()
-        for track in model.tracks.values():
-            observations = [
-                item for item in model.observations.values()
-                if item.track_id == track.track_id]
-            pending = sum(item.review_state == 'pending'
-                          for item in observations)
-            if observations:
-                span = '%s–%s' % (
-                    min(item.pts for item in observations),
-                    max(item.pts for item in observations))
-            else:
-                span = 'empty'
-            text = '%s  [%s]  · %s pending' % (
-                track.label, span, pending)
-            item = HashableQListWidgetItem(text)
-            item.setData(Qt.UserRole, track.track_id)
-            item.setFlags((item.flags() | Qt.ItemIsUserCheckable)
-                          & ~Qt.ItemIsEditable)
-            item.setCheckState(Qt.Checked)
-            item.setForeground(QColor(*track.color))
-            self.track_list_widget.addItem(item)
-            if track.track_id == selected:
-                item.setSelected(True)
-                self.track_list_widget.setCurrentItem(item)
-        self.track_list_widget.blockSignals(False)
-        self._update_tab_counts()
+        pts = (None if self.current_video_frame_ref is None else
+               self.current_video_frame_ref.pts)
+        self.annotation_model.set_video_context(model, pts)
+        if selected:
+            self._select_annotation_identity(selected)
 
     def _video_track_selection_changed(self):
-        items = self.track_list_widget.selectedItems()
-        if not items:
-            return
-        track_id = items[0].data(Qt.UserRole)
-        self._selected_video_track_id = track_id
+        self.label_selection_changed()
+
+    def _sync_video_track_actions(self, track_id):
         editable = self._video_editable()
-        self.actions.videoAddKeyframe.setEnabled(editable)
-        self.actions.videoDeleteTrack.setEnabled(editable)
-        track = self.video_model.tracks.get(track_id)
+        track = (None if self.video_model is None else
+                 self.video_model.tracks.get(track_id))
+        has_track = track is not None
+        self.actions.videoAddKeyframe.setEnabled(editable and has_track)
+        self.actions.videoEditSpan.setEnabled(editable and has_track)
+        self.actions.videoDeleteTrack.setEnabled(editable and has_track)
+        self.actions.edit.setEnabled(editable and has_track)
+        self.actions.shapeLineColor.setEnabled(editable and has_track)
+        self.actions.shapeFillColor.setEnabled(editable and has_track)
         can_track = track is not None and track.shape_type == 'rectangle'
         self.actions.videoTrackForward.setEnabled(can_track and editable)
         self.actions.videoTrackBackward.setEnabled(can_track and editable)
-        shape = next((item for item in self.canvas.shapes
-                      if getattr(item, 'video_track_id', None) == track_id),
-                     None)
-        if shape is not None:
-            self.canvas.select_shape(shape)
 
     def _video_track_item_changed(self, item):
-        track_id = item.data(Qt.UserRole)
-        visible = item.checkState() == Qt.Checked
-        for shape in self.canvas.shapes:
-            if getattr(shape, 'video_track_id', None) == track_id:
-                self.canvas.set_shape_visible(shape, visible)
+        """Legacy entry point retained for controller compatibility."""
+        identity = self.current_annotation_identity()
+        if identity is not None:
+            self._annotation_visibility_changed(
+                identity, item.checkState() == Qt.Checked)
 
     def add_track_keyframe(self):
         if not self._ensure_video_editable():
@@ -3547,6 +3555,51 @@ class MainWindow(QMainWindow, WindowMixin):
         after = model.snapshot_state()
         self.undo_stack.push(VideoModelCommand(
             self, before, after, 'Add video track keyframe'))
+        self._on_video_model_mutation()
+        self._materialize_video_frame(self.current_video_frame_ref.pts)
+
+    def edit_selected_track_span(self):
+        """Trim the selected track to inclusive PTS bounds."""
+        if not self._ensure_video_editable():
+            return
+        model = self.video_model
+        track_id = self._selected_video_track_id
+        if model is None or track_id not in model.tracks:
+            return
+        observations = sorted(
+            (item for item in model.observations.values()
+             if item.track_id == track_id), key=lambda item: item.pts)
+        if not observations:
+            self.status('The selected track has no editable span')
+            return
+        current = '%s,%s' % (observations[0].pts, observations[-1].pts)
+        value, accepted = QInputDialog.getText(
+            self, 'Set Track Span',
+            'Inclusive PTS bounds (start,end):', text=current)
+        if not accepted:
+            return
+        try:
+            start_text, end_text = str(value).split(',', 1)
+            start_pts, end_pts = int(start_text), int(end_text)
+            if start_pts > end_pts:
+                raise ValueError
+        except (TypeError, ValueError):
+            self.status('Track span must be two integers with start <= end')
+            return
+        retained = [item for item in observations
+                    if start_pts <= item.pts <= end_pts]
+        if not retained:
+            self.status('Track span must retain at least one observation')
+            return
+        discarded = [item for item in observations if item not in retained]
+        if not discarded:
+            return
+        before = model.snapshot_state()
+        for observation in discarded:
+            model.delete_occurrence(track_id, observation.pts)
+        after = model.snapshot_state()
+        self.undo_stack.push(VideoModelCommand(
+            self, before, after, 'Trim video track span'))
         self._on_video_model_mutation()
         self._materialize_video_frame(self.current_video_frame_ref.pts)
 
@@ -4053,10 +4106,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if materialize is not None:
             materialize(result.frame_ref.pts)
         else:
-            self.items_to_shapes.clear()
-            self.shapes_to_items.clear()
-            self.rect_label_list.clear()
-            self.poly_label_list.clear()
+            self.annotation_model.set_video_context(
+                self.video_model, result.frame_ref.pts)
             self.canvas.load_shapes([])
         self.undo_stack.clear()
         self.video_timeline.set_current_frame(result.frame_ref)
@@ -4603,15 +4654,11 @@ class MainWindow(QMainWindow, WindowMixin):
             self.update_status_bar()
             self.update_save_status(saved=True)
 
-            # Default : select last item if there is at least one item
-            if self.rect_label_list.count():
-                self.rect_label_list.setCurrentItem(
-                    self.rect_label_list.item(self.rect_label_list.count() - 1))
-                self.rect_label_list.item(self.rect_label_list.count() - 1).setSelected(True)
-            elif self.poly_label_list.count():
-                self.poly_label_list.setCurrentItem(
-                    self.poly_label_list.item(self.poly_label_list.count() - 1))
-                self.poly_label_list.item(self.poly_label_list.count() - 1).setSelected(True)
+            # Default: select the last canonical shape in the unified view.
+            if self.canvas.shapes:
+                self._select_annotation_identity(
+                    self.annotation_model.identity_for_shape(
+                        self.canvas.shapes[-1]))
 
             self.canvas.setFocus(True)
             self._update_current_image_stats()
@@ -6022,8 +6069,9 @@ class MainWindow(QMainWindow, WindowMixin):
                                            default=DEFAULT_LINE_COLOR)
         if color:
             if self.document_kind == DocumentKind.VIDEO:
-                shape = self.canvas.selected_shape
-                track_id = getattr(shape, 'video_track_id', None)
+                track_id = self.current_annotation_identity()
+                if track_id is None:
+                    return
                 before = self.video_model.snapshot_state()
                 self.video_model.update_track(track_id, color=color.getRgb())
                 after = self.video_model.snapshot_state()
@@ -6033,7 +6081,16 @@ class MainWindow(QMainWindow, WindowMixin):
                 self._materialize_video_frame(
                     self.current_video_frame_ref.pts)
                 return
-            self.canvas.selected_shape.line_color = color
+            shape = self.canvas.selected_shape
+            if shape is None:
+                return
+            old_color = shape.line_color
+            shape.line_color = color
+            self.undo_stack.push(EditShapeAttributesCommand(
+                self, shape, {'line_color': old_color},
+                {'line_color': color}, 'Change shape line color'))
+            self.annotation_model.notify_identity_changed(
+                self.annotation_model.identity_for_shape(shape))
             self.canvas.update()
             self.set_dirty()
 
@@ -6044,7 +6101,27 @@ class MainWindow(QMainWindow, WindowMixin):
         color = self.color_dialog.getColor(self.fill_color, u'Choose Fill Color',
                                            default=DEFAULT_FILL_COLOR)
         if color:
-            self.canvas.selected_shape.fill_color = color
+            if self.document_kind == DocumentKind.VIDEO:
+                track_id = self.current_annotation_identity()
+                if track_id is None:
+                    return
+                before = self.video_model.snapshot_state()
+                self.video_model.update_track(track_id, color=color.getRgb())
+                after = self.video_model.snapshot_state()
+                self.undo_stack.push(VideoModelCommand(
+                    self, before, after, 'Change video track color'))
+                self._on_video_model_mutation()
+                self._materialize_video_frame(
+                    self.current_video_frame_ref.pts)
+                return
+            shape = self.canvas.selected_shape
+            if shape is None:
+                return
+            old_color = shape.fill_color
+            shape.fill_color = color
+            self.undo_stack.push(EditShapeAttributesCommand(
+                self, shape, {'fill_color': old_color},
+                {'fill_color': color}, 'Change shape fill color'))
             self.canvas.update()
             self.set_dirty()
 
