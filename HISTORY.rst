@@ -1,6 +1,85 @@
 History
 =======
 
+3.4.0 (2026-08-12)
+------------------
+
+Portable whole-video propagation release adding multi-object OpenCV tracking,
+durable gap records, atomic preview and commit, and bounded correction
+regeneration while preserving legacy pending observations, annotation formats,
+filenames, command-line entry points, plugin APIs, shortcut identifiers, and
+Python 3.8 through 3.13 support. Optional SAM 2 propagation remains deferred to
+3.5 and is not bundled or downloaded by this release.
+
+Propagation and Gap Contracts
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Add frozen, Qt-free propagation requests, batches, results, and gap records,
+  plus a stateless backend interface. Workers exchange immutable plain data;
+  Qt widgets, canvas shapes, model mutation, and undo commands stay on the GUI
+  thread.
+* Upgrade video projects transactionally from schema v1 to v2 with inclusive,
+  revisioned ``track_gaps``. Writable migration failure rolls back and reopens
+  read-only with an actionable warning, while read-only v1 projects retain an
+  empty gap projection.
+* Preserve accepted, pending, and rejected legacy observations and extend
+  snapshots and save deltas for gap insertion, replacement, deletion, undo,
+  restoration, export, and revision conflicts.
+
+Portable Whole-Video Propagation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Add **Propagate across video** and **Propagate selected object** beside the
+  integrated timeline. Existing directional commands now use the same accepted
+  atomic result path rather than creating new pending suggestions.
+* Decode each requested direction once and update all active tracks together
+  with bounded Lucas-Kanade flow and affine estimation. Rectangles transform
+  their corners, polygons transform every vertex, and associated keypoints use
+  the same affine transform.
+* Protect every accepted manual anchor. Reaching another manual anchor retains
+  and reseeds it; a failed track records a stable ``low_confidence``,
+  ``occluded``, ``out_of_frame``, or ``scene_cut`` gap while other tracks
+  continue.
+* Stream generated observations into a preview-only canvas layer excluded from
+  canonical shapes, dirty state, saves, exports, plugins, inspectors, and undo.
+  Frame navigation remains available while geometry and class mutation, save,
+  export, undo, and redo are disabled.
+* Validate document generation and revision, media fingerprint, stream and time
+  base, and every track revision before applying accepted tracker observations
+  and gaps in one model revision and one undo command. Cancellation, stale
+  state, source replacement, shutdown, or decoder failure clears preview state
+  without changing the model or durable project.
+
+Correction Regeneration
+~~~~~~~~~~~~~~~~~~~~~~~
+
+* Editing tracker or interpolated geometry immediately creates an accepted
+  manual anchor as its own undoable correction.
+* Regenerate only frames strictly between that correction and the nearest
+  manual anchor on each side, using media bounds where an anchor is absent.
+  Successful replacement affects only generated observations and overlapping
+  gap portions for that track and those intervals, and is recorded as a second
+  undo entry.
+* Cancel superseded regeneration and discard results after correction undo,
+  intervening document or track revision, document replacement, or shutdown.
+  Failures preserve the correction, all manual anchors, other tracks, and prior
+  generated data.
+
+Qualification
+~~~~~~~~~~~~~
+
+* Cover CFR and VFR media, forward and backward propagation, rectangles,
+  polygons, keypoints, multiple tracks, manual-anchor reseeding, scene cuts,
+  occlusion, out-of-frame loss, corrupted media, read-only and legacy projects,
+  cancellation, stale revisions, atomic undo, gap persistence, save/export
+  blocking, navigation during work, document close, and repeated teardown.
+* Qualify Python 3.8 through 3.13, plugin, SAM, video, and combined extras while
+  keeping PyAV, NumPy, OpenCV, ONNX Runtime, Torch, and SAM 2 lazy or absent from
+  the base import path as applicable.
+* Review the integrated propagation preview at fixed Linux 1366x768 and
+  1440x900 approval sizes with no clipped primary controls, docks, or detached
+  windows.
+
 3.3.0 (2026-08-12)
 ------------------
 

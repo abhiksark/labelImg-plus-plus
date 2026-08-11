@@ -26,7 +26,7 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Version 3.3.0 (stable).** Install with
+    **Version 3.4.0 (stable).** Install with
     ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
@@ -91,6 +91,15 @@ Workflow and Interface
     While Smart Select is active, choose **Box** or **Polygon** from the compact
     canvas control. The choice persists between sessions, and either result
     follows the same provisional class-confirmation and undo workflow.
+
+**Portable Whole-Video Propagation**
+    From the integrated timeline, propagate every accepted manual anchor on
+    the current frame or only the selected object. The portable OpenCV backend
+    processes rectangles, polygons, and associated keypoints together, shows
+    preview-only progress, protects later manual anchors, and commits accepted
+    observations and explicit gap records atomically in one undo step. Editing
+    generated geometry creates a manual correction first, then regenerates only
+    the bounded neighboring segments as a separate undoable change.
 
 **Direct Ultralytics Dataset Export**
     Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
@@ -361,7 +370,7 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.3.0**, the stable 3.3 release. See
+This source tree identifies itself as **3.4.0**, the stable 3.4 release. See
 the `release history
 <https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases
