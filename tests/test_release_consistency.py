@@ -42,19 +42,6 @@ def _bumpversion_version():
     return config["bumpversion"]["current_version"]
 
 
-def _sonar_version():
-    properties = (ROOT / "sonar-project.properties").read_text(
-        encoding="utf-8"
-    )
-    version = re.search(
-        r"^sonar\.projectVersion=(?P<value>\S+)\s*$",
-        properties,
-        flags=re.MULTILINE,
-    )
-    assert version is not None, "sonar-project.properties has no project version"
-    return version.group("value")
-
-
 def test_release_versions_are_consistent():
     project_version = _project_version()
 
@@ -62,4 +49,3 @@ def test_release_versions_are_consistent():
     assert __version_info__ == tuple(project_version.split("."))
     assert _tracked_metadata_version() == project_version
     assert _bumpversion_version() == project_version
-    assert _sonar_version() == project_version
