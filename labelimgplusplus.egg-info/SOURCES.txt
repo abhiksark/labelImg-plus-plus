@@ -76,6 +76,7 @@ libs/widgets/batchVerifyDialog.py
 libs/widgets/canvas.py
 libs/widgets/colorDialog.py
 libs/widgets/combobox.py
+libs/widgets/commandBar.py
 libs/widgets/default_label_combobox.py
 libs/widgets/galleryWidget.py
 libs/widgets/gallery_status_controller.py

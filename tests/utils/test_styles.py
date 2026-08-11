@@ -1,7 +1,13 @@
 import sys
+from unittest.mock import patch
+
 from PyQt5.QtWidgets import QApplication
+
+from libs.utils import dpi
 from libs.utils.styles import (
     hex_to_qcolor, get_canvas_background, get_theme_colors,
+    get_design_tokens, get_command_bar_style,
+    get_toolbar_style, get_main_window_style, get_slider_style,
     LIGHT_COLORS, DARK_COLORS, Theme,
 )
 
@@ -17,6 +23,20 @@ def test_canvas_background_comes_from_palette():
 def test_palette_keys_match():
     # theme-audit invariant: light and dark palettes have identical keys.
     assert set(LIGHT_COLORS) == set(DARK_COLORS)
+
+
+def test_workspace_tokens_cover_interaction_and_status_states():
+    for theme in (Theme.LIGHT, Theme.DARK):
+        tokens = get_design_tokens(theme)
+        colors = tokens['color']
+        assert {'space', 'radius', 'type'} <= set(tokens)
+        assert {
+            'hover', 'pressed', 'focus', 'text_disabled',
+            'status_success', 'status_warning', 'status_error', 'status_info',
+        } <= set(colors)
+        css = get_command_bar_style(theme)
+        assert colors['focus'] in css
+        assert colors['text_disabled'] in css
 
 def test_hex_to_qcolor():
     # Test with # prefix
@@ -41,12 +61,6 @@ def test_hex_to_qcolor():
 
 # --- HiDPI stylesheet scaling (issue #66) ---
 
-from unittest.mock import patch
-from libs.utils import dpi
-from libs.utils.styles import (
-    get_toolbar_style, get_main_window_style, get_slider_style,
-)
-
 
 def _at_2x():
     return patch.object(dpi, 'get_dpi_scale_factor', return_value=2.0)
@@ -57,6 +71,13 @@ def test_toolbar_style_scales_px_at_2x():
         css = get_toolbar_style(Theme.LIGHT)
     assert 'height: 40px' in css        # was 20px
     assert 'border-right: 2px' in css   # 1px hairline scaled too
+
+
+def test_command_bar_style_scales_controls_at_2x():
+    with _at_2x():
+        css = get_command_bar_style(Theme.LIGHT)
+    assert 'min-height: 60px' in css
+    assert 'border-bottom: 2px' in css
 
 
 def test_toolbar_style_unchanged_at_1x():
