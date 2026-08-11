@@ -96,7 +96,9 @@ def test_image_video_mode_transitions_reconfigure_timeline_and_cache(
     try:
         assert window.open_video(video)
         assert window.document_kind == DocumentKind.VIDEO
-        assert window.video_timeline.isVisible()
+        # Check the timeline's own visibility contract independently of the
+        # currently selected central page (which may be restored as Gallery).
+        assert not window.video_timeline.isHidden()
         assert window.video_timeline.parent() is \
             window.workspace_pages.canvas_page
         assert window.workspace_inspector.tabs.indexOf(
@@ -104,7 +106,7 @@ def test_image_video_mode_transitions_reconfigure_timeline_and_cache(
         assert window.frame_cache.max_images == 12
         window.request_open_file(image_path, skip_prompt=True)
         assert _wait(app, lambda: window.document_kind == DocumentKind.IMAGE)
-        assert not window.video_timeline.isVisible()
+        assert window.video_timeline.isHidden()
         assert window.workspace_inspector.tabs.indexOf(
             window.file_controls) == 1
         assert window.frame_cache.max_images == 5

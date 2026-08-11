@@ -18,13 +18,13 @@ def _canvas():
     return c
 
 
-def test_commit_polygon_creates_polygon_and_emits_new_shape():
+def test_commit_polygon_stages_provisional_polygon_and_emits_new_shape():
     c = _canvas()
     fired = []
     c.newShape.connect(lambda: fired.append(True))
     c.commit_polygon([(10, 10), (100, 10), (100, 100), (10, 100)])
-    assert len(c.shapes) == 1
-    assert c.shapes[0].shape_type == ShapeType.POLYGON
+    assert c.shapes == []
+    assert c.provisional_shape.shape_type == ShapeType.POLYGON
     assert fired == [True]
 
 
