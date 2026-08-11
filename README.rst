@@ -101,6 +101,17 @@ Workflow and Interface
     generated geometry creates a manual correction first, then regenerates only
     the bounded neighboring segments as a separate undoable change.
 
+**Optional SAM 2 Video Backend**
+    Whole-video propagation can use an official, source-installed SAM 2 on
+    Linux/CUDA while OpenCV remains the portable default and fallback. Open
+    **Tools → SAM Settings…** to choose Auto, OpenCV, or SAM 2 and select a
+    local checkpoint and its matching config file. Auto selects SAM 2 only
+    with Python 3.10+, compatible CUDA-enabled PyTorch/torchvision and SAM 2,
+    and both valid files; otherwise it uses OpenCV. An explicitly selected but
+    unavailable SAM 2 reports the missing requirement and never silently falls
+    back. labelImg++ does not download or bundle Torch, SAM 2, checkpoints, or
+    configs, and none are added to its optional extras.
+
 **Direct Ultralytics Dataset Export**
     Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
     YOLO detection dataset with ``images/{train,val,test}``, matching
@@ -159,7 +170,7 @@ Workflow and Interface
     media, playback without audio, track markers, and verified-frame markers.
     Accepted frames export to VOC, YOLO, YOLO-seg, COCO, or CreateML. See the
     `Smart Video Annotation Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/smart-video-annotation.md>`_
-    for the project, review, and export workflow.
+    for propagation setup, the project workflow, and export behavior.
 
 Installation
 ------------

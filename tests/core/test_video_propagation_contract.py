@@ -49,6 +49,7 @@ import json
 import sys
 import libs.core.video_types
 import libs.core.video_propagation
+import libs.core.video_sam2
 print(json.dumps(sorted(sys.modules)))
 """
     process = subprocess.run(
@@ -59,6 +60,9 @@ print(json.dumps(sorted(sys.modules)))
     assert 'av' not in imported
     assert 'cv2' not in imported
     assert 'numpy' not in imported
+    assert 'torch' not in imported
+    assert 'torchvision' not in imported
+    assert 'sam2' not in imported
 
 
 def test_backend_interface_is_explicit_and_stateless():
