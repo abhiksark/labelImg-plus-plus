@@ -2,6 +2,7 @@
 <qresource>
 
 <!-- Feather Icons (modern toolbar) -->
+<file alias="feather-license">resources/icons/feather/LICENSE.txt</file>
 <file alias="help">resources/icons/feather/help-circle.svg</file>
 <file alias="expert">resources/icons/feather/sliders.svg</file>
 <file alias="done">resources/icons/feather/check.svg</file>
