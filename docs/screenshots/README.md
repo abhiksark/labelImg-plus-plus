@@ -18,6 +18,12 @@ and 1440x900. The existing annotation and file projections are reparented into
 the fixed panel; the collapsed captures retain the accessible reopen control
 at the right edge of the canvas.
 
+`workspace-3.2-unified-inspector/` contains fixed Linux/offscreen Qt captures
+of the unified searchable object projection in light and dark mode at both
+approval sizes. Rectangle and polygon rows share one list, with no nested
+annotation tabs; video tests separately cover track rows that are absent from
+the current frame.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots

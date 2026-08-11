@@ -57,6 +57,9 @@ def test_splitter_reparents_existing_controls_without_backing_duplicates(
         assert window.workspace_inspector.tabs.widget(1) is \
             window.file_controls
         assert window.label_list is window.rect_label_list
+        assert window.label_list is window.poly_label_list
+        assert window.label_list is window.track_list_widget
+        assert not hasattr(window, 'label_tab_widget')
         assert window.file_list_widget.parent() is not None
 
         assert window.findChildren(QToolBar) == []

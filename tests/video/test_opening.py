@@ -2,7 +2,7 @@ import os
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import QThread
+from PyQt5.QtCore import QThread, Qt
 from PyQt5.QtGui import QImage, QPixmap
 
 from labelImgPlusPlus import DocumentKind, get_main_app
@@ -214,7 +214,7 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
             assert window.open_video(video)
         before = window.video_model.snapshot_state()
         shape = window.canvas.shapes[0]
-        item = window.shapes_to_items[shape]
+        index = window.annotation_model.index_for_identity('track-1')
         window.canvas.select_shape(shape)
 
         assert window.video_snapshot.read_only is True
@@ -225,12 +225,13 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
         assert window.request_verify_image() is None
         window.delete_selected_shape()
         window.add_track_keyframe()
-        item.setText('changed')
+        window.annotation_model.setData(index, 'changed', Qt.EditRole)
         window.copy_to_clipboard()
         window.set_dirty()
 
         assert window.video_model.snapshot_state() == before
-        assert item.text() == 'car'
+        index = window.annotation_model.index_for_identity('track-1')
+        assert window.annotation_model.data(index, Qt.EditRole) == 'car'
         assert not window.actions.pasteFromClipboard.isEnabled()
         assert window.dirty is False
         assert window.request_save_video_project() is None

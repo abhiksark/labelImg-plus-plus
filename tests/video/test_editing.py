@@ -2,8 +2,8 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from PyQt5.QtCore import QPointF
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtWidgets import QInputDialog, QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_project import load_project
@@ -41,7 +41,7 @@ def _ref(window, pts):
         snapshot.time_base_num, snapshot.time_base_den)
 
 
-def test_tracks_tab_materializes_manual_shape_and_renames_globally(
+def test_unified_inspector_materializes_shape_and_renames_globally(
         tmp_path, make_video):
     _app, window = get_main_app()
     video = make_video(tmp_path / 'clip.mp4')
@@ -52,10 +52,58 @@ def test_tracks_tab_materializes_manual_shape_and_renames_globally(
         assert len(window.canvas.shapes) == 1
         shape = window.canvas.shapes[0]
         assert shape.video_track_id == 'track-1'
-        item = window.shapes_to_items[shape]
-        item.setText('vehicle')
+        index = window.annotation_model.index_for_identity('track-1')
+        window.annotation_model.setData(index, 'vehicle', Qt.EditRole)
         assert window.video_model.tracks['track-1'].label == 'vehicle'
         assert window.canvas.shapes[0].label == 'vehicle'
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_unified_rows_include_tracks_absent_from_current_frame(
+        tmp_path, make_video):
+    _app, window = get_main_app()
+    video = make_video(tmp_path / 'absent.mp4')
+    try:
+        assert window.open_video(video)
+        _seed_track(window)
+        window.video_model.create_track(
+            'person', 'polygon', (255, 0, 0, 255), track_id='track-absent')
+        window._on_video_model_mutation()
+        window._materialize_video_frame(window.current_video_frame_ref.pts)
+
+        assert window.annotation_model.rowCount() == 2
+        assert len(window.canvas.shapes) == 1
+        index = window.annotation_model.index_for_identity('track-absent')
+        assert window.annotation_model.data(index, Qt.DisplayRole).startswith(
+            'person')
+        window._select_annotation_identity('track-absent')
+        assert window.current_shape() is None
+        assert window.actions.edit.isEnabled()
+        assert window.annotation_model.setData(
+            index, 'pedestrian', Qt.EditRole)
+        assert window.video_model.tracks['track-absent'].label == 'pedestrian'
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_track_span_trim_is_undoable(tmp_path, make_video):
+    _app, window = get_main_app()
+    video = make_video(tmp_path / 'span.mp4', frames=10)
+    try:
+        assert window.open_video(video)
+        start = window.current_video_frame_ref.pts
+        end = start + 5 * window._video_step_pts()
+        _seed_track(window, end)
+        with patch.object(
+                QInputDialog, 'getText', return_value=(f'{start},{start}', True)):
+            window.edit_selected_track_span()
+        assert ('track-1', start) in window.video_model.observations
+        assert ('track-1', end) not in window.video_model.observations
+        window.undo_action()
+        assert ('track-1', end) in window.video_model.observations
     finally:
         window.dirty = False
         window.close()
