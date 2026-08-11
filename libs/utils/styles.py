@@ -325,6 +325,32 @@ QWidget#annotationToolRail QToolButton:disabled {{
 """
 
 
+def get_workspace_inspector_style(theme: Theme) -> str:
+    """Generate the fixed inspector shell stylesheet."""
+    c = _get_colors(theme)
+    return f"""
+QWidget#workspaceInspector {{
+    background: {c['surface']};
+    border-left: {scale_px(1)}px solid {c['border']};
+}}
+
+QWidget#workspaceInspector QTabWidget::pane {{
+    border: none;
+    border-top: {scale_px(1)}px solid {c['border']};
+}}
+
+QWidget#workspaceInspector QTabBar::tab {{
+    min-height: {scale_px(34)}px;
+    padding: 0 {scale_px(14)}px;
+}}
+
+QWidget#workspaceInspector QToolButton#collapseInspectorButton {{
+    border: none;
+    padding: {scale_px(6)}px;
+}}
+"""
+
+
 def get_main_window_style(theme: Theme) -> str:
     """Generate main window stylesheet for the given theme."""
     c = _get_colors(theme)
