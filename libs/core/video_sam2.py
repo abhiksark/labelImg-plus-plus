@@ -119,7 +119,7 @@ def inspect_sam2_environment(
     else:
         try:
             _config_name(config_path, sam2_module)
-        except (AttributeError, RuntimeError, ValueError) as exc:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
             reasons.append(str(exc))
         try:
             source_install = _source_install(metadata_lookup)
@@ -347,6 +347,10 @@ def _extract_frames(request, directory, cancelled, cv2, np):
                 continue
             if frame.pts > request.end_pts:
                 break
+            if (request.direction > 0 and frame.pts < request.current_pts) \
+                    or (request.direction < 0
+                        and frame.pts > request.current_pts):
+                continue
             array = _oriented_array(
                 frame, _rotation_for_frame(frame, rotation), np)
             height, width = array.shape[:2]
@@ -597,6 +601,8 @@ class Sam2PropagationBackend(PropagationBackend):
                 try:
                     if predictor is not None and state is not None:
                         _release_sam2_state(predictor, state)
+                except (AttributeError, KeyError, RuntimeError, TypeError):
+                    pass
                 finally:
                     state = None
                     predictor = None

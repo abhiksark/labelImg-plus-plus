@@ -66,6 +66,32 @@ def test_environment_accepts_compatible_source_install(tmp_path):
     assert result == Sam2Availability(True)
 
 
+def test_environment_reports_namespace_package_without_file(tmp_path):
+    checkpoint = tmp_path / 'model.pt'
+    config = tmp_path / 'model.yaml'
+    checkpoint.write_bytes(b'checkpoint')
+    config.write_text('model: fake', encoding='utf-8')
+    torch = SimpleNamespace(
+        __version__='2.5.1',
+        cuda=SimpleNamespace(is_available=lambda: True))
+
+    def load(name):
+        return {
+            'torch': torch,
+            'torchvision': SimpleNamespace(__version__='0.20.1'),
+            'sam2': SimpleNamespace(__file__=None),
+            'sam2.build_sam': SimpleNamespace(
+                build_sam2_video_predictor=lambda: None),
+        }[name]
+
+    result = inspect_sam2_environment(
+        str(checkpoint), str(config), module_loader=load,
+        metadata_lookup=lambda _name: _Distribution(),
+        system='Linux', version_info=(3, 10))
+    assert result.available is False
+    assert result.reasons
+
+
 def test_explicit_unavailable_sam2_never_falls_back():
     backend = ConfiguredPropagationBackend('sam2', '/missing.pt', '/missing')
     with patch(

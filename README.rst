@@ -103,7 +103,8 @@ Workflow and Interface
 
 **Optional SAM 2 Video Backend**
     Whole-video propagation can use an official, source-installed SAM 2 on
-    Linux/CUDA while OpenCV remains the portable default and fallback. Open
+    Linux/CUDA. Auto is the default selection, and OpenCV remains the portable
+    fallback. Open
     **Tools → SAM Settings…** to choose Auto, OpenCV, or SAM 2 and select a
     local checkpoint and its matching config file. Auto selects SAM 2 only
     with Python 3.10+, compatible CUDA-enabled PyTorch/torchvision and SAM 2,
@@ -157,8 +158,11 @@ Workflow and Interface
 
 **Smart Video Annotation** (optional)
     Open local MP4, MOV, MKV, and AVI video, annotate on exact presentation
-    timestamps, interpolate rectangle keyframes, and propagate rectangles with
-    reviewable optical-flow suggestions. Video work is stored in a sibling
+    timestamps, interpolate keyframes, and propagate rectangles, polygons, and
+    associated keypoints across the video. Propagation streams preview-only
+    results and commits accepted observations and gaps atomically; the legacy
+    optical-flow suggestion workflow remains available separately. Video work
+    is stored in a sibling
     ``<video>.labelimgpp.sqlite`` project; existing image annotations and
     formats are unchanged.
 
@@ -245,8 +249,9 @@ Quick Start
 6. **Review**: Press **Ctrl+G** for gallery mode to review all annotations
 
 For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
-frame, then use the **Tracks** tab and **Tools** menu to add keyframes, track,
-review suggestions, and export accepted frames.
+frame, then use the unified **Objects** inspector, integrated timeline, and
+**Tools** menu to add keyframes, propagate objects, review legacy suggestions,
+and export accepted frames.
 
 Supported Annotation Formats
 ----------------------------
