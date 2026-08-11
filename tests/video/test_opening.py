@@ -40,7 +40,8 @@ def test_synchronous_open_creates_sidecar_after_first_frame(
         assert window.video_snapshot.project_path == project
         assert window.file_path == video
         assert not window.image.isNull()
-        assert window.file_dock.isVisible() is False
+        assert window.workspace_inspector.tabs.indexOf(
+            window.file_controls) == 1
         assert window.frame_cache.max_images == 12
     finally:
         window.dirty = False
