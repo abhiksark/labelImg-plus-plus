@@ -7,7 +7,10 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QAction, QApplication, QWidget
 
-from libs.widgets.toolRail import AnnotationToolRail, WorkspaceShell
+from libs.widgets.toolRail import AnnotationToolRail
+from libs.widgets.workspaceInspector import (
+    WorkspaceInspector, WorkspaceSplitterShell,
+)
 from libs.utils.dpi import scale_px
 
 
@@ -57,8 +60,12 @@ def test_workspace_shell_keeps_rail_beside_canvas_column():
     parent = QWidget()
     rail = AnnotationToolRail(_actions(parent))
     canvas_column = QWidget()
-    shell = WorkspaceShell(rail, canvas_column)
+    inspector = WorkspaceInspector(QWidget(), QWidget())
+    shell = WorkspaceSplitterShell(
+        rail, canvas_column, inspector, scale_px(304))
 
     assert shell.layout().itemAt(0).widget() is rail
-    assert shell.layout().itemAt(1).widget() is canvas_column
+    assert shell.layout().itemAt(1).widget() is shell.splitter
+    assert shell.splitter.widget(0) is canvas_column
+    assert shell.splitter.widget(1) is inspector
     assert shell.layout().contentsMargins().left() == 0

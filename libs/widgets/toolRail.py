@@ -3,14 +3,12 @@
 try:
     from PyQt5.QtCore import Qt, QSize
     from PyQt5.QtWidgets import (
-        QActionGroup, QHBoxLayout, QSizePolicy, QToolButton, QVBoxLayout,
-        QWidget,
+        QActionGroup, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:
     from PyQt4.QtCore import Qt, QSize
     from PyQt4.QtGui import (
-        QActionGroup, QHBoxLayout, QSizePolicy, QToolButton, QVBoxLayout,
-        QWidget,
+        QActionGroup, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
     )
 
 from libs.utils.dpi import scale_px
@@ -84,16 +82,3 @@ class AnnotationToolRail(QWidget):
         for key, action in self._tool_actions.items():
             action.setIcon(themed_icon(icon_names[key], theme))
         self.setStyleSheet(get_tool_rail_style(theme))
-
-
-class WorkspaceShell(QWidget):
-    """Central shell that keeps the rail fixed beside the current canvas."""
-
-    def __init__(self, tool_rail, canvas_column, parent=None):
-        super(WorkspaceShell, self).__init__(parent)
-        self.setObjectName('workspaceShell')
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(tool_rail)
-        layout.addWidget(canvas_column, 1)

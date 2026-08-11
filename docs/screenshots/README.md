@@ -12,6 +12,12 @@ first runtime slice in light and dark mode at both approval sizes. The legacy
 docks are intentionally still present in this slice; the fixed-inspector PR
 replaces them next.
 
+`workspace-3.2-fixed-inspector/` contains fixed Linux/offscreen Qt captures of
+the Objects/Files inspector in light, dark, and collapsed states at 1366x768
+and 1440x900. The existing annotation and file projections are reparented into
+the fixed panel; the collapsed captures retain the accessible reopen control
+at the right edge of the canvas.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots

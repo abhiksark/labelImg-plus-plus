@@ -84,7 +84,7 @@ def test_playback_has_one_decode_request_in_flight_and_drops_debt(
         window.close()
 
 
-def test_image_video_mode_transitions_reconfigure_docks_and_cache(
+def test_image_video_mode_transitions_reconfigure_timeline_and_cache(
         tmp_path, make_video):
     app, window = get_main_app()
     video = make_video(tmp_path / 'clip.mp4')
@@ -97,12 +97,14 @@ def test_image_video_mode_transitions_reconfigure_docks_and_cache(
         assert window.open_video(video)
         assert window.document_kind == DocumentKind.VIDEO
         assert window.timeline_dock.isVisible()
-        assert not window.file_dock.isVisible()
+        assert window.workspace_inspector.tabs.indexOf(
+            window.file_controls) == 1
         assert window.frame_cache.max_images == 12
         window.request_open_file(image_path, skip_prompt=True)
         assert _wait(app, lambda: window.document_kind == DocumentKind.IMAGE)
         assert not window.timeline_dock.isVisible()
-        assert window.file_dock.isVisible()
+        assert window.workspace_inspector.tabs.indexOf(
+            window.file_controls) == 1
         assert window.frame_cache.max_images == 5
     finally:
         window.dirty = False

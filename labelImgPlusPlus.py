@@ -15,7 +15,7 @@ from functools import partial
 try:
     from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
     from PyQt5.QtCore import (
-        Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
+        Qt, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
         QVariant
     )
     from PyQt5.QtWidgets import (
@@ -41,7 +41,7 @@ except ImportError:
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
     from PyQt4.QtCore import (
-        Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
+        Qt, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
         QVariant
     )
 
@@ -62,7 +62,10 @@ from libs.widgets import view_scaling
 from libs.widgets.videoTimelineWidget import VideoTimelineWidget
 from libs.widgets.videoExportDialog import VideoExportDialog
 from libs.widgets.commandBar import CommandBar
-from libs.widgets.toolRail import AnnotationToolRail, WorkspaceShell
+from libs.widgets.toolRail import AnnotationToolRail
+from libs.widgets.workspaceInspector import (
+    WorkspaceInspector, WorkspaceSplitterShell,
+)
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -73,6 +76,9 @@ from libs.core.commands import (
     VideoModelCommand,
 )
 from libs.core.shortcut_config import ShortcutConfig
+from libs.core.workspace_settings import (
+    clamp_inspector_width, load_workspace_settings,
+)
 from libs.core.sam_controller import SamController
 from libs.core.annotation_catalog import AnnotationCatalog
 from libs.core.dataset import DatasetSnapshot
@@ -121,15 +127,17 @@ from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
-    SETTING_ADVANCE_MODE, SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
+    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
     SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
     SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
     SETTING_LINE_COLOR, SETTING_LOCK_ON_VERIFY, SETTING_PAINT_LABEL,
     SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SHORTCUTS,
-    SETTING_SINGLE_CLASS, SETTING_WIN_POSE, SETTING_WIN_SIZE,
-    SETTING_WIN_STATE, FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
+    SETTING_INSPECTOR_COLLAPSED, SETTING_INSPECTOR_TAB,
+    SETTING_INSPECTOR_WIDTH, SETTING_SINGLE_CLASS,
+    SETTING_WIN_POSE, SETTING_WIN_SIZE,
+    FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
     SETTING_SAM_ENCODER, SETTING_SAM_DECODER,
 )
@@ -137,7 +145,7 @@ from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
     generate_color_by_text, have_qstring, natural_sort
 )
-from libs.utils.dpi import scale_px
+from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.stringBundle import StringBundle
 from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
@@ -190,6 +198,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings = Settings()
         self.settings.load()
         settings = self.settings
+        self.workspace_settings = load_workspace_settings(settings)
 
         self.shortcut_config = ShortcutConfig()
         if settings.get(SETTING_SHORTCUTS):
@@ -350,8 +359,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Keep self.label_list as alias to rect list for backward compatibility
         self.label_list = self.rect_label_list
 
-        label_list_container = QWidget()
-        label_list_container.setLayout(list_layout)
+        self.annotation_controls = QWidget()
+        self.annotation_controls.setObjectName('objectsInspectorPage')
+        self.annotation_controls.setLayout(list_layout)
 
         # Connect signals for both label lists
         for lw in (self.rect_label_list, self.poly_label_list):
@@ -370,10 +380,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.keypoint_panel = KeypointPanel()
         self.keypoint_panel.keypointClicked.connect(self._on_keypoint_panel_click)
         list_layout.addWidget(self.keypoint_panel)
-
-        self.dock = QDockWidget(get_str('boxLabelText'), self)
-        self.dock.setObjectName(get_str('labels'))
-        self.dock.setWidget(label_list_container)
 
         # File list widget (existing list view)
         self.file_list_widget = QListWidget()
@@ -408,11 +414,9 @@ class MainWindow(QMainWindow, WindowMixin):
         file_list_layout.setContentsMargins(0, 0, 0, 0)
         file_list_layout.addWidget(self.status_filter_combo)
         file_list_layout.addWidget(self.file_view_tabs)
-        file_list_container = QWidget()
-        file_list_container.setLayout(file_list_layout)
-        self.file_dock = QDockWidget(get_str('fileList'), self)
-        self.file_dock.setObjectName(get_str('files'))
-        self.file_dock.setWidget(file_list_container)
+        self.file_controls = QWidget()
+        self.file_controls.setObjectName('filesInspectorPage')
+        self.file_controls.setLayout(file_list_layout)
 
         # Statistics widget moved to gallery mode (Issue #19)
 
@@ -453,15 +457,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.undo_stack.add_callback(self.update_undo_redo_actions)
 
         self.setCentralWidget(scroll)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
 
         self.video_timeline = VideoTimelineWidget(self)
         self.timeline_dock = QDockWidget('Video Timeline', self)
         self.timeline_dock.setObjectName('videoTimeline')
         self.timeline_dock.setWidget(self.video_timeline)
-        self.timeline_dock.setFeatures(
-            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.timeline_dock.setFeatures(QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.timeline_dock)
         self.timeline_dock.hide()
         self.video_timeline.seekRequested.connect(self.request_video_frame)
@@ -477,21 +478,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_playback_timer.setTimerType(Qt.PreciseTimer)
         self._video_playback_timer.setInterval(10)
         self._video_playback_timer.timeout.connect(self._video_playback_tick)
-
-        # Configure dock features - all docks are movable for resizing
-        # DockWidgetMovable enables drag-to-rearrange and proper splitter resizing
-        self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-
-        # Set minimum sizes for better resize UX
-        self.dock.setMinimumHeight(scale_px(100))
-        self.file_dock.setMinimumHeight(scale_px(100))
-        self.dock.setMinimumWidth(scale_px(200))
-        self.file_dock.setMinimumWidth(scale_px(200))
-
-        # Features toggled by advanced mode (closable/floatable for labels dock)
-        self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
-        # In beginner mode, labels dock is movable only (not closable/floatable)
-        self.dock.setFeatures(QDockWidget.DockWidgetMovable)
 
         # Actions
         action = partial(new_action, self)
@@ -751,7 +737,11 @@ class MainWindow(QMainWindow, WindowMixin):
                                   icon='color', tip=get_str('shapeFillColorDetail'),
                                   enabled=False)
 
-        labels = self.dock.toggleViewAction()
+        labels = QAction(get_str('showHide'), self)
+        labels.setCheckable(True)
+        labels.setChecked(not self.workspace_settings.inspector_collapsed)
+        labels.triggered.connect(
+            lambda checked: self.set_inspector_collapsed(not checked))
         labels.setText(get_str('showHide'))
         labels.setShortcut('Ctrl+Shift+L')
 
@@ -835,7 +825,6 @@ class MainWindow(QMainWindow, WindowMixin):
             'copy_all_to_clipboard': copy_all_to_clipboard,
             'undo': undo,
             'redo': redo,
-            'advanced_mode': advanced_mode,
             'gallery_mode': gallery_mode,
             'hide_all': hide_all,
             'show_all': show_all,
@@ -886,6 +875,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               undo=undo, redo=redo,
                               videoPlayPause=video_play_pause,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode, galleryMode=gallery_mode,
+                              inspectorVisible=labels,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
                               fitWindow=fit_window, fitWidth=fit_width,
@@ -1009,13 +999,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.single_class_mode,
             self.display_label_option,
             self.lock_on_verify_option,
-            labels, advanced_mode, gallery_mode, None,
+            labels, gallery_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
             light_brighten, light_darken, light_org, None))
         self.menus.view.addMenu(self.auto_save_interval_menu)
-        self.menus.view.addMenu(self.icon_size_menu)
         self.menus.view.addSeparator()
         self.menus.view.addAction(self.show_grid_option)
         self.menus.view.addMenu(self.grid_size_menu)
@@ -1082,9 +1071,27 @@ class MainWindow(QMainWindow, WindowMixin):
             ('keypoints', 'Keypoints', keypoint_mode_action),
         ), self)
         canvas_column = self.takeCentralWidget()
-        self.workspace_shell = WorkspaceShell(
-            self.tool_rail, canvas_column, self)
+        self.workspace_inspector = WorkspaceInspector(
+            self.annotation_controls, self.file_controls, self)
+        self.workspace_inspector.set_selected_tab(
+            self.workspace_settings.inspector_tab)
+        self.workspace_shell = WorkspaceSplitterShell(
+            self.tool_rail, canvas_column, self.workspace_inspector,
+            scale_px(self.workspace_settings.inspector_width),
+            collapsed=self.workspace_settings.inspector_collapsed,
+            parent=self)
         self.setCentralWidget(self.workspace_shell)
+        self._inspector_width_timer = QTimer(self)
+        self._inspector_width_timer.setSingleShot(True)
+        self._inspector_width_timer.setInterval(200)
+        self._inspector_width_timer.timeout.connect(
+            self._persist_inspector_width)
+        self.workspace_shell.splitter.splitterMoved.connect(
+            self._schedule_inspector_width_persist)
+        self.workspace_shell.inspectorCollapsedChanged.connect(
+            self._inspector_collapsed_changed)
+        self.workspace_inspector.tabChanged.connect(
+            self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._sync_tool_actions)
         self._sync_tool_actions()
 
@@ -1148,7 +1155,8 @@ class MainWindow(QMainWindow, WindowMixin):
                                          (__appname__, self.default_save_dir))
             self.statusBar().show()
 
-        self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
+        # Obsolete dock-layout bytes remain untouched for downgrade use. The
+        # modern splitter restores only its validated workspace settings.
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
         Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
         self.canvas.set_drawing_color(self.line_color)
@@ -1159,10 +1167,6 @@ class MainWindow(QMainWindow, WindowMixin):
             if isinstance(x, QVariant):
                 return x.toBool()
             return bool(x)
-
-        if xbool(settings.get(SETTING_ADVANCE_MODE, False)):
-            self.actions.advancedMode.setChecked(True)
-            self.toggle_advanced_mode()
 
         if xbool(settings.get(SETTING_GALLERY_MODE, False)):
             self.actions.galleryMode.setChecked(True)
@@ -1295,9 +1299,39 @@ class MainWindow(QMainWindow, WindowMixin):
         if value:
             self.actions.createMode.setEnabled(True)
             self.actions.editMode.setEnabled(False)
-            self.dock.setFeatures(self.dock.features() | self.dock_features)
-        else:
-            self.dock.setFeatures(self.dock.features() ^ self.dock_features)
+
+    def set_inspector_collapsed(self, collapsed):
+        """Collapse or restore the fixed inspector."""
+        if hasattr(self, 'workspace_shell'):
+            self.workspace_shell.set_inspector_collapsed(collapsed)
+
+    def _inspector_collapsed_changed(self, collapsed):
+        self.settings[SETTING_INSPECTOR_COLLAPSED] = bool(collapsed)
+        if hasattr(self.actions, 'inspectorVisible'):
+            self.actions.inspectorVisible.blockSignals(True)
+            self.actions.inspectorVisible.setChecked(not collapsed)
+            self.actions.inspectorVisible.blockSignals(False)
+        self.settings.save()
+
+    def _inspector_tab_changed(self, tab):
+        self.settings[SETTING_INSPECTOR_TAB] = (
+            tab if tab in ('objects', 'files') else 'objects')
+        self.settings.save()
+
+    def _schedule_inspector_width_persist(self, _position, _index):
+        if not self.workspace_shell.is_inspector_collapsed():
+            self._inspector_width_timer.start()
+
+    def _persist_inspector_width(self):
+        if self.workspace_shell.is_inspector_collapsed():
+            return
+        scale = get_dpi_scale_factor() or 1.0
+        logical_width = int(round(
+            self.workspace_shell.inspector_width() / scale))
+        logical_width = clamp_inspector_width(logical_width)
+        self.workspace_shell.set_inspector_width(scale_px(logical_width))
+        self.settings[SETTING_INSPECTOR_WIDTH] = logical_width
+        self.settings.save()
 
     def toggle_gallery_mode(self, value=True):
         """Toggle between normal view and full-screen gallery mode."""
@@ -1623,8 +1657,6 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'frame_cache'):
             self.frame_cache.max_images = (
                 12 if kind == DocumentKind.VIDEO else 5)
-        if hasattr(self, 'file_dock'):
-            self.file_dock.setVisible(kind != DocumentKind.VIDEO)
         if hasattr(self, 'timeline_dock'):
             self.timeline_dock.setVisible(kind == DocumentKind.VIDEO)
         if hasattr(self, 'label_tab_widget'):
@@ -4706,11 +4738,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         settings[SETTING_WIN_SIZE] = self.size()
         settings[SETTING_WIN_POSE] = self.pos()
-        settings[SETTING_WIN_STATE] = self.saveState()
+        # Preserve obsolete window/state bytes verbatim for downgrade use.
         settings[SETTING_LINE_COLOR] = self.line_color
         settings[SETTING_FILL_COLOR] = self.fill_color
         settings[SETTING_RECENT_FILES] = self.recent_files
-        settings[SETTING_ADVANCE_MODE] = not self._beginner
         settings[SETTING_GALLERY_MODE] = self.gallery_mode_enabled
         if self.default_save_dir and os.path.exists(self.default_save_dir):
             settings[SETTING_SAVE_DIR] = ustr(self.default_save_dir)
@@ -6280,6 +6311,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if hasattr(self, 'tool_rail') and self.tool_rail:
             self.tool_rail.apply_theme(theme)
+        if hasattr(self, 'workspace_inspector'):
+            self.workspace_inspector.apply_theme(theme)
+        if hasattr(self, 'workspace_shell'):
+            self.workspace_shell.apply_theme(theme)
 
         # Update canvas background
         if hasattr(self, 'canvas') and self.canvas:
