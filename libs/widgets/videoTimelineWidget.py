@@ -175,7 +175,8 @@ class VideoTimelineWidget(QWidget):
                else format_timecode(float(eta_seconds)))
         total_text = str(total) if total else '—'
         self.progress_label.setText(
-            '%s/%s frames · %s active · %s complete · ETA %s · %s gaps' % (
+            '%s/%s frames · %s active · %s complete · ETA %s · '
+            '%s gaps/failures' % (
                 processed, total_text, active, completed, eta, failures))
 
     def set_session(self, snapshot):

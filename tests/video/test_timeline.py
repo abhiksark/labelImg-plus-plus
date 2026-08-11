@@ -88,7 +88,7 @@ def test_propagation_actions_and_progress_replace_each_other():
     assert widget.cancel_propagation_button.isHidden() is False
     assert widget.propagate_all_button.isHidden() is True
     assert '12/40 frames' in widget.progress_label.text()
-    assert '4 gaps' in widget.progress_label.text()
+    assert '4 gaps/failures' in widget.progress_label.text()
 
     widget.set_propagation_progress(
         0, 0, 0, 0, None, 0, running=False)
