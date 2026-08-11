@@ -1,0 +1,196 @@
+"""Central Empty, Canvas, and Gallery pages for the modern workspace."""
+
+import os
+
+try:
+    from PyQt5.QtCore import Qt, pyqtSignal
+    from PyQt5.QtWidgets import (
+        QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+        QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    )
+except ImportError:
+    from PyQt4.QtCore import Qt, pyqtSignal
+    from PyQt4.QtGui import (
+        QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+        QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    )
+
+from libs.utils.dpi import scale_px
+
+
+def _action_button(action, parent):
+    button = QToolButton(parent)
+    button.setDefaultAction(action)
+    button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+    button.setAutoRaise(True)
+    button.setFixedSize(scale_px(32), scale_px(32))
+    return button
+
+
+class EmptyWorkspacePage(QWidget):
+    recentActivated = pyqtSignal(str)
+
+    def __init__(self, open_image, open_folder, open_video, parent=None):
+        super(EmptyWorkspacePage, self).__init__(parent)
+        self.setObjectName('emptyWorkspacePage')
+        title = QLabel('Start annotating')
+        title.setObjectName('emptyWorkspaceTitle')
+        title.setAlignment(Qt.AlignCenter)
+        actions = QHBoxLayout()
+        for label, action in (
+                ('Open Image', open_image), ('Open Folder', open_folder),
+                ('Open Video', open_video)):
+            button = QPushButton(label)
+            button.setDefault(False)
+            button.clicked.connect(action.trigger)
+            actions.addWidget(button)
+        self.recent_title = QLabel('Recent')
+        self.recent_title.setObjectName('emptyRecentTitle')
+        self.recent_buttons = []
+        recent_layout = QVBoxLayout()
+        recent_layout.setSpacing(scale_px(4))
+        for _index in range(5):
+            button = QPushButton()
+            button.setFlat(True)
+            button.setVisible(False)
+            button.clicked.connect(
+                lambda _checked=False, widget=button:
+                self.recentActivated.emit(widget.property('path')))
+            self.recent_buttons.append(button)
+            recent_layout.addWidget(button)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(
+            scale_px(48), scale_px(48), scale_px(48), scale_px(48))
+        layout.addStretch(1)
+        layout.addWidget(title)
+        layout.addLayout(actions)
+        layout.addSpacing(scale_px(24))
+        layout.addWidget(self.recent_title)
+        layout.addLayout(recent_layout)
+        layout.addStretch(2)
+        self.set_recent_paths(())
+
+    def set_recent_paths(self, paths):
+        visible = tuple(paths)[:5]
+        self.recent_title.setVisible(bool(visible))
+        for index, button in enumerate(self.recent_buttons):
+            if index < len(visible):
+                path = str(visible[index])
+                button.setProperty('path', path)
+                button.setText(os.path.basename(path.rstrip(os.sep)) or path)
+                button.setToolTip(path)
+                button.setVisible(True)
+            else:
+                button.setProperty('path', '')
+                button.setVisible(False)
+
+
+class CanvasChrome(QWidget):
+    def __init__(self, zoom_out, zoom_widget, zoom_in, fit_window,
+                 fit_width, actual_size, hide_all, show_all, parent=None):
+        super(CanvasChrome, self).__init__(parent)
+        self.setObjectName('canvasChrome')
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(
+            scale_px(6), scale_px(2), scale_px(6), scale_px(2))
+        layout.setSpacing(scale_px(2))
+        layout.addWidget(_action_button(zoom_out, self))
+        zoom_widget.setFixedWidth(scale_px(56))
+        layout.addWidget(zoom_widget)
+        layout.addWidget(_action_button(zoom_in, self))
+        layout.addSpacing(scale_px(8))
+        for action in (fit_window, fit_width, actual_size):
+            layout.addWidget(_action_button(action, self))
+        layout.addStretch(1)
+        visibility = QToolButton(self)
+        visibility.setObjectName('annotationVisibilityButton')
+        visibility.setIcon(show_all.icon())
+        visibility.setToolTip('Annotation visibility')
+        visibility.setFixedSize(scale_px(32), scale_px(32))
+        visibility.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(visibility)
+        menu.addAction(show_all)
+        menu.addAction(hide_all)
+        visibility.setMenu(menu)
+        layout.addWidget(visibility)
+
+
+class WorkspacePages(QWidget):
+    EMPTY = 0
+    CANVAS = 1
+    GALLERY = 2
+
+    def __init__(self, scroll_area, timeline, gallery_page, status_widgets,
+                 actions, zoom_widget, parent=None):
+        super(WorkspacePages, self).__init__(parent)
+        self.setObjectName('workspacePagesColumn')
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.stack = QStackedWidget(self)
+        self.timeline = timeline
+        self.stack.setObjectName('workspacePageStack')
+        self.stack.setMinimumWidth(0)
+        self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.empty_page = EmptyWorkspacePage(
+            actions.open, actions.openDir, actions.openVideo, self.stack)
+        self.stack.addWidget(self.empty_page)
+
+        self.canvas_page = QWidget(self.stack)
+        canvas_layout = QVBoxLayout(self.canvas_page)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+        self.canvas_chrome = CanvasChrome(
+            actions.zoomOut, zoom_widget, actions.zoomIn,
+            actions.fitWindow, actions.fitWidth, actions.zoomOrg,
+            actions.hideAll, actions.showAll, self.canvas_page)
+        canvas_layout.addWidget(self.canvas_chrome)
+        canvas_layout.addWidget(scroll_area, 1)
+        canvas_layout.addWidget(timeline)
+        self.stack.addWidget(self.canvas_page)
+
+        self.gallery_page = gallery_page
+        self.stack.addWidget(gallery_page)
+
+        self.status_strip = QWidget(self)
+        self.status_strip.setObjectName('workspaceStatusStrip')
+        self.status_strip.setFixedHeight(scale_px(24))
+        self.status_widgets = tuple(status_widgets)
+        self.status_widgets[0].setMinimumWidth(0)
+        self.status_widgets[0].setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred)
+        status_layout = QHBoxLayout(self.status_strip)
+        status_layout.setContentsMargins(
+            scale_px(6), 0, scale_px(6), 0)
+        status_layout.setSpacing(scale_px(8))
+        for index, widget in enumerate(status_widgets):
+            status_layout.addWidget(widget, 1 if index == 0 else 0)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.stack, 1)
+        layout.addWidget(self.status_strip)
+        self.set_page('empty')
+
+    def set_page(self, name):
+        index = {'empty': self.EMPTY, 'canvas': self.CANVAS,
+                 'gallery': self.GALLERY}.get(name, self.EMPTY)
+        self.stack.setCurrentIndex(index)
+
+    def current_page(self):
+        return ('empty', 'canvas', 'gallery')[self.stack.currentIndex()]
+
+    def set_video_visible(self, visible):
+        self.timeline.setVisible(bool(visible))
+
+    def resizeEvent(self, event):
+        super(WorkspacePages, self).resizeEvent(event)
+        width = event.size().width()
+        # Preserve warnings/state/zoom first as the canvas column narrows.
+        hidden = set()
+        if width < scale_px(650):
+            hidden.update((2, 3, 5, 7))  # dimensions, image, tool, coords
+        if width < scale_px(350):
+            hidden.add(4)  # object count
+        for index, widget in enumerate(self.status_widgets):
+            widget.setVisible(index not in hidden)
