@@ -4,6 +4,7 @@ include LICENSE
 include README.rst
 
 include resources.qrc
+include resources/icons/feather/LICENSE.txt
 
 recursive-include data *
 recursive-include icons *
