@@ -1,26 +1,25 @@
 # libs/integrations/mask_to_polygon.py
-"""Trace a boolean segmentation mask into a single simplified polygon ring.
+"""Trace a boolean mask into one simplified polygon and matching bounds.
 
 Largest connected component -> external contour (holes implicitly filled) ->
 Douglas-Peucker simplification with a perimeter-proportional epsilon, capped at
-MAX_POLYGON_POINTS. Takes a numpy + cv2 mask and returns a list of (x, y) tuples;
-QPointF is used internally only to reuse the shared douglas_peucker simplifier.
+MAX_POLYGON_POINTS. The selected largest component also supplies tight half-open
+bounds. QPointF is used only to reuse the shared Douglas-Peucker simplifier.
 """
 
 import cv2
 import numpy as np
 from PyQt5.QtCore import QPointF
 
+from libs.core.sam_types import SamResult
 from libs.core.shape import MAX_POLYGON_POINTS
 from libs.utils.utils import douglas_peucker
 
 _AREA_FLOOR_FRACTION = 0.0005   # 0.05% of total pixels
 
 
-def mask_to_polygon(mask, max_points=MAX_POLYGON_POINTS):
-    """Return a list of (x, y) float tuples, or None if no usable contour."""
-    if max_points < 3:
-        raise ValueError("max_points must be >= 3, got %d" % max_points)
+def _largest_component(mask):
+    """Return the largest usable boolean component, or None."""
     mask = np.asarray(mask, dtype=bool)
     if mask.sum() < max(1, int(_AREA_FLOOR_FRACTION * mask.size)):
         return None
@@ -32,10 +31,14 @@ def mask_to_polygon(mask, max_points=MAX_POLYGON_POINTS):
     sizes = np.bincount(labels.ravel())
     sizes[0] = 0                        # ignore background
     largest = int(sizes.argmax())
-    component = (labels == largest).astype(np.uint8) * 255
+    return labels == largest
+
+
+def _component_to_polygon(component, max_points):
+    binary = component.astype(np.uint8) * 255
 
     contours, _ = cv2.findContours(
-        component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
     contour = max(contours, key=cv2.contourArea)
@@ -55,3 +58,33 @@ def mask_to_polygon(mask, max_points=MAX_POLYGON_POINTS):
     if len(simplified) < 3:
         return None
     return [(p.x(), p.y()) for p in simplified]
+
+
+def mask_to_polygon(mask, max_points=MAX_POLYGON_POINTS):
+    """Return a list of (x, y) float tuples, or None if no usable contour."""
+    if max_points < 3:
+        raise ValueError("max_points must be >= 3, got %d" % max_points)
+    component = _largest_component(mask)
+    if component is None:
+        return None
+    return _component_to_polygon(component, max_points)
+
+
+def mask_to_sam_result(mask, max_points=MAX_POLYGON_POINTS):
+    """Return one immutable polygon/bounds result for the largest component."""
+    if max_points < 3:
+        raise ValueError("max_points must be >= 3, got %d" % max_points)
+    component = _largest_component(mask)
+    if component is None:
+        return None
+    polygon = _component_to_polygon(component, max_points)
+    if not polygon:
+        return None
+    ys, xs = component.nonzero()
+    bounds = (
+        float(xs.min()), float(ys.min()),
+        float(xs.max() + 1), float(ys.max() + 1),
+    )
+    return SamResult(
+        polygon=tuple((float(x), float(y)) for x, y in polygon),
+        bounds=bounds)

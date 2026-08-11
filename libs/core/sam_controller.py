@@ -1,5 +1,5 @@
 # libs/core/sam_controller.py
-"""Orchestrates SAM-assisted polygon creation.
+"""Orchestrates SAM-assisted polygon or rectangle creation.
 
 Bridges canvas clicks to worker-thread inference and routes results back to the
 canvas on the main thread. Top-level imports are Qt + stdlib only; numpy and the
@@ -19,7 +19,7 @@ from libs.core.profiling import recorder as trace_recorder
 
 
 class _SamSignals(QObject):
-    # (generation, points or None, backend created this run or None)
+    # (generation, SamResult or None, backend created this run or None)
     finished = pyqtSignal(int, object, object)
     failed = pyqtSignal(int, str)         # (generation, message)
 
@@ -41,15 +41,15 @@ class _SamTask(QRunnable):
 
     def run(self):
         try:
-            generation, points, created = self.execute()
+            generation, result, created = self.execute()
             if self._signals is not None:
-                self._signals.finished.emit(generation, points, created)
+                self._signals.finished.emit(generation, result, created)
         except Exception as exc:
             if self._signals is not None:
                 self._signals.failed.emit(self._generation, str(exc))
 
     def execute(self):
-        from libs.integrations.mask_to_polygon import mask_to_polygon
+        from libs.integrations.mask_to_polygon import mask_to_sam_result
         backend = self._backend
         created = None
         if backend is None:
@@ -72,16 +72,16 @@ class _SamTask(QRunnable):
             if trace_recorder is not None:
                 trace_recorder.complete('sam.image.embed', started)
         if self._point is None:
-            return self._generation, [], created
+            return self._generation, None, created
         if trace_recorder is not None:
             import time
             started = time.perf_counter_ns()
         mask = backend.predict(
             [(self._point.x(), self._point.y())], [1])
-        points = mask_to_polygon(mask)
+        result = mask_to_sam_result(mask)
         if trace_recorder is not None:
             trace_recorder.complete('sam.inference', started)
-        return self._generation, points, created
+        return self._generation, result, created
 
 
 class SamController:
@@ -197,7 +197,7 @@ class SamController:
             self._embedded_key = None
             self._start_pending()
 
-    def _on_finished(self, generation, points, created):
+    def _on_finished(self, generation, result, created):
         # Only one task is ever in flight (segment_at's _busy guard, and neither
         # cancel nor on_image_changed releases _busy), so the task completing here
         # is always the sole in-flight one: clearing _busy is unconditional/safe.
@@ -209,12 +209,16 @@ class SamController:
         if generation != self._gen:
             self._start_pending()
             return
-        if not points:
+        if result is None:
             if self._active_point is not None:
                 self.mw.status("No object found, try another point")
             self._start_pending()
             return
-        self.mw.canvas.commit_polygon(points)
+        output_mode = getattr(self.mw, 'sam_output_mode', 'polygon')
+        if output_mode == 'box':
+            self.mw.canvas.commit_rectangle(result.bounds)
+        else:
+            self.mw.canvas.commit_polygon(result.polygon)
         self._start_pending()
 
     def _on_failed(self, generation, message):
