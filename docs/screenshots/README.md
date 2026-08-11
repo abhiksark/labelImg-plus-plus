@@ -7,6 +7,11 @@ Balanced workspace at 1366x768 and 1440x900. Dense and Canvas-first remain
 archived comparison studies in the interactive prototype and are not runtime
 themes.
 
+`workspace-3.2-tool-rail/` contains fixed Linux/offscreen Qt captures of the
+first runtime slice in light and dark mode at both approval sizes. The legacy
+docks are intentionally still present in this slice; the fixed-inspector PR
+replaces them next.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots
