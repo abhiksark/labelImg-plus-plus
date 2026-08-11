@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QApplication, QDockWidget, QPushButton, QToolButton
 
 from labelImgPlusPlus import MainWindow
 from libs.core.video_types import DocumentKind
+from libs.utils.styles import Theme
 
 
 class _DropEvent(object):
@@ -154,6 +155,11 @@ def test_canvas_chrome_reuses_actions_and_status_bar_is_hidden_bus(
         assert window.label_status_message.text() == 'Decoder warning'
         window.set_dirty()
         assert 'Unsaved' in window.label_save_status.text()
+        window._apply_theme(Theme.DARK)
+        assert 'Unsaved' in window.label_save_status.text()
+        window.update_save_status(True)
+        window._apply_theme(Theme.LIGHT)
+        assert 'Saved' in window.label_save_status.text()
         assert window.label_active_tool.text()
 
         window._original_image_size = QSize(1920, 1080)

@@ -39,14 +39,16 @@ because variable-frame-rate media has no reliable integer frame index.
 - Drawing or editing pauses playback automatically.
 
 Blue spans show track coverage, green markers show accepted manual anchors,
-amber markers show pending suggestions, and purple markers show verified
-frames.
+amber markers show legacy pending suggestions, red spans show propagation
+gaps, and purple markers show verified frames.
 
 ## Tracks, anchors, and interpolation
 
 Drawing a rectangle or polygon on a video frame creates a UUID-backed track and
-an accepted manual observation at the current PTS. The **Tracks** tab shows the
-track label, span, color, visibility, and pending-review count. Renaming a
+an accepted manual observation at the current PTS. The unified **Objects**
+inspector shows the track label, span, color, visibility, provenance, render
+state, and pending-review count, including tracks absent from the current
+frame. Renaming a
 tracked shape renames the track across the video.
 
 Select a track and press `Shift+K` to make the current materialized occurrence
@@ -58,14 +60,61 @@ amber dashed shapes are pending tracker suggestions.
 Deleting an exact occurrence removes that observation. Deleting an interpolated
 occurrence writes an explicit absence anchor, which ends interpolation until a
 later present anchor. **Tools → Delete Track…** removes all observations after
-confirmation. Video undo history is scoped to the current frame and clears on
-seek.
+confirmation. Video mutations use the same undo stack as image annotations.
 
 SAM can create a manual polygon observation on a paused video frame when both
 the `sam` and `video` extras are installed. It is not an automatic video-mask
 tracker.
 
-## Optical-flow tracking and review
+## Whole-video propagation
+
+Use **Propagate across video** to include every exact accepted manual anchor on
+the current frame, or **Propagate selected object** for only the selected
+qualifying track. Directional tracking actions remain compatibility aliases
+that use the same accepted-result pipeline.
+
+The portable OpenCV backend decodes each direction once, updates active
+rectangles, polygons, and associated keypoints together, and uses bounded
+Lucas–Kanade flow with affine estimation. Results stream to a preview overlay;
+the canonical project, save state, export data, and undo history remain
+unchanged until the complete result passes document, media, generation, and
+per-track revision checks. The accepted tracker observations and inclusive gap
+records then commit atomically as one undo step.
+
+Manual anchors are never overwritten. Reaching another present anchor reseeds
+that track; an absence anchor or failed track produces a stable ``occluded``,
+``low_confidence``, ``out_of_frame``, or ``scene_cut`` gap while other tracks
+continue. Cancel, document replacement, shutdown, stale state, or a backend or
+decoder failure clears the preview without changing the durable project.
+
+Editing tracker or interpolated geometry creates an accepted manual correction
+immediately. A separate background job regenerates only the open segments up
+to the nearest manual anchor on either side. Successful regeneration is a
+second undo entry; failure or stale state preserves the correction and all
+previous generated data.
+
+## Optional SAM 2 backend
+
+Open **Tools → SAM Settings…** and choose **Auto**, **OpenCV**, or **SAM 2**.
+SAM 2 requires Linux, Python 3.10 or newer, compatible CUDA-enabled PyTorch and
+torchvision, an official SAM 2 source installation, and local matching
+checkpoint and config files. The config must be selected from the installed
+``sam2`` package's ``configs`` directory.
+
+Follow [Meta's official source-install and checkpoint instructions](https://github.com/facebookresearch/sam2#installation),
+then select the two files in labelImg++. The application never downloads or
+bundles Torch, SAM 2, model checkpoints, or configs, and these packages are
+intentionally not part of the base, ``sam``, ``video``, or combined extras.
+
+**Auto** evaluates those requirements only when propagation starts and uses
+SAM 2 when all are satisfied; otherwise it uses portable OpenCV. Explicit
+**SAM 2** selection reports an actionable error without falling back. SAM 2
+turns video masks into simplified polygons or tight rectangles matching the
+track type and records no-object results as normal propagation gaps. The same
+preview, atomic commit, manual-anchor, cancellation, revision, and undo rules
+apply to both backends.
+
+## Legacy optical-flow suggestions and review
 
 Tracking starts from an accepted exact rectangle. Select it, then press `T` or
 `Shift+T`. The endpoint dialog defaults to the next manual anchor in that
@@ -115,5 +164,5 @@ verification state, and track IDs for every image.
 ## Scope
 
 Live/network streams, audio playback or editing, multi-stream selection,
-automatic polygon propagation, SAM2 video masks, and native MOT/CVAT-video
-project formats are not included.
+automatic propagation after drawing, bundled model runtimes/checkpoints, and
+native MOT/CVAT-video project formats are not included.

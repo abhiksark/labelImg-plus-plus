@@ -106,7 +106,12 @@ from libs.core.video_project import (
 )
 from libs.core.video_model import MaterializedTrack, VideoProjectModel
 from libs.core.video_export import export_video_frames
-from libs.core.video_tracking import OpenCVPropagationBackend, track_optical_flow
+from libs.core.video_tracking import (  # noqa: F401 - compatibility patch seam
+    OpenCVPropagationBackend, track_optical_flow,
+)
+from libs.core.video_sam2 import (
+    ConfiguredPropagationBackend, normalize_propagation_backend,
+)
 from libs.core.video_session import (
     VideoOpenProblem, is_video_project, prepare_video_open,
 )
@@ -148,6 +153,8 @@ from libs.utils.constants import (
     FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
     SETTING_SAM_ENCODER, SETTING_SAM_DECODER, SETTING_SAM_OUTPUT_MODE,
+    SETTING_VIDEO_PROPAGATION_BACKEND, SETTING_VIDEO_SAM2_CHECKPOINT,
+    SETTING_VIDEO_SAM2_CONFIG,
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
@@ -208,6 +215,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.workspace_settings = load_workspace_settings(settings)
         self.sam_output_mode = normalize_sam_output_mode(
             settings.get(SETTING_SAM_OUTPUT_MODE, 'polygon'))
+        self.video_propagation_backend = normalize_propagation_backend(
+            settings.get(SETTING_VIDEO_PROPAGATION_BACKEND, 'auto'))
+        self.video_sam2_checkpoint = str(
+            settings.get(SETTING_VIDEO_SAM2_CHECKPOINT, '') or '')
+        self.video_sam2_config = str(
+            settings.get(SETTING_VIDEO_SAM2_CONFIG, '') or '')
 
         self.shortcut_config = ShortcutConfig()
         if settings.get(SETTING_SHORTCUTS):
@@ -2134,6 +2147,9 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog = SamSettingsDialog(
             encoder_path=self.settings.get(SETTING_SAM_ENCODER, ""),
             decoder_path=self.settings.get(SETTING_SAM_DECODER, ""),
+            propagation_backend=self.video_propagation_backend,
+            sam2_checkpoint=self.video_sam2_checkpoint,
+            sam2_config=self.video_sam2_config,
             parent=self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
@@ -2141,6 +2157,15 @@ class MainWindow(QMainWindow, WindowMixin):
             values = dialog.values()
             self.settings[SETTING_SAM_ENCODER] = values["encoder"]
             self.settings[SETTING_SAM_DECODER] = values["decoder"]
+            propagation = dialog.propagation_values()
+            self.video_propagation_backend = propagation["backend"]
+            self.video_sam2_checkpoint = propagation["checkpoint"]
+            self.video_sam2_config = propagation["config"]
+            self.settings[SETTING_VIDEO_PROPAGATION_BACKEND] = \
+                self.video_propagation_backend
+            self.settings[SETTING_VIDEO_SAM2_CHECKPOINT] = \
+                self.video_sam2_checkpoint
+            self.settings[SETTING_VIDEO_SAM2_CONFIG] = self.video_sam2_config
             self.settings.save()
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.reset_backend()    # reload model on next use
@@ -3894,7 +3919,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_before_state = model.snapshot_state()
         self._propagation_preview = {}
         self._propagation_preview_gaps = {}
-        backend = OpenCVPropagationBackend()
+        backend = ConfiguredPropagationBackend(
+            self.video_propagation_backend,
+            self.video_sam2_checkpoint, self.video_sam2_config)
 
         def propagate(handle):
             results = []
@@ -4099,7 +4126,9 @@ class MainWindow(QMainWindow, WindowMixin):
             'before': model.snapshot_state(), 'handle': None,
         }
         self._regeneration_runs[track_id] = run
-        backend = OpenCVPropagationBackend()
+        backend = ConfiguredPropagationBackend(
+            self.video_propagation_backend,
+            self.video_sam2_checkpoint, self.video_sam2_config)
 
         def regenerate(handle):
             results = []
@@ -7139,9 +7168,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Refresh save status indicator colors
         if hasattr(self, 'label_save_status'):
-            # Preserve current saved state (check if green/saved or orange/unsaved)
-            current_stylesheet = self.label_save_status.styleSheet()
-            is_saved = 'green' in current_stylesheet or colors['status_saved'] in current_stylesheet
+            # Preserve semantic state across palettes instead of trying to
+            # recognize the previous theme's color token.
+            is_saved = self.label_save_status.toolTip() == 'Saved'
             self._update_save_status_style(saved=is_saved)
 
         # Refresh format button icon for current theme

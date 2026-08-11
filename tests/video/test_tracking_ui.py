@@ -7,6 +7,7 @@ from libs.core.video_types import (
     ObservationRecord, PropagationBatch, PropagationResult, TrackGapRecord,
     VideoFrameRef,
 )
+from libs.core.video_sam2 import Sam2Availability
 
 
 def _wait(app, predicate, timeout=8):
@@ -229,6 +230,37 @@ def test_propagate_all_includes_rectangle_and_polygon_current_anchors(
         assert captured
         assert all(set(values) == {'rectangle', 'polygon'}
                    for values in captured)
+    finally:
+        _close_window(app, window)
+
+
+def test_explicit_unavailable_sam2_keeps_canonical_model_unchanged(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(
+        tmp_path / 'sam2-unavailable.mp4', frames=12,
+        width=128, height=96, tracking_stress=True)
+    try:
+        assert window.open_video(video)
+        _seed(window)
+        baseline = window.video_model.snapshot_state()
+        baseline_undo = len(window.undo_stack)
+        window.video_propagation_backend = 'sam2'
+        window.video_sam2_checkpoint = '/missing/model.pt'
+        window.video_sam2_config = '/missing/model.yaml'
+        with patch(
+                'libs.core.video_sam2.inspect_sam2_environment',
+                return_value=Sam2Availability(
+                    False, ('a working CUDA runtime is required',))):
+            assert window.track_selected_forward() is not None
+            assert _wait(app, lambda: window._propagation_handle is None)
+        assert window.video_model.snapshot_state() == baseline
+        assert len(window.undo_stack) == baseline_undo
+        assert not window._propagation_preview
+        assert 'SAM 2 propagation is unavailable' \
+            in window.statusBar().currentMessage()
+        assert 'Select OpenCV or Auto' \
+            in window.statusBar().currentMessage()
     finally:
         _close_window(app, window)
 

@@ -86,3 +86,64 @@ def test_sam_output_toggle_is_contextual_and_persists(monkeypatch, tmp_path):
         win.close()
         app.processEvents()
         app.processEvents()
+
+
+def test_video_propagation_settings_are_normalized_and_persisted(
+        monkeypatch, tmp_path):
+    from libs.utils.constants import (
+        SETTING_VIDEO_PROPAGATION_BACKEND, SETTING_VIDEO_SAM2_CHECKPOINT,
+        SETTING_VIDEO_SAM2_CONFIG,
+    )
+    from libs.widgets import sam_settings_dialog
+
+    settings_path = tmp_path / 'settings.json'
+
+    def load_isolated(settings):
+        settings.path = str(settings_path)
+        settings.data = {
+            SETTING_VIDEO_PROPAGATION_BACKEND: 'obsolete',
+            SETTING_VIDEO_SAM2_CHECKPOINT: '/old.pt',
+            SETTING_VIDEO_SAM2_CONFIG: '/old.yaml',
+        }
+        return True
+
+    captured = {}
+
+    class FakeDialog:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def apply_theme(self, _theme):
+            pass
+
+        def exec_(self):
+            return True
+
+        def values(self):
+            return {'encoder': '', 'decoder': ''}
+
+        def propagation_values(self):
+            return {
+                'backend': 'sam2', 'checkpoint': '/new.pt',
+                'config': '/new.yaml'}
+
+    monkeypatch.setattr(app_mod.Settings, 'load', load_isolated)
+    monkeypatch.setattr(sam_settings_dialog, 'SamSettingsDialog', FakeDialog)
+    win = app_mod.MainWindow(default_filename=None,
+                             default_prefdef_class_file=None,
+                             default_save_dir=str(tmp_path))
+    try:
+        assert win.video_propagation_backend == 'auto'
+        win.open_sam_settings()
+        assert captured['propagation_backend'] == 'auto'
+        assert captured['sam2_checkpoint'] == '/old.pt'
+        assert captured['sam2_config'] == '/old.yaml'
+        assert win.video_propagation_backend == 'sam2'
+        saved = json.loads(settings_path.read_text())
+        assert saved[SETTING_VIDEO_PROPAGATION_BACKEND] == 'sam2'
+        assert saved[SETTING_VIDEO_SAM2_CHECKPOINT] == '/new.pt'
+        assert saved[SETTING_VIDEO_SAM2_CONFIG] == '/new.yaml'
+    finally:
+        win.close()
+        app.processEvents()
+        app.processEvents()

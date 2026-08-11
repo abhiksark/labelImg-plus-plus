@@ -41,6 +41,7 @@ libs/core/video_export.py
 libs/core/video_model.py
 libs/core/video_project.py
 libs/core/video_propagation.py
+libs/core/video_sam2.py
 libs/core/video_session.py
 libs/core/video_tracking.py
 libs/core/video_types.py

@@ -15,11 +15,18 @@ def test_values_reflect_initial_settings():
 
 def test_defaults_are_empty():
     assert SamSettingsDialog().values() == {"encoder": "", "decoder": ""}
+    assert SamSettingsDialog().propagation_values() == {
+        "backend": "auto", "checkpoint": "", "config": ""}
 
 
 def test_values_are_stripped():
-    dlg = SamSettingsDialog(encoder_path="  /e.onnx ", decoder_path=" ")
+    dlg = SamSettingsDialog(
+        encoder_path="  /e.onnx ", decoder_path=" ",
+        propagation_backend="sam2", sam2_checkpoint=" /m.pt ",
+        sam2_config=" /m.yaml ")
     assert dlg.values() == {"encoder": "/e.onnx", "decoder": ""}
+    assert dlg.propagation_values() == {
+        "backend": "sam2", "checkpoint": "/m.pt", "config": "/m.yaml"}
 
 
 def test_model_type_and_device_fields_are_gone():
