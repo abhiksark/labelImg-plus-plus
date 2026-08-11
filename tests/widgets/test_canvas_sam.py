@@ -34,6 +34,25 @@ def test_commit_polygon_ignores_degenerate_input():
     assert c.shapes == []
 
 
+def test_commit_rectangle_stages_tight_provisional_box():
+    c = _canvas()
+    fired = []
+    c.newShape.connect(lambda: fired.append(True))
+    c.commit_rectangle((10, 20, 41, 61))
+    shape = c.provisional_shape
+    assert c.shapes == []
+    assert shape.shape_type == ShapeType.RECTANGLE
+    assert [(point.x(), point.y()) for point in shape.points] == [
+        (10.0, 20.0), (41.0, 20.0), (41.0, 61.0), (10.0, 61.0)]
+    assert fired == [True]
+
+
+def test_commit_rectangle_rejects_zero_area_bounds():
+    c = _canvas()
+    c.commit_rectangle((10, 10, 10, 20))
+    assert c.provisional_shape is None
+
+
 def test_left_click_in_sam_mode_emits_samclicked_in_image_coords():
     c = _canvas()
     c.scale = 1.0

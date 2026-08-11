@@ -10,3 +10,4 @@ def test_legacy_torch_setting_keys_are_gone():
 def test_onnx_sam_setting_keys_exist_and_are_namespaced():
     assert constants.SETTING_SAM_ENCODER == 'sam/encoderPath'
     assert constants.SETTING_SAM_DECODER == 'sam/decoderPath'
+    assert constants.SETTING_SAM_OUTPUT_MODE == 'sam/outputMode'

@@ -5,13 +5,13 @@ import os
 try:
     from PyQt5.QtCore import Qt, pyqtSignal
     from PyQt5.QtWidgets import (
-        QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+        QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
         QStackedWidget, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:
     from PyQt4.QtCore import Qt, pyqtSignal
     from PyQt4.QtGui import (
-        QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+        QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
         QStackedWidget, QToolButton, QVBoxLayout, QWidget,
     )
 
@@ -25,6 +25,54 @@ def _action_button(action, parent):
     button.setAutoRaise(True)
     button.setFixedSize(scale_px(32), scale_px(32))
     return button
+
+
+class SamOutputModeToggle(QWidget):
+    """Compact contextual selector for Smart Select geometry output."""
+
+    modeChanged = pyqtSignal(str)
+
+    def __init__(self, mode='polygon', parent=None):
+        super(SamOutputModeToggle, self).__init__(parent)
+        self.setObjectName('samOutputModeToggle')
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(scale_px(6), 0, scale_px(6), 0)
+        layout.setSpacing(0)
+        label = QLabel('Output')
+        label.setObjectName('samOutputModeLabel')
+        layout.addWidget(label)
+        layout.addSpacing(scale_px(4))
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons = {}
+        for value, text in (('box', 'Box'), ('polygon', 'Polygon')):
+            button = QToolButton(self)
+            button.setObjectName('samOutput' + text + 'Button')
+            button.setText(text)
+            button.setCheckable(True)
+            button.setAutoRaise(True)
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setFixedHeight(scale_px(28))
+            button.setMinimumWidth(scale_px(48 if value == 'box' else 68))
+            button.setProperty('outputMode', value)
+            button.clicked.connect(self._emit_mode)
+            self.group.addButton(button)
+            self.buttons[value] = button
+            layout.addWidget(button)
+        self.set_mode(mode)
+        self.hide()
+
+    def set_mode(self, mode):
+        normalized = mode if mode in ('box', 'polygon') else 'polygon'
+        self.buttons[normalized].setChecked(True)
+
+    def mode(self):
+        return ('box' if self.buttons['box'].isChecked() else 'polygon')
+
+    def _emit_mode(self, _checked=False):
+        button = self.sender()
+        if button is not None:
+            self.modeChanged.emit(str(button.property('outputMode')))
 
 
 class EmptyWorkspacePage(QWidget):
@@ -101,6 +149,8 @@ class CanvasChrome(QWidget):
         layout.addSpacing(scale_px(8))
         for action in (fit_window, fit_width, actual_size):
             layout.addWidget(_action_button(action, self))
+        self.sam_output_toggle = SamOutputModeToggle(parent=self)
+        layout.addWidget(self.sam_output_toggle)
         layout.addStretch(1)
         visibility = QToolButton(self)
         visibility.setObjectName('annotationVisibilityButton')
@@ -143,6 +193,7 @@ class WorkspacePages(QWidget):
             actions.zoomOut, zoom_widget, actions.zoomIn,
             actions.fitWindow, actions.fitWidth, actions.zoomOrg,
             actions.hideAll, actions.showAll, self.canvas_page)
+        self.sam_output_toggle = self.canvas_chrome.sam_output_toggle
         canvas_layout.addWidget(self.canvas_chrome)
         canvas_layout.addWidget(scroll_area, 1)
         canvas_layout.addWidget(timeline)

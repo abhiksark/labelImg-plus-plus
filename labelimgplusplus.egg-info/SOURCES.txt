@@ -29,6 +29,7 @@ libs/core/plugin_manager.py
 libs/core/plugin_registry.py
 libs/core/profiling.py
 libs/core/sam_controller.py
+libs/core/sam_types.py
 libs/core/save_pipeline.py
 libs/core/settings.py
 libs/core/shape.py

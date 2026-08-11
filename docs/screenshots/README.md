@@ -40,6 +40,11 @@ captures retain those logical sizes and are stored at 2732x1536 and 2880x1800
 physical pixels. The empty Objects projection demonstrates that provisional
 geometry is not canonical until class confirmation.
 
+`workspace-3.3-sam-output-mode/` contains the matching light/dark and 1x/2x
+matrix for Smart Select's contextual Box/Polygon selector. The control appears
+only while Smart Select is active, retains the fixed canvas chrome height, and
+leaves all primary workspace controls unclipped at both approval sizes.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots
