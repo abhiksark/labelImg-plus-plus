@@ -49,7 +49,9 @@ def test_splitter_reparents_existing_controls_without_backing_duplicates(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
     try:
-        assert window.workspace_shell.splitter.widget(0) is window.scroll_area
+        assert window.workspace_shell.splitter.widget(0) is \
+            window.workspace_pages
+        assert window.scroll_area.parent() is window.workspace_pages.canvas_page
         assert window.workspace_shell.splitter.widget(1) is \
             window.workspace_inspector
         assert window.workspace_inspector.tabs.widget(0) is \
@@ -63,9 +65,9 @@ def test_splitter_reparents_existing_controls_without_backing_duplicates(
         assert window.file_list_widget.parent() is not None
 
         assert window.findChildren(QToolBar) == []
-        assert window.findChildren(QDockWidget) == [window.timeline_dock]
-        assert window.timeline_dock.features() == \
-            QDockWidget.DockWidgetMovable
+        assert window.findChildren(QDockWidget) == []
+        assert window.video_timeline.parent() is \
+            window.workspace_pages.canvas_page
     finally:
         _close(window)
 

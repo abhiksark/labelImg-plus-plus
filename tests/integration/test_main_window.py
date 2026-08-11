@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
 from PyQt5.QtCore import QPointF, Qt, QEvent  # noqa: E402
 from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
+from PyQt5.QtWidgets import QToolButton  # noqa: E402
 
 from labelImgPlusPlus import get_main_app  # noqa: E402
 from libs.core.shape import Shape  # noqa: E402
@@ -1367,12 +1368,7 @@ class TestBatchVerify(unittest.TestCase):
 
 
 class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):
-    """MainWindow status-bar label widths scale with DPI (issue #66).
-
-    Dock minimums (200x100) are also wrapped in scale_px, but their effective
-    minimumWidth/Height is content-dominated (the docked widgets impose a
-    larger floor), so they are not asserted here.
-    """
+    """The compact canvas/status chrome scales without fixed label floors."""
 
     @classmethod
     def setUpClass(cls):
@@ -1385,10 +1381,11 @@ class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):
         with patch.object(dpi, 'get_dpi_scale_factor', return_value=2.0):
             cls.app, cls.win = get_main_app()
 
-    def test_status_bar_label_minimums_double_at_2x(self):
-        self.assertEqual(self.win.label_image_count.minimumWidth(), 200)
-        self.assertEqual(self.win.label_box_count.minimumWidth(), 140)
-        self.assertEqual(self.win.label_zoom.minimumWidth(), 160)
+    def test_slim_status_and_canvas_buttons_double_at_2x(self):
+        self.assertEqual(self.win.workspace_pages.status_strip.height(), 48)
+        button = self.win.workspace_pages.canvas_chrome.findChildren(
+            QToolButton)[0]
+        self.assertEqual(button.width(), 64)
 
 
 if __name__ == '__main__':

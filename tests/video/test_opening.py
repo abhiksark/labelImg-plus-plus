@@ -219,6 +219,7 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
 
         assert window.video_snapshot.read_only is True
         assert window.canvas.locked is True
+        assert 'Read-only' in window.label_save_status.text()
         assert not window.actions.verify.isEnabled()
         assert not window.actions.delete.isEnabled()
         assert not window.actions.videoAddKeyframe.isEnabled()
