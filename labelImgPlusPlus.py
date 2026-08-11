@@ -20,7 +20,7 @@ try:
     )
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
-        QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
+        QDialog, QFileDialog, QHBoxLayout, QLabel,
         QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
         QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
@@ -35,7 +35,7 @@ except ImportError:
         sip.setapi('QVariant', 2)
     from PyQt4.QtGui import (
         QColor, QCursor, QImage, QImageReader, QPixmap,
-        QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
+        QAction, QActionGroup, QApplication, QCheckBox,
         QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
         QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
@@ -70,6 +70,7 @@ from libs.widgets.annotationInspector import (
     AnnotationFilterProxyModel, AnnotationListModel, AnnotationRoles,
     UnifiedAnnotationView,
 )
+from libs.widgets.workspacePages import WorkspacePages
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -460,15 +461,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.undo_stack = UndoStack(max_size=50)
         self.undo_stack.add_callback(self.update_undo_redo_actions)
 
-        self.setCentralWidget(scroll)
-
         self.video_timeline = VideoTimelineWidget(self)
-        self.timeline_dock = QDockWidget('Video Timeline', self)
-        self.timeline_dock.setObjectName('videoTimeline')
-        self.timeline_dock.setWidget(self.video_timeline)
-        self.timeline_dock.setFeatures(QDockWidget.DockWidgetMovable)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.timeline_dock)
-        self.timeline_dock.hide()
+        self.video_timeline.setObjectName('videoTimeline')
+        self.video_timeline.hide()
         self.video_timeline.seekRequested.connect(self.request_video_frame)
         self.video_timeline.previousRequested.connect(
             self.request_previous_video_frame)
@@ -893,6 +888,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
                               fitWindow=fit_window, fitWidth=fit_width,
+                              hideAll=hide_all, showAll=show_all,
                               zoomActions=zoom_actions,
                               lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
                               lightActions=light_actions,
@@ -1084,7 +1080,57 @@ class MainWindow(QMainWindow, WindowMixin):
             ('smartSelect', 'Smart Select', sam_mode_action),
             ('keypoints', 'Keypoints', keypoint_mode_action),
         ), self)
-        canvas_column = self.takeCentralWidget()
+
+        # Keep a hidden native QStatusBar as the compatibility message bus;
+        # its projection is rendered by the slim workspace strip below.
+        self.label_status_message = QLabel('%s started.' % __appname__)
+        self.label_status_message.setObjectName('workspaceStatusMessage')
+        self.label_image_count = QLabel('Image: 0 / 0')
+        self.label_dimensions = QLabel('0 x 0')
+        self.label_box_count = QLabel('Objects: 0')
+        self.label_active_tool = QLabel('Select')
+        self.label_zoom = QLabel('Zoom: 100%')
+        self.label_save_status = QLabel('● Saved')
+        self.label_coordinates = QLabel('')
+        self._update_save_status_style(saved=True)
+
+        self.full_gallery = GalleryWidget(
+            show_size_slider=True, coordinator=self.task_coordinator)
+        self.full_gallery.set_save_dir(self.default_save_dir)
+        self.full_gallery.set_status_filter(
+            self.status_filter_combo.currentIndex())
+        self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
+        self.full_gallery.image_selected.connect(
+            lambda path: self.gallery_image_selected(path, source='full'))
+        self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
+        self.gallery_stats = StatsWidget()
+        self.gallery_stats.refresh_btn.clicked.connect(
+            self._refresh_all_statistics)
+        self.gallery_stats.setMaximumWidth(scale_px(300))
+        self.gallery_stats.setMinimumWidth(0)
+        gallery_page = QWidget()
+        gallery_page.setObjectName('embeddedGalleryPage')
+        gallery_layout = QHBoxLayout(gallery_page)
+        gallery_layout.setContentsMargins(0, 0, 0, 0)
+        gallery_layout.setSpacing(0)
+        gallery_layout.addWidget(self.full_gallery, stretch=4)
+        gallery_layout.addWidget(self.gallery_stats, stretch=1)
+
+        canvas_column = WorkspacePages(
+            self.scroll_area, self.video_timeline, gallery_page,
+            (self.label_status_message, self.label_save_status,
+             self.label_dimensions, self.label_image_count,
+             self.label_box_count, self.label_active_tool,
+             self.label_zoom, self.label_coordinates),
+            self.actions, self.zoom_widget, self)
+        self.workspace_pages = canvas_column
+        self.workspace_pages.empty_page.recentActivated.connect(
+            self._open_workspace_recent)
+        for tool_action in (
+                self.actions.editMode, self.actions.create,
+                self.actions.create_polygon, self.actions.sam_mode,
+                self.actions.keypoint_mode):
+            tool_action.changed.connect(self._update_active_tool_status)
         self.workspace_inspector = WorkspaceInspector(
             self.annotation_controls, self.file_controls, self)
         self.workspace_inspector.set_selected_tab(
@@ -1095,6 +1141,7 @@ class MainWindow(QMainWindow, WindowMixin):
             collapsed=self.workspace_settings.inspector_collapsed,
             parent=self)
         self.setCentralWidget(self.workspace_shell)
+        self.setAcceptDrops(True)
         self._inspector_width_timer = QTimer(self)
         self._inspector_width_timer.setSingleShot(True)
         self._inspector_width_timer.setInterval(200)
@@ -1128,8 +1175,11 @@ class MainWindow(QMainWindow, WindowMixin):
             create_polygon, None,
             hide_all, show_all)
 
-        self.statusBar().showMessage('%s started.' % __appname__)
-        self.statusBar().show()
+        compatibility_status = self.statusBar()
+        compatibility_status.messageChanged.connect(
+            self.label_status_message.setText)
+        compatibility_status.showMessage('%s started.' % __appname__)
+        compatibility_status.hide()
 
         # Application state.
         self.image = QImage()
@@ -1137,6 +1187,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.last_open_dir = None
         self.recent_files = []
         self.max_recent = 7
+        self.workspace_pages.empty_page.set_recent_paths(
+            path for path in self.recent_files if os.path.exists(path))
         self.line_color = None
         self.fill_color = None
         self.zoom_level = 100
@@ -1150,6 +1202,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.recent_files = [ustr(i) for i in recent_file_qstring_list]
             else:
                 self.recent_files = recent_file_qstring_list = settings.get(SETTING_RECENT_FILES)
+        self.workspace_pages.empty_page.set_recent_paths(
+            path for path in self.recent_files if os.path.exists(path))
 
         size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
         position = QPoint(0, 0)
@@ -1167,7 +1221,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.default_save_dir = save_dir
             self.statusBar().showMessage('%s started. Annotation will be saved to %s' %
                                          (__appname__, self.default_save_dir))
-            self.statusBar().show()
+            self.statusBar().hide()
 
         # Obsolete dock-layout bytes remain untouched for downgrade use. The
         # modern splitter restores only its validated workspace settings.
@@ -1203,31 +1257,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.light_widget.valueChanged.connect(self.paint_canvas)
 
         self.populate_mode_actions()
-
-        # Status bar permanent widgets (left to right)
-        # Image counter
-        self.label_image_count = QLabel('Image: 0 / 0')
-        self.label_image_count.setMinimumWidth(scale_px(100))
-        self.statusBar().addPermanentWidget(self.label_image_count)
-
-        # Annotation count
-        self.label_box_count = QLabel('Boxes: 0')
-        self.label_box_count.setMinimumWidth(scale_px(70))
-        self.statusBar().addPermanentWidget(self.label_box_count)
-
-        # Zoom level
-        self.label_zoom = QLabel('Zoom: 100%')
-        self.label_zoom.setMinimumWidth(scale_px(80))
-        self.statusBar().addPermanentWidget(self.label_zoom)
-
-        # Save status indicator
-        self.label_save_status = QLabel('●')
-        self._update_save_status_style(saved=True)  # Use helper method
-        self.statusBar().addPermanentWidget(self.label_save_status)
-
-        # Display cursor coordinates at the right of status bar
-        self.label_coordinates = QLabel('')
-        self.statusBar().addPermanentWidget(self.label_coordinates)
 
         # Replace the native in-app menu row with the compact workspace bar.
         # The original QMenus stay alive and are exposed as submenus so every
@@ -1348,78 +1377,36 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings.save()
 
     def toggle_gallery_mode(self, value=True):
-        """Toggle between normal view and full-screen gallery mode."""
+        """Switch the central stack without detaching workspace chrome."""
         if hasattr(self, '_toggling_gallery') and self._toggling_gallery:
             return
         self._toggling_gallery = True
         self._gallery_batch_id += 1
         try:
-            self.gallery_mode_enabled = value
-            self._cleanup_existing_gallery()
-
-            if value:
-                self._create_gallery_window()
+            self.gallery_mode_enabled = bool(value)
+            if self.gallery_mode_enabled:
+                self.workspace_pages.set_page('gallery')
                 QTimer.singleShot(0, self._refresh_full_gallery_statuses)
                 QTimer.singleShot(100, self._refresh_all_statistics)
                 if self.file_path:
                     self.full_gallery.select_image(self.file_path)
-                self.gallery_window.showMaximized()
+            else:
+                page = ('empty' if self.document_kind == DocumentKind.NONE
+                        else 'canvas')
+                self.workspace_pages.set_page(page)
         finally:
             self._toggling_gallery = False
 
     def _cleanup_existing_gallery(self):
-        """Clean up any existing gallery resources."""
-        if hasattr(self, 'full_gallery') and self.full_gallery:
-            try:
-                self.full_gallery.image_selected.disconnect()
-                self.full_gallery.image_activated.disconnect()
-            except TypeError:
-                pass
-            self.full_gallery = None
-        if hasattr(self, 'gallery_stats') and self.gallery_stats:
-            self.gallery_stats = None
-        if hasattr(self, 'gallery_window') and self.gallery_window:
-            self.gallery_window.close()
-            self.gallery_window = None
+        """Compatibility hook: the embedded gallery has no resources to tear down."""
+        if hasattr(self, 'workspace_pages'):
+            page = ('empty' if self.document_kind == DocumentKind.NONE
+                    else 'canvas')
+            self.workspace_pages.set_page(page)
 
     def _create_gallery_window(self):
-        """Create and configure the gallery window with widgets."""
-        self.gallery_window = QMainWindow(self)
-        self.gallery_window.setWindowTitle(
-            "Gallery Mode - Double-click to select, Press Escape or close to exit"
-        )
-        # Apply theme stylesheet to gallery_window to isolate from parent cascade
-        if hasattr(self, '_current_theme'):
-            self.gallery_window.setStyleSheet(get_stylesheet(self._current_theme))
-
-        central_widget = QWidget()
-        layout = QHBoxLayout(central_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Gallery widget (main area)
-        self.full_gallery = GalleryWidget(
-            show_size_slider=True, coordinator=self.task_coordinator)
-        # Apply current theme to full gallery
-        if hasattr(self, '_current_theme'):
-            self.full_gallery.apply_theme(self._current_theme)
-        self.full_gallery.set_save_dir(self.default_save_dir)
-        self.full_gallery.set_status_filter(
-            self.status_filter_combo.currentIndex())
-        self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
-        self.full_gallery.image_selected.connect(
-            lambda path: self.gallery_image_selected(path, source='full'))
-        self.full_gallery.image_activated.connect(self._exit_gallery_and_load)
-        layout.addWidget(self.full_gallery, stretch=4)
-
-        # Stats panel (side)
-        self.gallery_stats = StatsWidget()
-        self.gallery_stats.refresh_btn.clicked.connect(self._refresh_all_statistics)
-        self.gallery_stats.setMaximumWidth(scale_px(300))
-        self.gallery_stats.setMinimumWidth(scale_px(250))
-        layout.addWidget(self.gallery_stats, stretch=1)
-
-        self.gallery_window.setCentralWidget(central_widget)
+        """Compatibility entry point for the now-embedded gallery."""
+        self.workspace_pages.set_page('gallery')
 
     def _exit_gallery_and_load(self, image_path):
         """Exit gallery mode and load the selected image."""
@@ -1608,11 +1595,17 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_image_count.setText(f'Image: {idx} / {len(self.m_img_list)}')
         else:
             self.label_image_count.setText('Image: 0 / 0')
+        size = getattr(self, '_original_image_size', QSize())
+        if size is None or not size.isValid():
+            size = self.image.size() if self.image is not None else QSize()
+        self.label_dimensions.setText(
+            '%s x %s' % (size.width(), size.height())
+            if size.isValid() else '0 x 0')
 
     def update_box_count(self):
         """Update annotation count in status bar."""
         count = len(self.canvas.shapes) if self.canvas else 0
-        self.label_box_count.setText(f'Boxes: {count}')
+        self.label_box_count.setText(f'Objects: {count}')
 
     def update_zoom_display(self):
         """Update zoom level in status bar."""
@@ -1623,14 +1616,23 @@ class MainWindow(QMainWindow, WindowMixin):
         """Update save status indicator style based on theme."""
         from libs.utils.styles import get_theme_colors
         colors = get_theme_colors(self._current_theme)
-        if saved:
+        read_only = (
+            self.document_kind == DocumentKind.VIDEO
+            and self.video_snapshot is not None
+            and self.video_snapshot.read_only)
+        if read_only:
+            color = colors['text_secondary']
+            tooltip = 'Read-only'
+        elif saved:
             color = colors['status_saved']
             tooltip = 'Saved'
         else:
             color = colors['status_unsaved']
             tooltip = 'Unsaved changes'
 
-        self.label_save_status.setStyleSheet(f'color: {color}; font-size: 14px;')
+        self.label_save_status.setText('● ' + tooltip)
+        self.label_save_status.setStyleSheet(
+            f'color: {color}; font-size: 12px;')
         self.label_save_status.setToolTip(tooltip)
 
     def update_save_status(self, saved=True):
@@ -1646,6 +1648,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.annotation_search.clear()
         self.file_path = None
         self.image_data = None
+        self._original_image_size = QSize()
         self.label_file = None
         self.canvas.reset_state()
         self.label_coordinates.clear()
@@ -1653,7 +1656,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Clear undo stack when loading new file
         self.undo_stack.clear()
         # Reset status bar widgets
-        self.label_box_count.setText('Boxes: 0')
+        self.label_box_count.setText('Objects: 0')
         self.update_save_status(saved=True)
         self._sync_command_bar()
         self._publish_plugin_document(new_generation=True, force=True)
@@ -1667,8 +1670,12 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'frame_cache'):
             self.frame_cache.max_images = (
                 12 if kind == DocumentKind.VIDEO else 5)
-        if hasattr(self, 'timeline_dock'):
-            self.timeline_dock.setVisible(kind == DocumentKind.VIDEO)
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.set_video_visible(
+                kind == DocumentKind.VIDEO)
+            if not self.gallery_mode_enabled:
+                self.workspace_pages.set_page(
+                    'empty' if kind == DocumentKind.NONE else 'canvas')
         if hasattr(self, 'annotation_model'):
             if kind == DocumentKind.VIDEO:
                 pts = (None if self.current_video_frame_ref is None else
@@ -1798,6 +1805,50 @@ class MainWindow(QMainWindow, WindowMixin):
         elif len(self.recent_files) >= self.max_recent:
             self.recent_files.pop()
         self.recent_files.insert(0, file_path)
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.empty_page.set_recent_paths(
+                path for path in self.recent_files if os.path.exists(path))
+
+    def _open_workspace_recent(self, path):
+        if os.path.isdir(path):
+            return self.request_import_dir_images(path)
+        return self.request_open_file(path)
+
+    def _supported_workspace_drop(self, path):
+        if not path or not os.path.exists(path):
+            return False
+        if os.path.isdir(path):
+            return True
+        lower = path.lower()
+        return (is_video_project(path)
+                or lower.endswith(VIDEO_EXTENSIONS)
+                or lower.endswith(self._supported_image_extensions()))
+
+    def _workspace_drop_path(self, event):
+        mime = event.mimeData()
+        urls = mime.urls() if mime is not None and mime.hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = os.path.abspath(ustr(urls[0].toLocalFile()))
+        return path if self._supported_workspace_drop(path) else None
+
+    def dragEnterEvent(self, event):
+        if self._workspace_drop_path(event) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        path = self._workspace_drop_path(event)
+        if path is None:
+            event.ignore()
+            self.status('Drop exactly one supported local file or directory')
+            return
+        event.acceptProposedAction()
+        self._open_workspace_recent(path)
 
     def beginner(self):
         return self._beginner
@@ -1989,6 +2040,27 @@ class MainWindow(QMainWindow, WindowMixin):
         }
         active = mapping.get(self.canvas.mode, self.actions.editMode)
         active.setChecked(True)
+        self._update_active_tool_status()
+
+    def _update_active_tool_status(self):
+        if not hasattr(self, 'label_active_tool'):
+            return
+        active = next((action for action in (
+            self.actions.editMode, self.actions.create,
+            self.actions.create_polygon, self.actions.sam_mode,
+            self.actions.keypoint_mode) if action.isChecked()),
+            self.actions.editMode)
+        shortcut = active.shortcut().toString()
+        names = {
+            self.actions.editMode: 'Select',
+            self.actions.create: 'Bounding Box',
+            self.actions.create_polygon: 'Polygon',
+            self.actions.sam_mode: 'Smart Select',
+            self.actions.keypoint_mode: 'Keypoints',
+        }
+        self.label_active_tool.setText(
+            '%s%s' % (names.get(active, active.text().replace('&', '')),
+                      ' (%s)' % shortcut if shortcut else ''))
 
     def open_sam_settings(self):
         """Open the SAM configuration dialog."""
@@ -4897,13 +4969,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
-        self.statusBar().show()
+        self.statusBar().hide()
 
 
     def open_annotation_dialog(self, _value=False):
         if self.file_path is None:
             self.statusBar().showMessage('Please select image first')
-            self.statusBar().show()
+            self.statusBar().hide()
             return
 
         path = os.path.dirname(ustr(self.file_path))\
@@ -5862,7 +5934,7 @@ class MainWindow(QMainWindow, WindowMixin):
             annotation_file_path, self.label_file_format))
         self.set_clean()
         self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
-        self.statusBar().show()
+        self.statusBar().hide()
         # Update gallery status after save
         self._update_current_image_gallery_status()
         return True

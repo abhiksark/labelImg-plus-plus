@@ -99,5 +99,6 @@ libs/widgets/videoExportDialog.py
 libs/widgets/videoTimelineWidget.py
 libs/widgets/view_scaling.py
 libs/widgets/workspaceInspector.py
+libs/widgets/workspacePages.py
 libs/widgets/zoomWidget.py
 resources/icons/feather/LICENSE.txt

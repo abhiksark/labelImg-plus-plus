@@ -24,6 +24,13 @@ approval sizes. Rectangle and polygon rows share one list, with no nested
 annotation tabs; video tests separately cover track rows that are absent from
 the current frame.
 
+`workspace-3.2-final/` is the final Balanced workspace acceptance matrix. It
+contains Empty, Image, embedded Gallery, Video, collapsed-inspector,
+read-only/disabled, dark-mode, and true 2x-DPI image states at 1366x768 and
+1440x900. The matrix verifies that the rail, command bar, inspector, compact
+canvas controls, integrated timeline, and slim status strip remain in the
+single main window with no docks or detached gallery.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots

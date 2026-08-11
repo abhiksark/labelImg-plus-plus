@@ -30,7 +30,7 @@ class WorkspaceInspector(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setMinimumWidth(0)
         self.setMaximumWidth(scale_px(420))
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName('inspectorTabs')
