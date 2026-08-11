@@ -37,6 +37,40 @@ class PluginState(str, Enum):
     SHUTTING_DOWN = "shutting_down"
 
 
+def _diagnostic_field(diagnostic, name, default):
+    try:
+        if isinstance(diagnostic, dict):
+            value = diagnostic.get(name, default)
+        else:
+            value = getattr(diagnostic, name, default)
+    except Exception:
+        return default
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return default
+
+
+def normalize_plugin_diagnostic(plugin_id, diagnostic):
+    """Return a render-safe canonical diagnostic for host storage."""
+    normalized_id = plugin_id if isinstance(plugin_id, str) else "<unknown>"
+    code = _diagnostic_field(diagnostic, "code", "invalid_diagnostic")
+    severity = _diagnostic_field(diagnostic, "severity", "error")
+    return PluginDiagnostic(
+        plugin_id=_diagnostic_field(diagnostic, "plugin_id", normalized_id),
+        phase=_diagnostic_field(diagnostic, "phase", "unknown"),
+        code=code or "invalid_diagnostic",
+        message=_diagnostic_field(
+            diagnostic, "message", "Malformed plugin diagnostic."),
+        details=_diagnostic_field(diagnostic, "details", ""),
+        severity=severity or "error",
+    )
+
+
 @dataclass
 class PluginRecord:
     id: str
@@ -48,6 +82,12 @@ class PluginRecord:
     plugin: object = field(default=None, repr=False)
     context: object = field(default=None, repr=False)
     command_cleanup: object = field(default=None, repr=False)
+
+    def __post_init__(self):
+        self.diagnostics = [
+            normalize_plugin_diagnostic(self.id, diagnostic)
+            for diagnostic in self.diagnostics
+        ]
 
     @property
     def is_active(self):
@@ -279,7 +319,11 @@ class PluginManager(QObject):
         available_ids = set()
         for candidate in candidates:
             available_ids.add(candidate.id)
-            codes = {item.code for item in candidate.diagnostics}
+            diagnostics = [
+                normalize_plugin_diagnostic(candidate.id, item)
+                for item in candidate.diagnostics
+            ]
+            codes = {item.code for item in diagnostics}
             if "duplicate_plugin_id" in codes:
                 state = PluginState.CONFLICTING
             elif "missing_provider_metadata" in codes:
@@ -296,7 +340,7 @@ class PluginManager(QObject):
                 enabled=candidate.id in enabled,
                 candidate=candidate,
                 metadata=self._cached_metadata(candidate.id),
-                diagnostics=list(candidate.diagnostics),
+                diagnostics=diagnostics,
             ))
         configured = set(enabled)
         config = self._plugins_settings_copy().get("config", {})
@@ -491,12 +535,26 @@ class PluginManager(QObject):
 
     def _record_diagnostic(self, record, phase, code, message, details="",
                            severity="error"):
+        fields = {
+            "phase": phase,
+            "code": code,
+            "message": message,
+            "details": details,
+            "severity": severity,
+        }
+        for name, value in fields.items():
+            if not isinstance(value, str):
+                raise TypeError("diagnostic %s must be a string" % name)
+        if not code:
+            raise ValueError("diagnostic code must be non-empty")
+        if not severity:
+            raise ValueError("diagnostic severity must be non-empty")
         record.diagnostics.append(PluginDiagnostic(
             plugin_id=record.id,
             phase=phase,
             code=code,
-            message=str(message),
-            details=str(details),
+            message=message,
+            details=details,
             severity=severity,
         ))
 
@@ -602,4 +660,9 @@ class PluginManager(QObject):
             raise OSError("could not persist plugin settings")
 
 
-__all__ = ["PluginManager", "PluginRecord", "PluginState"]
+__all__ = [
+    "PluginManager",
+    "PluginRecord",
+    "PluginState",
+    "normalize_plugin_diagnostic",
+]

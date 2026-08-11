@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from libs.core.plugin_manager import PluginState
+from libs.core.plugin_manager import PluginState, normalize_plugin_diagnostic
 from libs.utils.constants import SETTING_SHORTCUTS
 from libs.utils.dpi import scale_px
 
@@ -346,6 +346,7 @@ class PluginManagerDialog(QDialog):
             return
         lines = []
         for diagnostic in record.diagnostics:
+            diagnostic = normalize_plugin_diagnostic(record.id, diagnostic)
             lines.append(
                 "[%s] %s/%s: %s" % (
                     diagnostic.severity.upper(), diagnostic.phase,

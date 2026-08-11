@@ -59,6 +59,14 @@ documented in `docs/performance.md`.
 - The workstation profiler performs one warm-up and five measured runs and
   emits `summary.json`, `trace.json`, `resources.csv`, cProfile output, a
   comparison report, and optionally a py-spy flamegraph.
+- The plugin qualification profiler can be executed directly by file path
+  from any working directory. From the repository root, run:
+
+  ```bash
+  repository_root=$(pwd)
+  (cd /tmp && python "$repository_root/tools/performance/profile_plugins.py" \
+    --runs 5 --assert-budgets)
+  ```
 
 ## Coverage Gaps
 

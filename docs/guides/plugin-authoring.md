@@ -159,14 +159,41 @@ def run(self):
 Plugin task keys are host-namespaced. `latest=True` cooperatively cancels the
 previous task with the same local key. The host also cancels plugin work on a
 document-generation change and plugin shutdown, and discards stale results.
-Worker functions must call `check_cancelled()` around expensive steps. Result,
-error, and progress callbacks run on the GUI thread and are converted to
-diagnostics if they raise.
+The submitter and worker receive the same plain `PluginTaskHandle` facade; it
+does not expose Qt signals, a `QObject` parent, coordinator metadata, or an
+atomic non-cancellable phase. The host detaches it from internal work after
+completion or shutdown.
+
+Worker functions must call `check_cancelled()` around expensive steps. It
+raises `concurrent.futures.CancelledError`, so use that standard exception if
+worker-local cleanup is needed:
+
+```python
+from concurrent.futures import CancelledError
+
+try:
+    handle.check_cancelled()
+    result = analyze_file(source_path)
+except CancelledError:
+    release_worker_resources()
+    raise
+```
+
+Result, error, and progress callbacks run on the GUI thread and are converted
+to diagnostics if they raise. A worker exception skips `on_result`, passes its
+message to `on_error`, and records a `task_failed` diagnostic with the complete
+formatted worker traceback in `details`.
 
 Workers may return immutable/plain values or detached `QImage` values. They
 must not create `QPixmap`, widgets, `QAction`, or mutable Shape/Canvas/video
 objects, and must not use unmanaged global thread pools for host-integrated
 work.
+
+Diagnostic `code`, `message`, `details`, and `severity` values must all be
+strings, and `code` and `severity` must be non-empty. Invalid diagnostic
+reporting during activation rolls back the complete activation transaction;
+invalid reporting from a command, document, or task callback is contained as a
+normal callback diagnostic.
 
 ## Observe documents
 
