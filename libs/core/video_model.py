@@ -317,6 +317,120 @@ class VideoProjectModel:
             gaps=tuple(self.gaps[key] for key in gaps),
             failures=result.failures)
 
+    def apply_regeneration_result(self, result, track_id, intervals):
+        """Replace generated data strictly inside correction segments.
+
+        Manual anchors, other tracks, and generated data outside the supplied
+        open intervals are preserved. The replacement advances the model at
+        most once so it can be represented by one undo command.
+        """
+        if not isinstance(result, PropagationResult):
+            raise TypeError('result must be a PropagationResult')
+        if track_id not in self.tracks:
+            raise KeyError(track_id)
+        ranges = tuple(sorted(
+            (int(start), int(end)) for start, end in intervals))
+        if not ranges or any(end <= start for start, end in ranges):
+            raise ValueError('regeneration intervals must have start < end')
+
+        def inside(pts):
+            return any(start < int(pts) < end for start, end in ranges)
+
+        observations = {}
+        for item in result.observations:
+            if item.track_id != track_id:
+                raise ValueError('regeneration result contains another track')
+            if (item.source != 'tracker'
+                    or item.review_state != 'accepted' or item.anchor):
+                raise ValueError(
+                    'regeneration observations must be accepted tracker data')
+            if inside(item.pts):
+                observations[(track_id, int(item.pts))] = item
+        gaps = {}
+        for item in result.gaps:
+            if not isinstance(item, TrackGapRecord):
+                raise TypeError('regeneration gaps must be TrackGapRecord values')
+            if item.track_id != track_id:
+                raise ValueError('regeneration gap contains another track')
+            for start, end in ranges:
+                start_pts = max(int(item.start_pts), start + 1)
+                end_pts = min(int(item.end_pts), end - 1)
+                if end_pts >= start_pts:
+                    value = replace(
+                        item, start_pts=start_pts, end_pts=end_pts)
+                    gaps[(track_id, start_pts, end_pts)] = value
+
+        stale_observations = [
+            key for key, item in self.observations.items()
+            if key[0] == track_id and inside(key[1])
+            and item.source != 'manual']
+        stale_gaps = [
+            key for key, item in self.gaps.items()
+            if item.track_id == track_id
+            and any(item.end_pts > start and item.start_pts < end
+                    for start, end in ranges)]
+        retained_gap_pieces = []
+        for key in stale_gaps:
+            item = self.gaps[key]
+            pieces = [(int(item.start_pts), int(item.end_pts))]
+            for start, end in ranges:
+                cut_start, cut_end = start + 1, end - 1
+                next_pieces = []
+                for piece_start, piece_end in pieces:
+                    if piece_end < cut_start or piece_start > cut_end:
+                        next_pieces.append((piece_start, piece_end))
+                        continue
+                    if piece_start < cut_start:
+                        next_pieces.append((piece_start, cut_start - 1))
+                    if piece_end > cut_end:
+                        next_pieces.append((cut_end + 1, piece_end))
+                pieces = next_pieces
+            retained_gap_pieces.extend(
+                replace(item, start_pts=start, end_pts=end)
+                for start, end in pieces if end >= start)
+        if not stale_observations and not stale_gaps \
+                and not observations and not gaps:
+            return result
+
+        revision = self._advance()
+        for key in stale_observations:
+            del self.observations[key]
+            self._changed_observations.pop(key, None)
+            self._deleted_observations[key] = revision
+        for key in stale_gaps:
+            del self.gaps[key]
+            self._changed_gaps.pop(key, None)
+            self._deleted_gaps[key] = revision
+        for item in retained_gap_pieces:
+            key = (track_id, int(item.start_pts), int(item.end_pts))
+            value = replace(item, revision=revision)
+            self.gaps[key] = value
+            self._changed_gaps[key] = value
+            self._deleted_gaps.pop(key, None)
+        for key, item in observations.items():
+            existing = self.observations.get(key)
+            if existing is not None and existing.source == 'manual':
+                continue
+            value = replace(item, pts=key[1], revision=revision)
+            self.observations[key] = value
+            self._changed_observations[key] = value
+            self._deleted_observations.pop(key, None)
+        for key, item in gaps.items():
+            value = replace(item, revision=revision)
+            self.gaps[key] = value
+            self._changed_gaps[key] = value
+            self._deleted_gaps.pop(key, None)
+        track = replace(self.tracks[track_id], revision=revision)
+        self.tracks[track_id] = track
+        self._changed_tracks[track_id] = track
+        return PropagationResult(
+            result.request_id, result.generation, revision,
+            observations=tuple(
+                self.observations[key] for key in observations
+                if key in self.observations),
+            gaps=tuple(self.gaps[key] for key in gaps),
+            failures=result.failures)
+
     def delete_gap(self, track_id, start_pts, end_pts):
         key = (track_id, int(start_pts), int(end_pts))
         if key not in self.gaps:
