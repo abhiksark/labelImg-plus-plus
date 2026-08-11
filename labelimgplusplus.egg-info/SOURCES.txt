@@ -42,6 +42,7 @@ libs/core/video_project.py
 libs/core/video_session.py
 libs/core/video_tracking.py
 libs/core/video_types.py
+libs/core/workspace_settings.py
 libs/data/predefined_classes.txt
 libs/formats/__init__.py
 libs/formats/annotation_loader.py
@@ -91,8 +92,11 @@ libs/widgets/splitDialog.py
 libs/widgets/statsWidget.py
 libs/widgets/stats_controller.py
 libs/widgets/toolBar.py
+libs/widgets/toolRail.py
 libs/widgets/ultralyticsExportDialog.py
 libs/widgets/videoExportDialog.py
 libs/widgets/videoTimelineWidget.py
 libs/widgets/view_scaling.py
+libs/widgets/workspaceInspector.py
 libs/widgets/zoomWidget.py
+resources/icons/feather/LICENSE.txt
