@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QThread
+from PyQt5.QtCore import QThread, QTimer
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QMessageBox
 
@@ -124,6 +124,23 @@ def test_failed_standalone_open_restores_snapshot_generation(tmp_path):
     finally:
         window.dirty = False
         window.close()
+
+
+def test_queued_statistics_refresh_is_inert_after_window_shutdown(tmp_path):
+    app, window = get_main_app()
+    image_path = str(tmp_path / 'image.png')
+    _image(image_path, 0xFFFFFFFF)
+    window.import_dir_images(str(tmp_path))
+    window.dirty = False
+    window.close()
+
+    # Reproduce the delayed Gallery refresh that can outlive closeEvent. An
+    # exception escaping this PyQt slot aborts the interpreter instead of
+    # becoming an ordinary assertion failure.
+    QTimer.singleShot(0, window._refresh_all_statistics)
+    app.processEvents()
+    app.processEvents()
+    assert window.task_coordinator.is_shutting_down
 
 
 def test_cancelled_standalone_open_does_not_advance_generation(tmp_path):

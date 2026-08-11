@@ -2373,13 +2373,17 @@ class MainWindow(QMainWindow, WindowMixin):
         return None
 
     def _ensure_annotation_catalog(self):
+        coordinator = getattr(self, 'task_coordinator', None)
+        if coordinator is None or coordinator.is_shutting_down:
+            return False
         snapshot = getattr(self, 'dataset_snapshot', None)
         if snapshot is None or not snapshot.image_paths:
-            return
+            return False
         if (self.annotation_catalog.snapshot is not snapshot
                 or (not self.annotation_catalog.entries
                     and self.annotation_catalog._handle is None)):
             self.annotation_catalog.start(snapshot)
+        return True
 
     def _on_catalog_batch(self, statuses):
         converted = {
@@ -6586,7 +6590,11 @@ class MainWindow(QMainWindow, WindowMixin):
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):
         """Complete label data in the shared catalog, then aggregate it."""
-        self._ensure_annotation_catalog()
+        # A refresh may already be queued when closeEvent shuts the worker
+        # lanes down. Submitting from that late Qt callback raises inside a
+        # slot and aborts the process, so closed windows must be inert.
+        if not self._ensure_annotation_catalog():
+            return
         self.annotation_catalog.request_statistics()
 
     def _update_current_image_stats(self):
