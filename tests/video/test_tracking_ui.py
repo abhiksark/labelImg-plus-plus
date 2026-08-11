@@ -16,6 +16,19 @@ def _wait(app, predicate, timeout=8):
     return False
 
 
+def _finished_event(handle):
+    finished = threading.Event()
+    handle.finished.connect(finished.set)
+    return finished
+
+
+def _close_window(app, window):
+    window.dirty = False
+    window.close()
+    app.processEvents()
+    app.processEvents()
+
+
 def _seed(window):
     model = window.video_model
     track = model.create_track(
@@ -74,8 +87,7 @@ def test_tracking_batches_render_pending_and_review_is_undoable(
             item.review_state == 'pending'
             for item in window.video_model.observations.values())
     finally:
-        window.dirty = False
-        window.close()
+        _close_window(app, window)
 
 
 def test_tracking_action_accepts_exact_user_endpoint(tmp_path, make_video):
@@ -91,15 +103,16 @@ def test_tracking_action_accepts_exact_user_endpoint(tmp_path, make_video):
                 return_value=('00:00:00.500', True)):
             handle = window.track_selected_forward(choose_endpoint=True)
         assert handle is not None
+        finished = _finished_event(handle)
         expected = int(round(
             .5 * window.video_snapshot.time_base_den /
             window.video_snapshot.time_base_num))
         assert window._active_tracking_request.end_pts == expected
         window.cancel_video_tracking()
-        assert _wait(app, lambda: window._tracking_handle is None)
+        assert _wait(app, finished.is_set)
+        assert window._tracking_handle is None
     finally:
-        window.dirty = False
-        window.close()
+        _close_window(app, window)
 
 
 def test_external_seed_edit_cancels_and_discards_stale_tracking_result(
@@ -121,16 +134,18 @@ def test_external_seed_edit_cancels_and_discards_stale_tracking_result(
         assert window.open_video(video)
         track = _seed(window)
         with patch('labelImgPlusPlus.track_optical_flow', delayed):
-            window.track_selected_forward()
+            handle = window.track_selected_forward()
+            assert handle is not None
+            finished = _finished_event(handle)
             assert started.wait(1)
             window.video_model.rename_track(track.track_id, 'changed')
             window._on_video_model_mutation()
             gate.set()
-            assert _wait(app, lambda: window._tracking_handle is None)
+            assert _wait(app, finished.is_set)
+            assert window._tracking_handle is None
         assert not any(
             item.source == 'tracker'
             for item in window.video_model.observations.values())
     finally:
         gate.set()
-        window.dirty = False
-        window.close()
+        _close_window(app, window)
