@@ -1,7 +1,28 @@
 pyqt5
 lxml
 
+[profile]
+psutil
+py-spy
+pytest-benchmark
+
 [sam]
 onnxruntime
 numpy
-opencv-python-headless
+opencv-python-headless<6,>=4.8
+
+[video]
+numpy
+opencv-python-headless<6,>=4.8
+
+[video:python_version == "3.10"]
+av<18,>=17.1
+
+[video:python_version == "3.8"]
+av<13,>=12.3
+
+[video:python_version == "3.9"]
+av<16,>=15.1
+
+[video:python_version >= "3.11"]
+av<19,>=18

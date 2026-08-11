@@ -29,7 +29,7 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Version 3.0.0 (stable).** Install with
+    **Version 3.1.0 (stable).** Install with
     ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
@@ -86,7 +86,7 @@ Workflow and Interface
     ``labels/{train,val,test}``, and ``data.yaml``. Configure deterministic
     split ratios and either copy images or create absolute local symlinks. The
     destination must be new or empty, and it is published only after the full
-    export succeeds. See the `Ultralytics Export Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/features/ultralytics-export.md>`_.
+    export succeeds. See the `Ultralytics Export Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/ultralytics-export.md>`_.
 
 **Installed Python Plugins**
     Add trusted command plugins from separately installed Python distributions
@@ -95,7 +95,7 @@ Workflow and Interface
     versioned public API with host-owned actions, namespaced shortcuts and
     settings, bounded background work, read-only document state, diagnostics,
     and ``LABELIMGPP_DISABLE_PLUGINS=1`` recovery. See the
-    `Plugin Authoring Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/guides/plugin-authoring.md>`_.
+    `Plugin Authoring Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/guides/plugin-authoring.md>`_.
 
 **Brightness Adjustment**
     Adjust image brightness on-the-fly to better see annotations on dark or light images.
@@ -137,7 +137,7 @@ Workflow and Interface
     The timeline supports frame stepping, exact timecode seeks, variable-rate
     media, playback without audio, track markers, and verified-frame markers.
     Accepted frames export to VOC, YOLO, YOLO-seg, COCO, or CreateML. See the
-    `Smart Video Annotation Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/dev/docs/features/smart-video-annotation.md>`_
+    `Smart Video Annotation Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/smart-video-annotation.md>`_
     for the project, review, and export workflow.
 
 Installation
@@ -349,7 +349,7 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.0.0**, the stable 3.0 release. See
+This source tree identifies itself as **3.1.0**, the stable 3.1 release. See
 the `release history
 <https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases
