@@ -61,6 +61,7 @@ from libs.widgets.keypointPanel import KeypointPanel
 from libs.widgets import view_scaling
 from libs.widgets.videoTimelineWidget import VideoTimelineWidget
 from libs.widgets.videoExportDialog import VideoExportDialog
+from libs.widgets.commandBar import CommandBar
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -856,7 +857,14 @@ class MainWindow(QMainWindow, WindowMixin):
         }
 
         # Store actions for further handling.
-        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, openVideo=open_video, close=close, resetAll=reset_all, deleteImg=delete_image, verify=verify,
+        self.actions = Struct(save=save, save_format=save_format,
+                              saveAs=save_as, open=open,
+                              openVideo=open_video, openDir=open_dir,
+                              changeSaveDir=change_save_dir,
+                              openAnnotation=open_annotation,
+                              previous=open_prev_image, next=open_next_image,
+                              close=close, resetAll=reset_all,
+                              deleteImg=delete_image, verify=verify,
                               lineColor=color1, create=create, create_polygon=create_polygon,
                               keypoint_mode=keypoint_mode_action,
                               videoAddKeyframe=video_add_keyframe,
@@ -1192,6 +1200,31 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_coordinates = QLabel('')
         self.statusBar().addPermanentWidget(self.label_coordinates)
 
+        # Replace the native in-app menu row with the compact workspace bar.
+        # The original QMenus stay alive and are exposed as submenus so every
+        # built-in and dynamically registered plugin command remains reachable.
+        native_menu_bar = self.menuBar()
+        native_menu_bar.hide()
+        top_level_menus = (
+            self.menus.file, self.menus.edit, self.menus.view,
+            self.menus.tools, self.menus.plugins, self.menus.help,
+        )
+        self.command_bar = CommandBar(
+            __appname__, top_level_menus,
+            (open, open_video, open_dir, open_annotation,
+             change_save_dir, self.menus.recentFiles),
+            open_prev_image, open_next_image, save, verify, save_format,
+            overflow_entries=(
+                save, save_as, verify, save_format, None,
+                close, reset_all,
+            ),
+            parent=self,
+        )
+        self._native_menu_bar = native_menu_bar
+        self.setMenuWidget(self.command_bar)
+        self.command_bar.apply_theme(self._current_theme)
+        self._sync_command_bar()
+
         # Start auto-save timer if enabled (Issue #13)
         if self.auto_save_enabled.isChecked():
             self._toggle_auto_save_timer()
@@ -1394,6 +1427,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.save.setEnabled(True)
             self.update_save_status(saved=False)
             self.update_box_count()
+            self._sync_command_bar()
             self._publish_plugin_document()
             return
         self._document_revision += 1
@@ -1401,6 +1435,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.save.setEnabled(True)
         self.update_save_status(saved=False)
         self.update_box_count()
+        self._sync_command_bar()
         self._publish_plugin_document()
 
     def set_clean(self):
@@ -1417,6 +1452,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.editMode.setEnabled(False)
             self.actions.verify.setEnabled(False)
         self.update_save_status(saved=True)
+        self._sync_command_bar()
         self._publish_plugin_document()
 
     def _plugin_document_descriptor(self):
@@ -1487,6 +1523,34 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_image_count()
         self.update_box_count()
         self.update_zoom_display()
+        self._sync_command_bar()
+
+    def _sync_command_bar(self):
+        """Mirror document metadata without becoming a second state owner."""
+        command_bar = getattr(self, 'command_bar', None)
+        if command_bar is None:
+            return
+        source_path = getattr(self, 'file_path', None)
+        name = os.path.basename(source_path) if source_path else 'No document'
+        snapshot = getattr(self, 'video_snapshot', None)
+        read_only = bool(
+            self.document_kind == DocumentKind.VIDEO
+            and snapshot is not None and snapshot.read_only)
+        command_bar.set_document(
+            name, dirty=getattr(self, 'dirty', False),
+            full_path=source_path, read_only=read_only)
+
+        if self.document_kind == DocumentKind.VIDEO:
+            timeline = getattr(self, 'video_timeline', None)
+            position = (
+                timeline.position_label.text()
+                if timeline is not None else '— / —')
+        elif self.m_img_list and source_path:
+            index = self._path_to_idx.get(source_path, -1) + 1
+            position = '%s / %s' % (index, len(self.m_img_list))
+        else:
+            position = '— / —'
+        command_bar.set_position(position)
 
     def update_image_count(self):
         """Update image counter in status bar."""
@@ -1546,6 +1610,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Reset status bar widgets
         self.label_box_count.setText('Boxes: 0')
         self.update_save_status(saved=True)
+        self._sync_command_bar()
         self._publish_plugin_document(new_generation=True, force=True)
 
     def _set_document_kind(self, kind):
@@ -6190,6 +6255,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Apply theme to keypoint panel
         if hasattr(self, 'keypoint_panel'):
             self.keypoint_panel.apply_theme(theme)
+
+        if hasattr(self, 'command_bar'):
+            self.command_bar.apply_theme(theme)
 
         # Refresh save status indicator colors
         if hasattr(self, 'label_save_status'):

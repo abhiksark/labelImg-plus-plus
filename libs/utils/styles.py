@@ -12,22 +12,61 @@ class Theme(Enum):
     DARK = 'dark'
 
 
-# Theme color palettes
+# Shared workspace metrics. Values are logical pixels and pass through
+# ``scale_px`` at the point of use so the same tokens support high-DPI screens.
+COMMAND_BAR_HEIGHT = 44
+SPACING = {
+    'hairline': 1,
+    'xs': 2,
+    'sm': 4,
+    'md': 8,
+    'lg': 12,
+    'xl': 16,
+}
+RADII = {
+    'sm': 4,
+    'md': 6,
+    'pill': 999,
+}
+TYPOGRAPHY = {
+    'caption': 11,
+    'body': 12,
+    'label': 12,
+    'weight_medium': 500,
+    'weight_semibold': 600,
+}
+
+
+# Semantic theme palettes. Compatibility aliases such as ``accent_light`` and
+# ``success`` remain available to existing widgets while new workspace chrome
+# uses the explicit surface/focus/status names.
 LIGHT_COLORS = {
-    'background': '#ffffff',
-    'surface': '#f5f5f5',
-    'border': '#dddddd',
-    'text': '#000000',
-    'text_secondary': '#666666',
-    'text_disabled': '#999999',
-    'accent': '#0078d4',
-    'accent_light': '#cce5ff',
-    'accent_text': '#004085',
-    'hover': '#e0e0e0',
-    'pressed': '#d0d0d0',
-    'success': '#34a853',
-    'warning': '#fbbc04',
-    'error': '#ea4335',
+    'background': '#f7f8fa',
+    'surface': '#ffffff',
+    'surface_subtle': '#f1f3f6',
+    'surface_raised': '#ffffff',
+    'border': '#dfe3e8',
+    'border_strong': '#c8d0da',
+    'text': '#182230',
+    'text_secondary': '#5d6b7a',
+    'text_disabled': '#9aa4b2',
+    'accent': '#2563eb',
+    'accent_hover': '#1d4ed8',
+    'accent_pressed': '#1e40af',
+    'accent_light': '#dbeafe',
+    'accent_text': '#1d4ed8',
+    'on_accent': '#ffffff',
+    'focus': '#2563eb',
+    'hover': '#eef2f6',
+    'pressed': '#e2e8f0',
+    'success': '#16803c',
+    'warning': '#b45309',
+    'error': '#c73737',
+    'info': '#2563eb',
+    'status_success': '#16803c',
+    'status_warning': '#b45309',
+    'status_error': '#c73737',
+    'status_info': '#2563eb',
     'verified_bg': '#b8ef26',  # Bright green overlay for verified images
     'canvas_bg': '#e0e0e0',    # Canvas viewport background
     'placeholder': '#dcdcdc',  # Light gray for placeholders
@@ -50,18 +89,30 @@ LIGHT_COLORS = {
 DARK_COLORS = {
     'background': '#1e1e1e',
     'surface': '#2d2d2d',
+    'surface_subtle': '#252525',
+    'surface_raised': '#343434',
     'border': '#404040',
+    'border_strong': '#565656',
     'text': '#e0e0e0',
     'text_secondary': '#a0a0a0',
     'text_disabled': '#666666',
     'accent': '#4da6ff',
+    'accent_hover': '#70b7ff',
+    'accent_pressed': '#2f8fe8',
     'accent_light': '#264f78',
     'accent_text': '#4da6ff',
+    'on_accent': '#101820',
+    'focus': '#70b7ff',
     'hover': '#3d3d3d',
     'pressed': '#4d4d4d',
     'success': '#4caf50',
     'warning': '#ff9800',
     'error': '#f44336',
+    'info': '#4da6ff',
+    'status_success': '#4caf50',
+    'status_warning': '#ff9800',
+    'status_error': '#f44336',
+    'status_info': '#4da6ff',
     'verified_bg': '#4caf50',  # Slightly muted green for dark theme
     'canvas_bg': '#2d2d2d',    # Canvas viewport background
     'placeholder': '#3d3d3d',  # Dark gray for placeholders
@@ -101,6 +152,97 @@ def hex_to_qcolor(hex_color, alpha=255):
 def _get_colors(theme: Theme) -> dict:
     """Get color palette for the given theme."""
     return DARK_COLORS if theme == Theme.DARK else LIGHT_COLORS
+
+
+def get_design_tokens(theme: Theme) -> dict:
+    """Return the complete semantic token set for workspace widgets."""
+    return {
+        'color': _get_colors(theme),
+        'space': dict(SPACING),
+        'radius': dict(RADII),
+        'type': dict(TYPOGRAPHY),
+    }
+
+
+def get_command_bar_style(theme: Theme) -> str:
+    """Generate the fixed application command-bar stylesheet."""
+    tokens = get_design_tokens(theme)
+    c = tokens['color']
+    space = tokens['space']
+    radius = tokens['radius']
+    type_tokens = tokens['type']
+    return f"""
+QWidget#workspaceCommandBar {{
+    background: {c['surface_raised']};
+    border-bottom: {scale_px(1)}px solid {c['border']};
+}}
+
+QWidget#workspaceCommandBar QToolButton {{
+    min-height: {scale_px(30)}px;
+    max-height: {scale_px(30)}px;
+    padding: 0 {scale_px(space['md'])}px;
+    border: {scale_px(1)}px solid transparent;
+    border-radius: {scale_px(radius['md'])}px;
+    background: transparent;
+    color: {c['text']};
+    font-size: {scale_px(type_tokens['label'])}px;
+    font-weight: {type_tokens['weight_medium']};
+}}
+
+QWidget#workspaceCommandBar QToolButton:hover {{
+    background: {c['hover']};
+    border-color: {c['border']};
+}}
+
+QWidget#workspaceCommandBar QToolButton:pressed,
+QWidget#workspaceCommandBar QToolButton:checked {{
+    background: {c['pressed']};
+    border-color: {c['border_strong']};
+}}
+
+QWidget#workspaceCommandBar QToolButton:focus {{
+    border: {scale_px(2)}px solid {c['focus']};
+}}
+
+QWidget#workspaceCommandBar QToolButton:disabled {{
+    color: {c['text_disabled']};
+    background: transparent;
+    border-color: transparent;
+}}
+
+QToolButton#applicationMenuButton {{
+    font-weight: {type_tokens['weight_semibold']};
+}}
+
+QToolButton#previousButton,
+QToolButton#nextButton,
+QToolButton#overflowButton {{
+    min-width: {scale_px(30)}px;
+    max-width: {scale_px(30)}px;
+    padding: 0;
+}}
+
+QLabel#documentLabel {{
+    color: {c['text']};
+    font-size: {scale_px(type_tokens['body'])}px;
+    font-weight: {type_tokens['weight_medium']};
+    background: transparent;
+}}
+
+QLabel#documentDirtyIndicator {{
+    color: {c['status_warning']};
+    font-size: {scale_px(18)}px;
+    background: transparent;
+}}
+
+QLabel#documentPosition {{
+    color: {c['text_secondary']};
+    font-size: {scale_px(type_tokens['caption'])}px;
+    background: {c['surface_subtle']};
+    border-radius: {scale_px(radius['sm'])}px;
+    padding: 0 {scale_px(space['sm'])}px;
+}}
+"""
 
 
 def get_toolbar_style(theme: Theme) -> str:

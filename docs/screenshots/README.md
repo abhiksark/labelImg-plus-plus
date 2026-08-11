@@ -39,7 +39,8 @@ This directory contains screenshots demonstrating various features of labelImg++
 
 ## Screenshot Guidelines
 
-- **Resolution:** Minimum 1920x1080, preferably higher for clarity
+- **Resolution:** Use the feature's fixed review matrix when specified;
+  otherwise prefer 1920x1080 or higher for documentation
 - **Format:** PNG (lossless) preferred
 - **Content:** Show meaningful sample images with multiple bounding boxes
 - **Annotations:** Use diverse labels (e.g., "person", "car", "dog") to demonstrate the feature
@@ -54,6 +55,25 @@ When adding new feature screenshots:
 2. Add entry to this README with description and capture instructions
 3. Reference in relevant documentation markdown files
 4. Use consistent resolution and quality
+
+## Workspace 3.2 command-bar review
+
+The `workspace-3.2-command-bar/` directory contains the fixed Linux visual
+review set for the first modern-workspace slice. Each empty, image, gallery,
+video, and disabled-action state is captured at both 1366×768 and 1440×900 at
+96 DPI. Review the set for:
+
+- a single 44 px application row below the native OS title bar;
+- no native File/Edit/View menu row;
+- visible application, Open, document, navigation, Save, Verify, format, and
+  overflow controls without clipping;
+- consistent document names, positions, and disabled action styling; and
+- unchanged canvas, annotation, gallery, and video behavior below the row.
+
+High-DPI full-window review joins the next 3.2 slice: the legacy text-under-icon
+toolbar still sets a window minimum taller than 768 px at 2× scaling and is the
+component that slice replaces. Collapsed-inspector review begins with the fixed
+inspector slice.
 
 ## Alternative: Placeholder Images
 

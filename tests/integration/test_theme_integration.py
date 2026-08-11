@@ -36,6 +36,7 @@ def test_theme_integration():
     # Theme must have reached the canvas and the gallery.
     assert win.canvas._theme == toggled_theme
     assert win.gallery_widget._current_theme == toggled_theme
+    assert win.command_bar._current_theme == toggled_theme
 
     # Toggle back.
     win.dark_mode_action.setChecked(initial_checked)

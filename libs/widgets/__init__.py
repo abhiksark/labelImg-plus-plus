@@ -18,5 +18,6 @@ __all__ = [
     'ComboBox', 'DefaultLabelComboBox',
 ]
 from libs.widgets.videoTimelineWidget import VideoTimelineWidget
+from libs.widgets.commandBar import CommandBar
 
-__all__ = ['VideoTimelineWidget']
+__all__ = ['CommandBar', 'VideoTimelineWidget']
