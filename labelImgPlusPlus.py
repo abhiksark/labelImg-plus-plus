@@ -104,14 +104,15 @@ from libs.core.video_project import (
     checkpoint_project, default_project_path, save_project_as,
     save_project_delta,
 )
-from libs.core.video_model import VideoProjectModel
+from libs.core.video_model import MaterializedTrack, VideoProjectModel
 from libs.core.video_export import export_video_frames
-from libs.core.video_tracking import track_optical_flow
+from libs.core.video_tracking import OpenCVPropagationBackend, track_optical_flow
 from libs.core.video_session import (
     VideoOpenProblem, is_video_project, prepare_video_open,
 )
 from libs.core.video_types import (
-    DocumentKind, TrackingRequest, VideoExportRequest, VideoFrameRef,
+    DocumentKind, PropagationBatch, PropagationRequest, PropagationResult,
+    TrackingRequest, VideoExportRequest, VideoFrameRef,
 )
 from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.widgets.pluginManagerDialog import (
@@ -267,6 +268,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self._active_tracking_request = None
         self._tracking_run_keys = set()
         self._applying_tracking_batch = False
+        self._propagation_handle = None
+        self._active_propagation_request = None
+        self._propagation_preview = {}
+        self._propagation_preview_gaps = {}
+        self._propagation_before_state = None
         self._video_export_handle = None
         self._load_request_id = 0
         self._pending_navigation_index = None
@@ -581,14 +587,28 @@ class MainWindow(QMainWindow, WindowMixin):
             lambda _checked=False: self.track_selected_forward(
                 choose_endpoint=True),
             self.shortcut_config.get('video_track_forward'), None,
-            'Propagate the selected rectangle forward with optical flow',
+            'Propagate the selected accepted anchor forward with optical flow',
             enabled=False)
         video_track_backward = action(
             'Track Backward…',
             lambda _checked=False: self.track_selected_backward(
                 choose_endpoint=True),
             self.shortcut_config.get('video_track_backward'), None,
-            'Propagate the selected rectangle backward with optical flow',
+            'Propagate the selected accepted anchor backward with optical flow',
+            enabled=False)
+        video_propagate_all = action(
+            'Propagate across video', self.propagate_across_video,
+            None, None,
+            'Propagate every accepted manual anchor on the current frame',
+            enabled=False)
+        video_propagate_selected = action(
+            'Propagate selected object', self.propagate_selected_object,
+            None, None,
+            'Propagate the selected accepted manual anchor across the video',
+            enabled=False)
+        video_cancel_propagation = action(
+            'Cancel', self.cancel_video_propagation, None, None,
+            'Cancel whole-video propagation without changing the project',
             enabled=False)
         video_accept_suggestion = action(
             'Accept Current Suggestion', self.accept_current_suggestion,
@@ -880,6 +900,9 @@ class MainWindow(QMainWindow, WindowMixin):
                               videoDeleteTrack=video_delete_track,
                               videoTrackForward=video_track_forward,
                               videoTrackBackward=video_track_backward,
+                              videoPropagateAll=video_propagate_all,
+                              videoPropagateSelected=video_propagate_selected,
+                              videoCancelPropagation=video_cancel_propagation,
                               videoAcceptSuggestion=video_accept_suggestion,
                               videoRejectSuggestion=video_reject_suggestion,
                               videoAcceptVisible=video_accept_visible,
@@ -1066,6 +1089,7 @@ class MainWindow(QMainWindow, WindowMixin):
             export_ultralytics_action,
             None, video_play_pause, video_add_keyframe,
             video_track_forward, video_track_backward,
+            video_propagate_all, video_propagate_selected,
             video_accept_suggestion, video_reject_suggestion,
             video_accept_visible, video_reject_visible,
             video_accept_run, video_reject_run,
@@ -1134,6 +1158,9 @@ class MainWindow(QMainWindow, WindowMixin):
              self.label_zoom, self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.video_timeline.set_propagation_actions(
+            video_propagate_all, video_propagate_selected,
+            video_cancel_propagation)
         self.workspace_pages.sam_output_toggle.set_mode(self.sam_output_mode)
         self.workspace_pages.sam_output_toggle.modeChanged.connect(
             self._set_sam_output_mode)
@@ -1459,11 +1486,17 @@ class MainWindow(QMainWindow, WindowMixin):
         return not (
             self.document_kind == DocumentKind.VIDEO
             and snapshot is not None
-            and snapshot.read_only)
+            and (snapshot.read_only
+                 or getattr(self, '_propagation_handle', None) is not None))
 
     def _ensure_video_editable(self):
         if self._video_editable():
             return True
+        if getattr(self, '_propagation_handle', None) is not None:
+            self.status(
+                'Propagation is running; editing, save, export, undo, and '
+                'redo are temporarily disabled')
+            return False
         self.status('This video is open read-only; editing is disabled')
         return False
 
@@ -1711,6 +1744,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.videoDeleteTrack.setEnabled(False)
             self.actions.videoTrackForward.setEnabled(False)
             self.actions.videoTrackBackward.setEnabled(False)
+            self.actions.videoPropagateAll.setEnabled(False)
+            self.actions.videoPropagateSelected.setEnabled(False)
+            self.actions.videoCancelPropagation.setEnabled(False)
             self.actions.videoAcceptSuggestion.setEnabled(False)
             self.actions.videoRejectSuggestion.setEnabled(False)
             self.actions.videoAcceptVisible.setEnabled(False)
@@ -1721,6 +1757,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def _close_video_decoder(self, close_decoder=True):
         if hasattr(self, '_video_playback_timer'):
             self.pause_video()
+        if hasattr(self, '_propagation_handle'):
+            self.cancel_video_propagation()
         if hasattr(self, '_tracking_handle'):
             self.cancel_video_tracking()
         if hasattr(self, '_video_export_handle'):
@@ -3387,6 +3425,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def request_save_video_project(self, _value=False, on_success=None):
         snapshot = self.video_snapshot
+        if getattr(self, '_propagation_handle', None) is not None:
+            self.status('Cancel propagation before saving the video project')
+            return None
         if (self.document_kind != DocumentKind.VIDEO or snapshot is None
                 or snapshot.read_only or not snapshot.project_path):
             return None
@@ -3468,6 +3509,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def save_video_project(self):
         snapshot = self.video_snapshot
+        if getattr(self, '_propagation_handle', None) is not None:
+            self.status('Cancel propagation before saving the video project')
+            return False
         if (self.document_kind != DocumentKind.VIDEO or snapshot is None
                 or snapshot.read_only or not snapshot.project_path):
             return False
@@ -3622,6 +3666,7 @@ class MainWindow(QMainWindow, WindowMixin):
             visible = self.annotation_model.data(
                 index, AnnotationRoles.Visible)
             self.canvas.set_shape_visible(shape, visible)
+        self._render_propagation_preview(int(pts))
         self.update_box_count()
         has_pending = any(
             item.pts == int(pts) and item.review_state == 'pending'
@@ -3642,6 +3687,7 @@ class MainWindow(QMainWindow, WindowMixin):
             has_any_pending and editable)
         self.actions.videoAcceptRun.setEnabled(has_run_pending and editable)
         self.actions.videoRejectRun.setEnabled(has_run_pending and editable)
+        self._sync_video_propagation_actions()
 
     def _refresh_video_track_list(self):
         model = self.video_model
@@ -3668,9 +3714,326 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.edit.setEnabled(editable and has_track)
         self.actions.shapeLineColor.setEnabled(editable and has_track)
         self.actions.shapeFillColor.setEnabled(editable and has_track)
-        can_track = track is not None and track.shape_type == 'rectangle'
+        can_track = (track is not None
+                     and track.shape_type in ('rectangle', 'polygon'))
         self.actions.videoTrackForward.setEnabled(can_track and editable)
         self.actions.videoTrackBackward.setEnabled(can_track and editable)
+        self._sync_video_propagation_actions()
+
+    def _qualifying_propagation_seeds(self, selected_only=False):
+        model = self.video_model
+        frame_ref = self.current_video_frame_ref
+        if model is None or frame_ref is None:
+            return ()
+        selected = self._selected_video_track_id if selected_only else None
+        values = []
+        for item in model.observations.values():
+            track = model.tracks.get(item.track_id)
+            if (item.pts != frame_ref.pts
+                    or item.source != 'manual'
+                    or item.review_state != 'accepted'
+                    or not item.anchor or not item.present
+                    or item.geometry is None
+                    or track is None
+                    or track.shape_type not in ('rectangle', 'polygon')):
+                continue
+            if selected is not None and item.track_id != selected:
+                continue
+            values.append(item)
+        return tuple(sorted(values, key=lambda item: item.track_id))
+
+    def _sync_video_propagation_actions(self):
+        if not hasattr(self.actions, 'videoPropagateAll'):
+            return
+        running = getattr(self, '_propagation_handle', None) is not None
+        snapshot = self.video_snapshot
+        editable = (
+            self.document_kind == DocumentKind.VIDEO
+            and snapshot is not None and not snapshot.read_only and not running)
+        self.actions.videoPropagateAll.setEnabled(
+            editable and bool(self._qualifying_propagation_seeds()))
+        self.actions.videoPropagateSelected.setEnabled(
+            editable and bool(self._qualifying_propagation_seeds(True)))
+        self.actions.videoCancelPropagation.setEnabled(running)
+
+    def _render_propagation_preview(self, pts=None):
+        if pts is None and self.current_video_frame_ref is not None:
+            pts = self.current_video_frame_ref.pts
+        if pts is None or self.video_model is None:
+            self.canvas.set_propagation_preview_shapes([])
+            return
+        shapes = []
+        for observation in self._propagation_preview.values():
+            if observation.pts != int(pts):
+                continue
+            track = self.video_model.tracks.get(observation.track_id)
+            if track is not None:
+                shapes.append(self._shape_for_materialized(
+                    MaterializedTrack(track, observation, 'preview')))
+        self.canvas.set_propagation_preview_shapes(shapes)
+
+    def _set_propagation_running(self, running):
+        mutation_actions = (
+            self.actions.create, self.actions.create_polygon,
+            self.actions.createMode, self.actions.editMode,
+            self.actions.keypoint_mode, self.actions.sam_mode,
+            self.actions.delete, self.actions.copy, self.actions.edit,
+            self.actions.pasteFromClipboard, self.actions.verify,
+            self.actions.videoAddKeyframe, self.actions.videoEditSpan,
+            self.actions.videoDeleteTrack, self.actions.videoTrackForward,
+            self.actions.videoTrackBackward,
+            self.actions.videoAcceptSuggestion,
+            self.actions.videoRejectSuggestion,
+            self.actions.videoAcceptVisible,
+            self.actions.videoRejectVisible,
+            self.actions.videoAcceptRun, self.actions.videoRejectRun,
+            self.actions.save, self.actions.videoExport,
+            self.actions.undo, self.actions.redo,
+        )
+        if running:
+            for item in mutation_actions:
+                item.setEnabled(False)
+            self.canvas.locked = True
+            self.video_timeline.set_propagation_progress(
+                0, 0, 0, 0, None, 0, running=True)
+        else:
+            snapshot = self.video_snapshot
+            editable = (snapshot is not None and not snapshot.read_only)
+            if editable:
+                for item in (
+                        self.actions.create, self.actions.create_polygon,
+                        self.actions.createMode, self.actions.editMode,
+                        self.actions.verify):
+                    item.setEnabled(True)
+            self.actions.save.setEnabled(
+                editable and self.video_model is not None
+                and self.video_model.dirty)
+            self.actions.videoExport.setEnabled(snapshot is not None)
+            self.canvas.locked = (
+                not editable or (self.canvas.verified
+                                 and self.lock_on_verify_option.isChecked()))
+            self.update_undo_redo_actions()
+            self._sync_video_track_actions(self._selected_video_track_id)
+            self.video_timeline.set_propagation_progress(
+                0, 0, 0, 0, None, 0, running=False)
+        self._sync_video_propagation_actions()
+
+    def propagate_across_video(self):
+        seeds = self._qualifying_propagation_seeds()
+        if not seeds:
+            self.status(
+                'This frame has no exact accepted manual anchors to propagate')
+            return None
+        return self._start_video_propagation(seeds, (-1, 1))
+
+    def propagate_selected_object(self):
+        seeds = self._qualifying_propagation_seeds(selected_only=True)
+        if not seeds:
+            self.status(
+                'Select an exact accepted manual anchor before propagation')
+            return None
+        return self._start_video_propagation(seeds, (-1, 1))
+
+    def _start_video_propagation(self, seeds, directions, endpoints=None):
+        if not self._ensure_video_editable():
+            return None
+        snapshot = self.video_snapshot
+        model = self.video_model
+        frame_ref = self.current_video_frame_ref
+        if snapshot is None or model is None or frame_ref is None:
+            return None
+        start_pts = int(snapshot.start_pts or 0)
+        end_pts = start_pts + int(snapshot.duration_pts or 0)
+        endpoints = dict(endpoints or ())
+        directions = tuple(
+            direction for direction in directions
+            if (direction < 0 and frame_ref.pts > start_pts)
+            or (direction > 0 and frame_ref.pts < end_pts))
+        if not directions:
+            self.status('No propagation range is available from this frame')
+            return None
+        track_ids = {item.track_id for item in seeds}
+        anchors = tuple(
+            item for item in model.observations.values()
+            if item.track_id in track_ids and item.source == 'manual'
+            and item.review_state == 'accepted' and item.anchor)
+        self.cancel_video_tracking()
+        self.cancel_video_propagation()
+        self._tracking_request_id += 1
+        request = PropagationRequest(
+            request_id=self._tracking_request_id,
+            generation=self._dataset_generation,
+            document_revision=model.revision,
+            source_path=snapshot.source_path,
+            fingerprint=snapshot.fingerprint,
+            stream_index=snapshot.stream_index,
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den,
+            start_pts=endpoints.get(-1, start_pts),
+            end_pts=endpoints.get(1, end_pts),
+            current_pts=frame_ref.pts,
+            direction=(directions[0] if len(directions) == 1 else 0),
+            seeds=tuple(seeds), manual_anchors=anchors,
+            track_revisions=tuple(sorted(
+                (track_id, model.tracks[track_id].revision)
+                for track_id in track_ids)),
+            average_rate_num=snapshot.average_rate_num,
+            average_rate_den=snapshot.average_rate_den)
+        self._active_propagation_request = request
+        self._propagation_before_state = model.snapshot_state()
+        self._propagation_preview = {}
+        self._propagation_preview_gaps = {}
+        backend = OpenCVPropagationBackend()
+
+        def propagate(handle):
+            results = []
+            processed_offset = 0
+            totals = []
+            for direction in directions:
+                endpoint = (request.end_pts if direction > 0
+                            else request.start_pts)
+                seconds = abs(endpoint - request.current_pts) * \
+                    request.time_base_num / request.time_base_den
+                total = (int(round(
+                    seconds * request.average_rate_num /
+                    request.average_rate_den))
+                         if request.average_rate_num
+                         and request.average_rate_den else 0)
+                totals.append(total)
+            combined_total = sum(totals)
+            for index, direction in enumerate(directions):
+                handle.check_cancelled()
+
+                def emit(batch, offset=processed_offset):
+                    handle.check_cancelled()
+                    handle.report_progress(replace(
+                        batch, processed_frames=offset + batch.processed_frames,
+                        total_frames=combined_total))
+
+                directional = replace(request, direction=direction)
+                result = backend.propagate(
+                    directional, direction, handle.is_cancelled, emit)
+                results.append(result)
+                processed_offset += totals[index]
+            observations = {}
+            gaps = {}
+            failures = {}
+            for result in results:
+                observations.update(
+                    ((item.track_id, item.pts), item)
+                    for item in result.observations)
+                gaps.update(
+                    ((item.track_id, item.start_pts, item.end_pts), item)
+                    for item in result.gaps)
+                failures.update(result.failures)
+            return PropagationResult(
+                request.request_id, request.generation,
+                request.document_revision,
+                observations=tuple(observations.values()),
+                gaps=tuple(gaps.values()),
+                failures=tuple(sorted(failures.items())))
+
+        handle = self.task_coordinator.submit(
+            'background', propagate, priority=JobPriority.BULK,
+            key='video-propagation', latest=True,
+            generation=self._dataset_generation)
+        self._propagation_handle = handle
+        handle.progress.connect(self._on_propagation_batch)
+        handle.result.connect(self._on_propagation_result)
+        handle.error.connect(self._on_propagation_error)
+        handle.finished.connect(
+            lambda current=handle: self._on_propagation_finished(current))
+        self._set_propagation_running(True)
+        self.status('Propagating accepted anchors across the video…')
+        return handle
+
+    def _propagation_is_current(self, value):
+        request = self._active_propagation_request
+        snapshot = self.video_snapshot
+        model = self.video_model
+        if request is None or snapshot is None or model is None:
+            return False
+        return (
+            value.request_id == request.request_id
+            and value.generation == request.generation
+            and request.generation == self._dataset_generation
+            and getattr(value, 'document_revision',
+                        request.document_revision) == request.document_revision
+            and model.revision == request.document_revision
+            and snapshot.source_path == request.source_path
+            and snapshot.fingerprint == request.fingerprint
+            and snapshot.stream_index == request.stream_index
+            and snapshot.time_base_num == request.time_base_num
+            and snapshot.time_base_den == request.time_base_den
+            and all(track_id in model.tracks
+                    and model.tracks[track_id].revision == revision
+                    for track_id, revision in request.track_revisions))
+
+    def _on_propagation_batch(self, batch):
+        if not isinstance(batch, PropagationBatch) \
+                or not self._propagation_is_current(batch):
+            return
+        self._propagation_preview.update(
+            ((item.track_id, item.pts), item)
+            for item in batch.observations)
+        self._propagation_preview_gaps.update(
+            ((item.track_id, item.start_pts, item.end_pts), item)
+            for item in batch.gaps)
+        self._render_propagation_preview()
+        self.video_timeline.set_propagation_progress(
+            batch.processed_frames, batch.total_frames,
+            batch.active_tracks, batch.completed_tracks,
+            batch.eta_seconds, len(self._propagation_preview_gaps),
+            running=True)
+
+    def _on_propagation_result(self, result):
+        if not self._propagation_is_current(result):
+            self.cancel_video_propagation()
+            return
+        model = self.video_model
+        before = self._propagation_before_state
+        self._propagation_handle = None
+        self._active_propagation_request = None
+        self._propagation_before_state = None
+        self._propagation_preview = {}
+        self._propagation_preview_gaps = {}
+        applied = model.apply_propagation_result(result)
+        after = model.snapshot_state()
+        if before != after:
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Propagate video objects'))
+            self._on_video_model_mutation()
+        self._materialize_video_frame(self.current_video_frame_ref.pts)
+        self._set_propagation_running(False)
+        self.status(
+            'Propagation complete: %s observations, %s gaps, %s failures' % (
+                len(applied.observations), len(applied.gaps),
+                len(applied.failures)))
+
+    def _on_propagation_error(self, message):
+        self._clear_propagation_state()
+        self.status('Video propagation failed: ' + message, delay=10000)
+
+    def _on_propagation_finished(self, handle):
+        if self._propagation_handle is handle:
+            self._clear_propagation_state()
+
+    def _clear_propagation_state(self):
+        self._propagation_handle = None
+        self._active_propagation_request = None
+        self._propagation_before_state = None
+        self._propagation_preview = {}
+        self._propagation_preview_gaps = {}
+        if hasattr(self, 'canvas'):
+            self.canvas.set_propagation_preview_shapes([])
+        if hasattr(self, 'video_timeline'):
+            self._set_propagation_running(False)
+
+    def cancel_video_propagation(self):
+        handle = getattr(self, '_propagation_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._clear_propagation_state()
 
     def _video_track_item_changed(self, item):
         """Legacy entry point retained for controller compatibility."""
@@ -3768,12 +4131,29 @@ class MainWindow(QMainWindow, WindowMixin):
         self._materialize_video_frame(self.current_video_frame_ref.pts)
 
     def track_selected_forward(self, choose_endpoint=False):
-        return self._request_video_tracking(
+        return self._request_directional_propagation(
             1, choose_endpoint=choose_endpoint)
 
     def track_selected_backward(self, choose_endpoint=False):
-        return self._request_video_tracking(
+        return self._request_directional_propagation(
             -1, choose_endpoint=choose_endpoint)
+
+    def _request_directional_propagation(self, direction,
+                                         choose_endpoint=False):
+        seeds = self._qualifying_propagation_seeds(selected_only=True)
+        if not seeds:
+            self.status(
+                'Tracking must start from an accepted exact manual anchor')
+            return None
+        current = self.current_video_frame_ref.pts
+        endpoint = self._tracking_endpoint(
+            seeds[0].track_id, current, direction)
+        if choose_endpoint:
+            endpoint = self._choose_tracking_endpoint(endpoint, direction)
+            if endpoint is None:
+                return None
+        return self._start_video_propagation(
+            seeds, (direction,), ((direction, endpoint),))
 
     def _tracking_endpoint(self, track_id, start_pts, direction):
         anchors = sorted(
@@ -4102,6 +4482,9 @@ class MainWindow(QMainWindow, WindowMixin):
         """Run one cancellable atomic export on an independent decoder."""
         if not isinstance(export_request, VideoExportRequest):
             raise TypeError('export_request must be a VideoExportRequest')
+        if getattr(self, '_propagation_handle', None) is not None:
+            self.status('Cancel propagation before exporting video frames')
+            return None
         self.cancel_video_export()
         generation = self._dataset_generation
 
@@ -4251,7 +4634,6 @@ class MainWindow(QMainWindow, WindowMixin):
             self.annotation_model.set_video_context(
                 self.video_model, result.frame_ref.pts)
             self.canvas.load_shapes([])
-        self.undo_stack.clear()
         self.video_timeline.set_current_frame(result.frame_ref)
         self.paint_canvas()
         self.update_status_bar()

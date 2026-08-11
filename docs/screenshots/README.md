@@ -45,6 +45,14 @@ matrix for Smart Select's contextual Box/Polygon selector. The control appears
 only while Smart Select is active, retains the fixed canvas chrome height, and
 leaves all primary workspace controls unclipped at both approval sizes.
 
+## Workspace 3.4
+
+`workspace-3.4-propagation/` contains fixed Linux Qt captures of the portable
+whole-video propagation preview at 1366x768 and 1440x900. Rectangle, polygon,
+and associated keypoint previews are painted separately from canonical model
+geometry while the integrated timeline reports processed frames, active and
+completed objects, ETA, gap/failure count, and the accessible Cancel action.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots
