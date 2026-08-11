@@ -1,6 +1,60 @@
 History
 =======
 
+3.5.0 (2026-08-12)
+------------------
+
+Optional SAM 2 propagation release adding a lazy Linux/CUDA backend behind the
+same whole-video propagation contract while preserving portable OpenCV as the
+automatic fallback. Torch, torchvision, SAM 2, checkpoints, and model configs
+remain user-managed and are not bundled, downloaded, or added to any published
+extra.
+
+Optional SAM 2 Backend
+~~~~~~~~~~~~~~~~~~~~~~
+
+* Add Auto, OpenCV, and explicit SAM 2 backend settings plus local checkpoint
+  and model-config paths. Auto evaluates availability only when propagation is
+  invoked; explicit SAM 2 reports an actionable error and never silently falls
+  back.
+* Require Linux, Python 3.10 or newer, compatible CUDA-enabled PyTorch and
+  torchvision, an official source-installed SAM 2, and matching local files.
+  Base startup remains free of Torch, torchvision, SAM 2, PyAV, NumPy, and
+  OpenCV imports.
+* Stage exact display-oriented PTS frames only in the requested direction,
+  seed every accepted present manual anchor, and run Meta's official video
+  predictor without importing Qt into the backend.
+* Convert masks to simplified polygons or tight half-open rectangles according
+  to track type, transform associated keypoints, protect manual anchors, and
+  represent no-object output with the shared inclusive gap contract.
+* Reuse the existing preview-only streaming, cancellation, revision/media
+  validation, atomic commit, correction regeneration, and undo pipelines.
+
+Workspace and Compatibility
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Extend **Tools -> SAM Settings...** with propagation controls while
+  preserving the existing image-SAM ``values()`` interface and settings.
+* Persist ``video/propagationBackend``, ``video/sam2Checkpoint``, and
+  ``video/sam2Config`` with Auto and empty paths as safe defaults.
+* Keep Python 3.8 through 3.13 base support and all annotation formats,
+  filenames, command-line entry points, plugin APIs, document methods,
+  shortcut identifiers, and legacy pending video observations unchanged.
+
+Qualification
+~~~~~~~~~~~~~
+
+* Cover availability selection, source-install validation, explicit failure,
+  automatic OpenCV fallback, mask conversion, gaps, anchors, keypoints,
+  settings persistence, UI error handling, optional-import guards, and cleanup.
+* Qualify the ordinary Python, plugin, SAM, video, and combined-extra matrix on
+  Python 3.8 through 3.13 plus Windows and macOS video smoke jobs.
+* Exercise the official SAM 2.1 Hiera Tiny backend on an RTX A6000 in both
+  directions over exact PTS media, with 23 accepted observations per run, no
+  gaps, and zero PyTorch allocated or reserved CUDA bytes after teardown.
+* Review fixed Linux light/dark and 1x/2x settings screenshots at 1366x768 and
+  1440x900 logical sizes with no clipped controls.
+
 3.4.0 (2026-08-12)
 ------------------
 
