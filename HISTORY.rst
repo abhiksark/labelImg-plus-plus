@@ -1,6 +1,56 @@
 History
 =======
 
+3.3.0 (2026-08-12)
+------------------
+
+Faster-annotation release adding non-modal class confirmation and selectable
+Smart Select geometry while preserving the 3.2 workspace, annotation formats,
+filenames, command-line entry points, plugin APIs, shortcut identifiers, and
+Python 3.8 through 3.13 support.
+
+Inline Class Confirmation
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Keep completed Box, Polygon, Smart Select, and video geometry in a transient
+  provisional layer until its class is confirmed. Provisional geometry is
+  excluded from canonical canvas shapes, the Objects inspector, dirty state,
+  saves, plugin snapshots, and undo history.
+* Open a non-modal, screen-clamped class picker beside new geometry with
+  filtering, arrow-key navigation, valid new-class entry, Enter confirmation,
+  and Escape cancellation. Confirmation preserves the active tool and canvas
+  focus so repeated annotation remains uninterrupted.
+* Commit confirmed image or video geometry through one ``CreateShapeCommand``.
+  Video confirmation creates an accepted manual anchor; cancellation leaves
+  both the in-memory model and durable project unchanged.
+* Retain session-only last-class memory. Default-label mode bypasses the picker,
+  while single-class mode bypasses it only after the first class is confirmed
+  in the current session.
+
+Smart Select Output Modes
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Add the frozen plain-data ``SamResult(polygon, bounds)`` contract. SAM workers
+  return a simplified polygon and tight, non-zero, half-open bounds for the
+  same largest mask component without mutating Qt or document state.
+* Add a contextual Box/Polygon selector that appears only while Smart Select is
+  active. Its validated ``sam/outputMode`` setting defaults to ``polygon`` and
+  persists independently of model settings.
+* Route both output types through the provisional picker and the same image and
+  video undo path. Existing stale-generation and cancellation guards remain in
+  place, and ONNX Runtime, NumPy, OpenCV, and model loading stay lazy.
+
+Qualification
+~~~~~~~~~~~~~
+
+* Cover image and video confirmation, cancellation, focus, filtering, repeated
+  annotation, bypass modes, output bounds, simplification, persistence, stale
+  SAM results, manual video anchors, and one-step undo.
+* Qualify the picker and Smart Select selector in light and dark themes at 1x
+  and true 2x DPI using 1366x768 and 1440x900 logical approval sizes.
+* Make queued Gallery and annotation-catalog refreshes inert after window
+  shutdown so late Qt callbacks cannot submit work to a stopped coordinator.
+
 3.2.0 (2026-08-11)
 ------------------
 
