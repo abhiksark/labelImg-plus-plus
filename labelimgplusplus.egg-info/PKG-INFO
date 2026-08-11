@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 3.4.0
+Version: 3.5.0
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -78,7 +78,7 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Version 3.4.0 (stable).** Install with
+    **Version 3.5.0 (stable).** Install with
     ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
@@ -438,7 +438,7 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.4.0**, the stable 3.4 release. See
+This source tree identifies itself as **3.5.0**, the stable 3.5 release. See
 the `release history
 <https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases
