@@ -73,6 +73,7 @@ libs/utils/styles.py
 libs/utils/ustr.py
 libs/utils/utils.py
 libs/widgets/__init__.py
+libs/widgets/annotationInspector.py
 libs/widgets/batchVerifyDialog.py
 libs/widgets/canvas.py
 libs/widgets/colorDialog.py

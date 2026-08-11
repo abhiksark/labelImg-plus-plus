@@ -21,12 +21,12 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtCore import QPointF, Qt, QEvent
-from PyQt5.QtGui import QImage, QMouseEvent
+from PyQt5.QtCore import QPointF, Qt, QEvent  # noqa: E402
+from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
 
-from labelImgPlusPlus import get_main_app
-from libs.core.shape import Shape
-from libs.formats.annotation_paths import annotation_output_base
+from labelImgPlusPlus import get_main_app  # noqa: E402
+from libs.core.shape import Shape  # noqa: E402
+from libs.formats.annotation_paths import annotation_output_base  # noqa: E402
 
 
 class TestMainWindowFileOperations(unittest.TestCase):
@@ -759,7 +759,6 @@ class TestMainWindowNavigation(unittest.TestCase):
         """Test navigating to previous image."""
         # Start from second image
         self.win.load_file(self.image_paths[1])
-        initial_path = self.win.file_path
         self.win.open_prev_image()
         # Should have moved to a different image (or stayed if at start)
         # Just verify navigation doesn't crash
@@ -1224,14 +1223,17 @@ class TestUndoStateConsistency(unittest.TestCase):
         for s in (a, b, c):
             self.win.canvas.shapes.append(s)
             self.win.add_label(s)
-        self.assertEqual(self.win.rect_label_list.row(self.win.shapes_to_items[b]), 1)
+        identity = self.win.annotation_model.identity_for_shape(b)
+        self.assertEqual(
+            self.win.annotation_model.index_for_identity(identity).row(), 1)
 
         cmd = DeleteShapeCommand(self.win, b, self.win.canvas.shapes.index(b))
         cmd.execute()
         self.win.undo_stack.push(cmd)
         self.win.undo_stack.undo()
 
-        self.assertEqual(self.win.rect_label_list.row(self.win.shapes_to_items[b]), 1)
+        self.assertEqual(
+            self.win.annotation_model.index_for_identity(identity).row(), 1)
 
     def test_edit_label_updates_combo_box(self):
         """Editing a label (and undoing) must refresh the label combo box."""
