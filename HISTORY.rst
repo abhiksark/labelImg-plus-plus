@@ -14,6 +14,12 @@ Unreleased
 * Qualify a separately installed fixture wheel on Python 3.8 through 3.13 and
   add five-run startup, 100-entry discovery/manager, cancellation, and teardown
   gates.
+* Restrict plugin tasks to a plain cancellation/progress facade, preserve
+  worker tracebacks through GUI-thread error delivery, validate diagnostic
+  fields transactionally, and render malformed diagnostics defensively.
+* Apply empty shortcut values to active plugin actions after reset/import and
+  make the plugin qualification profiler runnable directly from outside the
+  repository.
 
 3.0.0 (2026-08-09)
 ------------------

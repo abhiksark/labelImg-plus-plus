@@ -86,10 +86,8 @@ class ShortcutsDialog(QDialog):
         conflict = self.config.find_conflict(shortcut, exclude_action=action_name)
         self._pending[action_name] = shortcut
 
-        # Apply immediately to QAction
-        if action_name in self.action_map:
-            self.action_map[action_name].setShortcut(shortcut)
         self.config.set(action_name, shortcut)
+        self._sync_action_shortcuts((action_name,))
 
         # Highlight conflict
         widget = self.table.cellWidget(row, 1)
@@ -105,10 +103,7 @@ class ShortcutsDialog(QDialog):
     def _reset_all(self):
         self.config.reset_all()
         self._pending = dict(self.config.get_all())
-        for name, act in self.action_map.items():
-            sc = self.config.get(name)
-            if sc:
-                act.setShortcut(sc)
+        self._sync_action_shortcuts()
         self._refresh_table()
 
     def _reset_selected(self):
@@ -118,9 +113,16 @@ class ShortcutsDialog(QDialog):
         name = self.table.item(row, 0).data(Qt.UserRole)
         self.config.reset(name)
         self._pending[name] = self.config.get(name)
-        if name in self.action_map:
-            self.action_map[name].setShortcut(self.config.get(name))
+        self._sync_action_shortcuts((name,))
         self._refresh_table()
+
+    def _sync_action_shortcuts(self, action_names=None):
+        names = self.action_map if action_names is None else action_names
+        for name in names:
+            action = self.action_map.get(name)
+            shortcut = self.config.get(name)
+            if action is not None and shortcut is not None:
+                action.setShortcut(shortcut)
 
     def _refresh_table(self):
         self.table.clearContents()
@@ -143,10 +145,7 @@ class ShortcutsDialog(QDialog):
             QMessageBox.warning(self, 'Import failed', str(e))
             return
         self._pending = dict(self.config.get_all())
-        for name, act in self.action_map.items():
-            sc = self.config.get(name)
-            if sc:
-                act.setShortcut(sc)
+        self._sync_action_shortcuts()
         self._refresh_table()
 
     def apply_theme(self, theme):

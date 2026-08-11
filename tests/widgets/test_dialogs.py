@@ -1,7 +1,10 @@
 """Tests for dialog widgets (ColorDialog, LabelDialog)."""
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 # Set offscreen platform for headless testing
 if 'QT_QPA_PLATFORM' not in os.environ:
@@ -11,12 +14,11 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication, QWidget, QDialogButtonBox
+from PyQt5.QtGui import QColor  # noqa: E402
+from PyQt5.QtWidgets import QAction, QApplication, QWidget  # noqa: E402
 
-from libs.widgets.colorDialog import ColorDialog
-from libs.widgets.labelDialog import LabelDialog
+from libs.widgets.colorDialog import ColorDialog  # noqa: E402
+from libs.widgets.labelDialog import LabelDialog  # noqa: E402
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
@@ -243,6 +245,65 @@ class TestShortcutsDialogTheme(unittest.TestCase):
         fg = dialog.table.item(0, 2).foreground().color()
         expected = hex_to_qcolor(get_theme_colors(Theme.LIGHT)['text_secondary'])
         self.assertEqual(fg, expected)
+
+    def test_reset_all_clears_empty_plugin_shortcut_and_skips_unknown_action(self):
+        from libs.core.shortcut_config import ShortcutConfig
+        from libs.widgets.shortcutsDialog import ShortcutsDialog
+
+        config = ShortcutConfig()
+        command = 'plugin.com.example.empty.run'
+        config.register_plugin(command, '', 'com.example.empty')
+        config.set(command, 'Ctrl+Alt+R')
+        plugin_action = QAction()
+        plugin_action.setShortcut('Ctrl+Alt+R')
+        save_action = QAction()
+        save_action.setShortcut(config.get('save'))
+        unknown_action = QAction()
+        unknown_action.setShortcut('Alt+U')
+        dialog = ShortcutsDialog(config, {
+            command: plugin_action,
+            'save': save_action,
+            'not_a_real_action': unknown_action,
+        })
+
+        dialog._reset_all()
+
+        self.assertEqual(plugin_action.shortcut().toString(), '')
+        self.assertEqual(save_action.shortcut().toString(), config.get('save'))
+        self.assertEqual(unknown_action.shortcut().toString(), 'Alt+U')
+
+    def test_import_applies_empty_shortcut_to_live_plugin_action(self):
+        from libs.core.shortcut_config import ShortcutConfig
+        from libs.widgets.shortcutsDialog import ShortcutsDialog
+
+        config = ShortcutConfig()
+        command = 'plugin.com.example.empty.run'
+        config.register_plugin(command, 'Ctrl+Alt+R', 'com.example.empty')
+        plugin_action = QAction()
+        plugin_action.setShortcut('Ctrl+Alt+R')
+        save_action = QAction()
+        save_action.setShortcut(config.get('save'))
+        unknown_action = QAction()
+        unknown_action.setShortcut('Alt+U')
+        dialog = ShortcutsDialog(config, {
+            command: plugin_action,
+            'save': save_action,
+            'not_a_real_action': unknown_action,
+        })
+        descriptor, path = tempfile.mkstemp(suffix='.json')
+        try:
+            with os.fdopen(descriptor, 'w') as stream:
+                json.dump({command: ''}, stream)
+            with patch(
+                    'libs.widgets.shortcutsDialog.QFileDialog.getOpenFileName',
+                    return_value=(path, 'JSON (*.json)')):
+                dialog._import()
+        finally:
+            os.unlink(path)
+
+        self.assertEqual(plugin_action.shortcut().toString(), '')
+        self.assertEqual(save_action.shortcut().toString(), config.get('save'))
+        self.assertEqual(unknown_action.shortcut().toString(), 'Alt+U')
 
 
 class TestSplitDialogValidation(unittest.TestCase):

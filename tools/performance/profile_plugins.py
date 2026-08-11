@@ -8,33 +8,44 @@ import json
 import math
 import os
 from pathlib import Path
-from types import SimpleNamespace
+import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import weakref
+
+
+REPOSITORY_ROOT = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..'))
+if REPOSITORY_ROOT not in sys.path:
+    sys.path.insert(0, REPOSITORY_ROOT)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QCoreApplication, QEvent
-from PyQt5.QtWidgets import QApplication, QMainWindow, QMenu
+from PyQt5.QtCore import QCoreApplication, QEvent  # noqa: E402
+from PyQt5.QtWidgets import (  # noqa: E402
+    QApplication,
+    QMainWindow,
+    QMenu,
+)
 
-from labelimgplusplus.plugins import (
+from labelimgplusplus.plugins import (  # noqa: E402
     CommandSpec,
     DocumentDescriptor,
     PluginCapability,
     PluginMetadata,
 )
-from libs.core.plugin_discovery import (
+from libs.core.plugin_discovery import (  # noqa: E402
     ENTRY_POINT_GROUP,
     PluginCandidate,
     discover_plugins,
 )
-from libs.core.plugin_manager import PluginManager
-from libs.core.settings import Settings
-from libs.core.shortcut_config import ShortcutConfig
-from libs.core.task_coordinator import TaskCoordinator
-from libs.widgets.pluginManagerDialog import (
+from libs.core.plugin_manager import PluginManager  # noqa: E402
+from libs.core.settings import Settings  # noqa: E402
+from libs.core.shortcut_config import ShortcutConfig  # noqa: E402
+from libs.core.task_coordinator import TaskCoordinator  # noqa: E402
+from libs.widgets.pluginManagerDialog import (  # noqa: E402
     PluginManagerDialog,
     QtPluginCommandHost,
 )
