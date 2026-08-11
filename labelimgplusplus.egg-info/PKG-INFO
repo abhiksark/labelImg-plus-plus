@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 3.2.0
+Version: 3.3.0
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -78,7 +78,7 @@ polygons, and keypoints, designed for machine learning and computer vision
 projects. It is forked from the original LabelImg with significant
 enhancements.
 
-    **Version 3.2.0 (stable).** Install with
+    **Version 3.3.0 (stable).** Install with
     ``pip install labelimgplusplus``.
 
 .. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
@@ -131,6 +131,18 @@ Workflow and Interface
     Objects view. The Files view keeps the compact file list, thumbnails, and
     annotation-status filter close at hand, and the inspector can be collapsed
     when maximum canvas space is needed.
+
+**Faster Class Confirmation**
+    New boxes, polygons, Smart Select results, and video geometry remain
+    provisional while a non-modal class picker opens beside the annotation.
+    Filter or enter a class, press **Enter** to commit one undoable annotation,
+    or press **Escape** to discard it without changing the document. Default
+    labels and established single-class sessions bypass the picker.
+
+**Smart Select Output Modes**
+    While Smart Select is active, choose **Box** or **Polygon** from the compact
+    canvas control. The choice persists between sessions, and either result
+    follows the same provisional class-confirmation and undo workflow.
 
 **Direct Ultralytics Dataset Export**
     Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
@@ -401,7 +413,7 @@ Or use **Menu > File > Reset All**
 Release History
 ---------------
 
-This source tree identifies itself as **3.2.0**, the stable 3.2 release. See
+This source tree identifies itself as **3.3.0**, the stable 3.3 release. See
 the `release history
 <https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
 version-by-version changes and `GitHub Releases
