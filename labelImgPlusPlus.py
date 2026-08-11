@@ -71,6 +71,7 @@ from libs.widgets.annotationInspector import (
     UnifiedAnnotationView,
 )
 from libs.widgets.workspacePages import WorkspacePages
+from libs.widgets.inlineClassPicker import InlineClassPicker
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -317,6 +318,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_dialog = LabelDialog(parent=self, list_item=self.label_hist)
 
         self.prev_label_text = ''
+        self._session_last_class = None
+        self._pending_provisional_shape = None
 
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
@@ -445,6 +448,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.scrollRequest.connect(self.scroll_request)
 
         self.canvas.newShape.connect(self.new_shape)
+        self.class_picker = InlineClassPicker(self)
+        self.class_picker.accepted.connect(self._commit_provisional_shape)
+        self.class_picker.cancelled.connect(self._cancel_provisional_shape)
         self.sam_controller = SamController(self)
         self.canvas.samClicked.connect(self.sam_controller.segment_at)
         self._sam_available = segmentation.sam_available()
@@ -1640,6 +1646,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._update_save_status_style(saved)
 
     def reset_state(self):
+        self._dismiss_class_picker()
         self._plugin_document_ready = False
         self._restart_workers_if_needed()
         self._close_video_decoder()
@@ -2163,14 +2170,11 @@ class MainWindow(QMainWindow, WindowMixin):
             self.pause_video()
         editable = self._video_editable()
         self.actions.editMode.setEnabled(not drawing and editable)
+        self.actions.create.setEnabled(not drawing and editable)
         self.actions.create_polygon.setEnabled(not drawing and editable)
-        if not drawing and self.beginner():
-            # Cancel creation.
-            print('Cancel creation.')
-            self.canvas.set_editing(True)
+        if not drawing:
             self.canvas.restore_cursor()
-            self.actions.create.setEnabled(editable)
-            self.actions.create_polygon.setEnabled(editable)
+            self._sync_tool_actions()
 
     def toggle_draw_mode(self, edit=True):
         if (self.document_kind == DocumentKind.VIDEO
@@ -2873,69 +2877,105 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Callback functions:
     def new_shape(self):
-        """Pop-up and give focus to the label editor.
-
-        position MUST be in global coordinates.
-        """
+        """Stage completed geometry until its class is confirmed."""
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
-            self.canvas.reset_all_lines()
+            self._cancel_provisional_shape()
             return
-        if not self.use_default_label_checkbox.isChecked():
-            if len(self.label_hist) > 0:
-                self.label_dialog = LabelDialog(
-                    parent=self, list_item=self.label_hist)
-                if hasattr(self, '_current_theme'):
-                    self.label_dialog.apply_theme(self._current_theme)
+        shape = self.canvas.provisional_shape
+        if shape is None:
+            return
+        if (self._pending_provisional_shape is not None
+                and self._pending_provisional_shape is not shape):
+            self._dismiss_class_picker(discard=False)
+        self._pending_provisional_shape = shape
 
-            # Sync single class mode from PR#106
-            if self.single_class_mode.isChecked() and self.lastLabel:
-                text = self.lastLabel
+        if self.use_default_label_checkbox.isChecked():
+            text = getattr(self, 'default_label', '')
+            if text:
+                self._commit_provisional_shape(text)
             else:
-                text = self.label_dialog.pop_up(text=self.prev_label_text)
-                self.lastLabel = text
+                self._cancel_provisional_shape()
+            return
+        if self.single_class_mode.isChecked() and self._session_last_class:
+            self._commit_provisional_shape(self._session_last_class)
+            return
+
+        self.class_picker.open_at(
+            self.label_hist,
+            self._session_last_class or self.prev_label_text,
+            self._provisional_picker_anchor(shape))
+
+    def _provisional_picker_anchor(self, shape):
+        """Return a global logical-pixel anchor beside provisional geometry."""
+        xs = [point.x() for point in shape.points]
+        ys = [point.y() for point in shape.points]
+        offset = self.canvas.offset_to_center()
+        point = QPoint(
+            int(round((max(xs) + offset.x()) * self.canvas.scale)),
+            int(round((min(ys) + offset.y()) * self.canvas.scale)))
+        return self.canvas.mapToGlobal(point)
+
+    def _commit_provisional_shape(self, text):
+        text = str(text).strip()
+        pending = self._pending_provisional_shape
+        if (not text or pending is None
+                or self.canvas.provisional_shape is not pending):
+            self._cancel_provisional_shape()
+            return
+
+        video_before = (self.video_model.snapshot_state()
+                        if self.document_kind == DocumentKind.VIDEO else None)
+        shape = self.canvas.commit_provisional_shape(
+            text, generate_color_by_text(text))
+        self._pending_provisional_shape = None
+        if shape is None:
+            return
+        self.add_label(shape)
+
+        if self.document_kind == DocumentKind.VIDEO:
+            track_id = self._store_video_shape_as_manual(shape)
+            self._selected_video_track_id = track_id
+            video_after = self.video_model.snapshot_state()
+            self.undo_stack.push(CreateShapeCommand(
+                self, shape, video_before=video_before,
+                video_after=video_after))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
         else:
-            text = self.default_label
+            self.undo_stack.push(CreateShapeCommand(self, shape))
+            self.set_dirty()
 
-        # Add Chris
-        self.diffc_button.setChecked(False)
-        if text is not None:
-            self.prev_label_text = text
-            generate_color = generate_color_by_text(text)
-            shape = self.canvas.set_last_label(text, generate_color)
-            self.add_label(shape)
+        self.prev_label_text = text
+        self.lastLabel = text
+        self._session_last_class = text
+        if text not in self.label_hist:
+            self.label_hist.append(text)
+        self._update_current_image_stats()
+        self._sync_tool_actions()
+        self._restore_canvas_focus()
 
-            if self.document_kind == DocumentKind.VIDEO:
-                before = self.video_model.snapshot_state()
-                track_id = self._store_video_shape_as_manual(shape)
-                self._selected_video_track_id = track_id
-                after = self.video_model.snapshot_state()
-                self.undo_stack.push(VideoModelCommand(
-                    self, before, after, 'Create video track'))
-                self._on_video_model_mutation()
-                self._materialize_video_frame(
-                    self.current_video_frame_ref.pts)
-            else:
-                # Shape already exists, so record without re-executing it.
-                cmd = CreateShapeCommand(self, shape)
-                self.undo_stack.push(cmd)
+    def _cancel_provisional_shape(self):
+        self._pending_provisional_shape = None
+        self.canvas.discard_provisional_shape()
+        self._sync_tool_actions()
+        self._restore_canvas_focus()
 
-            if self.beginner():  # Switch to edit mode.
-                self.canvas.set_editing(True)
-                self.actions.create.setEnabled(True)
-                self.actions.create_polygon.setEnabled(True)
-            else:
-                self.actions.editMode.setEnabled(True)
-                self.actions.create_polygon.setEnabled(True)
-            if self.document_kind != DocumentKind.VIDEO:
-                self.set_dirty()
-            self._update_current_image_stats()
+    def _restore_canvas_focus(self):
+        QApplication.setActiveWindow(self)
+        self.activateWindow()
+        self.setFocusProxy(self.canvas)
+        self.canvas.setFocus(Qt.OtherFocusReason)
 
-            if text not in self.label_hist:
-                self.label_hist.append(text)
-        else:
-            # self.canvas.undoLastLine()
-            self.canvas.reset_all_lines()
+    def _dismiss_class_picker(self, discard=True):
+        picker = getattr(self, 'class_picker', None)
+        if picker is not None:
+            blocked = picker.blockSignals(True)
+            picker.hide()
+            picker.blockSignals(blocked)
+        self._pending_provisional_shape = None
+        if discard and hasattr(self, 'canvas'):
+            self.canvas.discard_provisional_shape()
 
     def scroll_request(self, delta, orientation):
         units = - delta / (8 * 15)
@@ -4896,6 +4936,7 @@ class MainWindow(QMainWindow, WindowMixin):
         QTimer.singleShot(0, self.close)
 
     def _shutdown_workers(self):
+        self._dismiss_class_picker()
         self._plugin_document_ready = False
         self._publish_plugin_document(new_generation=True, force=True)
         if hasattr(self, 'plugin_manager'):

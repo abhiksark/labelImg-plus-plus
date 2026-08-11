@@ -160,6 +160,10 @@ class Canvas(QWidget):
         self.mode = self.EDIT
         self.shapes = []
         self.current = None
+        # Completed geometry awaiting class confirmation.  It remains outside
+        # ``shapes`` so saves, inspectors, plugins, dirty state, and undo do
+        # not observe it before the user commits a class.
+        self.provisional_shape = None
         self.selected_shape = None  # save the selected shape here
         self.selected_shape_copy = None
         self.drawing_line_color = QColor(0, 0, 255)
@@ -680,6 +684,9 @@ class Canvas(QWidget):
             return
 
         if ev.button() == Qt.LeftButton:
+            if (self.provisional_shape is not None
+                    and (self.drawing() or self.mode == self.CREATE_SAM)):
+                return
             if self.mode == self.CREATE_SAM:
                 if not self.out_of_pixmap(pos):
                     self.samClicked.emit(pos)
@@ -815,6 +822,8 @@ class Canvas(QWidget):
         elif ev.button() == Qt.LeftButton:
             pos = self.transform_pos(ev.pos())
             if self.drawing():
+                if self.provisional_shape is not None:
+                    return
                 self.handle_drawing(pos)
             else:
                 # pan
@@ -1249,6 +1258,13 @@ class Canvas(QWidget):
             if shape.keypoints and self.isVisible(shape):
                 self._draw_keypoints(p, shape)
 
+        if self.provisional_shape is not None:
+            p.save()
+            p.setOpacity(.72)
+            self.provisional_shape.fill = False
+            self.provisional_shape.paint(p)
+            p.restore()
+
         if self.current:
             self.current.paint(p)
             self.line.paint(p)
@@ -1364,12 +1380,34 @@ class Canvas(QWidget):
             return
 
         self.current.close()
-        self.shapes.append(self.current)
-        self.rebuild_spatial_index()
+        self.provisional_shape = self.current
         self.current = None
         self.set_hiding(False)
+        self.drawingPolygon.emit(False)
         self.newShape.emit()
         self.update()
+
+    def commit_provisional_shape(self, text, line_color=None):
+        """Move pending geometry into the canonical shape collection."""
+        assert text
+        shape = self.provisional_shape
+        if shape is None:
+            return None
+        shape.label = text
+        if line_color:
+            shape.line_color = line_color
+        self.provisional_shape = None
+        self.shapes.append(shape)
+        self.rebuild_spatial_index()
+        self.update()
+        return shape
+
+    def discard_provisional_shape(self):
+        """Drop pending geometry without changing canonical document state."""
+        shape = self.provisional_shape
+        self.provisional_shape = None
+        self.update()
+        return shape
 
     def close_enough(self, p1, p2):
         return distance(p1 - p2) < self.epsilon
@@ -1495,12 +1533,23 @@ class Canvas(QWidget):
 
     def set_last_label(self, text, line_color=None):
         assert text
-        self.shapes[-1].label = text
+        shape = self.provisional_shape
+        if shape is None:
+            shape = self.shapes[-1]
+        shape.label = text
         if line_color:
-            self.shapes[-1].line_color = line_color
-        return self.shapes[-1]
+            shape.line_color = line_color
+        return shape
 
     def undo_last_line(self):
+        if self.provisional_shape is not None:
+            self.current = self.provisional_shape
+            self.provisional_shape = None
+            self.current.set_open()
+            self.line.points = [self.current[-1], self.current[0]]
+            self.drawingPolygon.emit(True)
+            self.update()
+            return
         assert self.shapes
         self.current = self.shapes.pop()
         self.rebuild_spatial_index()
@@ -1509,6 +1558,12 @@ class Canvas(QWidget):
         self.drawingPolygon.emit(True)
 
     def reset_all_lines(self):
+        if self.provisional_shape is not None:
+            self.provisional_shape = None
+            self.current = None
+            self.drawingPolygon.emit(False)
+            self.update()
+            return
         assert self.shapes
         self.current = self.shapes.pop()
         self.rebuild_spatial_index()
@@ -1542,6 +1597,7 @@ class Canvas(QWidget):
     def load_pixmap(self, pixmap):
         self.pixmap = pixmap
         self.shapes = []
+        self.provisional_shape = None
         self._spatial_index.clear()
         self._grid_overlay = None
         self._grid_overlay_key = None
@@ -1551,6 +1607,7 @@ class Canvas(QWidget):
         self.shapes = list(shapes)
         self.rebuild_spatial_index()
         self.current = None
+        self.provisional_shape = None
         self.update()
 
     def rebuild_spatial_index(self):
@@ -1592,6 +1649,7 @@ class Canvas(QWidget):
         self._freehand_active = False
         self._freehand_points = []
         self.current = None
+        self.provisional_shape = None
         changed = self.mode != self.EDIT
         self.mode = self.EDIT
 

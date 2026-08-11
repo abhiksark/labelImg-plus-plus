@@ -31,6 +31,15 @@ read-only/disabled, dark-mode, and true 2x-DPI image states at 1366x768 and
 canvas controls, integrated timeline, and slim status strip remain in the
 single main window with no docks or detached gallery.
 
+## Workspace 3.3
+
+`workspace-3.3-inline-picker/` contains fixed Linux Qt captures of the
+provisional geometry and non-modal class picker in light and dark mode. The
+1x captures use the 1366x768 and 1440x900 approval sizes; the matching HiDPI
+captures retain those logical sizes and are stored at 2732x1536 and 2880x1800
+physical pixels. The empty Objects projection demonstrates that provisional
+geometry is not canonical until class confirmation.
+
 This directory contains screenshots demonstrating various features of labelImg++.
 
 ## Required Screenshots

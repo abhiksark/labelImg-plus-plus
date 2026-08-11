@@ -19,5 +19,6 @@ __all__ = [
 ]
 from libs.widgets.videoTimelineWidget import VideoTimelineWidget
 from libs.widgets.commandBar import CommandBar
+from libs.widgets.inlineClassPicker import InlineClassPicker
 
-__all__ = ['CommandBar', 'VideoTimelineWidget']
+__all__ = ['CommandBar', 'InlineClassPicker', 'VideoTimelineWidget']
