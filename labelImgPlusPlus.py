@@ -246,6 +246,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_observations = ()
         self.video_frame_states = ()
         self.video_classes = ()
+        self.video_gaps = ()
         self.video_model = None
         self._selected_video_track_id = None
         self._video_open_request_id = 0
@@ -3287,10 +3288,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_observations = prepared.observations
         self.video_frame_states = prepared.frame_states
         self.video_classes = prepared.classes
+        self.video_gaps = prepared.gaps
         self.video_model = VideoProjectModel(
             snapshot.revision, tracks=prepared.tracks,
             observations=prepared.observations,
-            frame_states=prepared.frame_states, classes=prepared.classes)
+            frame_states=prepared.frame_states, classes=prepared.classes,
+            gaps=prepared.gaps)
         self._document_revision = snapshot.revision
         self.m_img_list = []
         self._path_to_idx = {}
@@ -3357,7 +3360,11 @@ class MainWindow(QMainWindow, WindowMixin):
             '%s %s%s' % (__appname__, snapshot.source_path, suffix))
         self.update_status_bar()
         self.canvas.setFocus(True)
-        self.status('Opened video %s' % os.path.basename(snapshot.source_path))
+        if prepared.warning:
+            self.status(prepared.warning, delay=15000)
+        else:
+            self.status(
+                'Opened video %s' % os.path.basename(snapshot.source_path))
         self._plugin_document_ready = True
         self._publish_plugin_document(new_generation=True, force=True)
 
@@ -3511,6 +3518,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_observations = tuple(model.observations.values())
         self.video_frame_states = tuple(model.frame_states.values())
         self.video_classes = tuple(model.classes)
+        self.video_gaps = tuple(model.gaps.values())
 
     def _on_video_model_mutation(self):
         if not self._ensure_video_editable():
@@ -4084,6 +4092,7 @@ class MainWindow(QMainWindow, WindowMixin):
             image_format=values['image_format'],
             jpeg_quality=values['jpeg_quality'],
             class_order=state.classes,
+            gaps=state.gaps,
             range_start_pts=range_start_pts,
             range_end_pts=range_end_pts,
             sample_every_frames=sample_every_frames)

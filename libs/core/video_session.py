@@ -48,24 +48,34 @@ def prepare_video_open(path, project_path=None, read_only=False,
         if project_path is None:
             contents = None
             revision = 0
+            effective_read_only = bool(read_only)
         elif os.path.exists(project_path):
             validate_project_source(
                 project_path, source_path, decoder.fingerprint,
-                update_path=not read_only)
-            contents = load_project(project_path)
+                update_path=False)
+            contents = load_project(project_path, read_only=read_only)
             revision = contents.revision
+            effective_read_only = bool(read_only or contents.read_only)
+            if not effective_read_only:
+                validate_project_source(
+                    project_path, source_path, decoder.fingerprint,
+                    update_path=True)
         else:
             draft = decoder.snapshot(project_path, initial, read_only=read_only)
             contents = initialize_project(project_path, draft)
             revision = contents.revision
+            effective_read_only = bool(read_only or contents.read_only)
         snapshot = decoder.snapshot(
-            project_path, initial, revision=revision, read_only=read_only)
+            project_path, initial, revision=revision,
+            read_only=effective_read_only)
         return PreparedVideoOpen(
             snapshot=snapshot, decoder=decoder,
             tracks=contents.tracks if contents else (),
             observations=contents.observations if contents else (),
             frame_states=contents.frame_states if contents else (),
-            classes=contents.classes if contents else ())
+            classes=contents.classes if contents else (),
+            gaps=contents.gaps if contents else (),
+            warning=contents.warning if contents else None)
     except Exception:
         decoder.close()
         raise

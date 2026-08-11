@@ -124,6 +124,8 @@ class PreparedVideoOpen:
     observations: tuple
     frame_states: tuple
     classes: tuple
+    gaps: tuple = ()
+    warning: object = None
 
 
 class VideoDecoderSession:

@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import time
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_decoder import VideoDependencyError
 from libs.core.video_project import default_project_path
 from libs.core.video_project import read_project_source
+from libs.core.video_types import ObservationRecord
 
 
 def _wait(app, predicate, timeout=5):
@@ -129,10 +131,17 @@ def test_cli_positional_argument_accepts_video_project(tmp_path, make_video):
     first.close()
 
     _same_app, window = get_main_app(['labelimgpp', project])
+    source_problems = []
     try:
         assert _same_app is app
-        assert _wait(
-            app, lambda: window.document_kind == DocumentKind.VIDEO)
+        with patch.object(
+                window, '_video_source_changed_choice',
+                side_effect=lambda message: source_problems.append(message)
+                or 'cancel'):
+            assert _wait(
+                app, lambda: window.document_kind == DocumentKind.VIDEO
+                or bool(source_problems))
+        assert not source_problems, source_problems
         assert window.video_snapshot.project_path == project
         assert window.file_path == video
     finally:
@@ -236,6 +245,58 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
         assert not window.actions.pasteFromClipboard.isEnabled()
         assert window.dirty is False
         assert window.request_save_video_project() is None
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_failed_v1_migration_surfaces_warning_and_preserves_pending_rows(
+        tmp_path, make_video):
+    _app, window = get_main_app()
+    video = make_video(tmp_path / 'legacy.mp4')
+    try:
+        assert window.open_video(video)
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        pending = ObservationRecord(
+            track.track_id, window.current_video_frame_ref.pts,
+            [2, 3, 22, 23], source='tracker', review_state='pending',
+            anchor=False, quality=.75)
+        window.video_model.upsert_tracker(pending)
+        window._on_video_model_mutation()
+        assert window.save_video_project()
+        project = window.video_snapshot.project_path
+        window.reset_state()
+
+        connection = sqlite3.connect(project)
+        try:
+            connection.execute('DROP TABLE track_gaps')
+            connection.execute(
+                'UPDATE project_meta SET schema_version=1 WHERE singleton=1')
+            connection.execute('PRAGMA user_version=1')
+            connection.commit()
+        finally:
+            connection.close()
+
+        from libs.core import video_project
+        create_schema = video_project._create_track_gaps_schema
+
+        def fail_after_schema(connection):
+            create_schema(connection)
+            raise sqlite3.OperationalError('simulated full disk')
+
+        with patch.object(
+                video_project, '_create_track_gaps_schema',
+                fail_after_schema):
+            assert window.open_video(project)
+
+        loaded = window.video_model.observations[
+            ('track-1', pending.pts)]
+        assert window.video_snapshot.read_only is True
+        assert loaded.review_state == 'pending'
+        assert loaded.quality == .75
+        assert 'reopened read-only' in window.statusBar().currentMessage()
+        assert not window.actions.save.isEnabled()
     finally:
         window.dirty = False
         window.close()

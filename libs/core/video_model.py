@@ -4,7 +4,8 @@ from dataclasses import dataclass, replace
 import uuid
 
 from libs.core.video_types import (
-    FrameStateRecord, ObservationRecord, TrackRecord, VideoSaveRequest,
+    FrameStateRecord, ObservationRecord, TrackGapRecord, TrackRecord,
+    VideoSaveRequest,
 )
 
 
@@ -21,6 +22,7 @@ class VideoModelState:
     observations: tuple
     frame_states: tuple
     classes: tuple
+    gaps: tuple = ()
 
 
 def _interpolate_keypoints(left, right, ratio):
@@ -67,18 +69,23 @@ class VideoProjectModel:
     """Mutable only on the GUI thread; workers receive immutable deltas."""
 
     def __init__(self, revision=0, tracks=(), observations=(),
-                 frame_states=(), classes=()):
+                 frame_states=(), classes=(), gaps=()):
         self.durable_revision = int(revision)
         self.revision = int(revision)
         self.tracks = {item.track_id: item for item in tracks}
         self.observations = {
             (item.track_id, int(item.pts)): item for item in observations}
         self.frame_states = {int(item.pts): item for item in frame_states}
+        self.gaps = {
+            (item.track_id, int(item.start_pts), int(item.end_pts)): item
+            for item in gaps}
         self.classes = list(classes)
         self._changed_tracks = {}
         self._changed_observations = {}
         self._changed_frames = {}
+        self._changed_gaps = {}
         self._deleted_observations = {}
+        self._deleted_gaps = {}
         self._deleted_tracks = {}
         self._classes_changed_revision = None
 
@@ -93,13 +100,16 @@ class VideoProjectModel:
                          key=lambda item: (item.pts, item.track_id))),
             tuple(sorted(self.frame_states.values(),
                          key=lambda item: item.pts)),
-            tuple(self.classes))
+            tuple(self.classes),
+            tuple(sorted(self.gaps.values(), key=lambda item: (
+                item.start_pts, item.end_pts, item.track_id))))
 
     def restore_state(self, state):
         self._advance()
         revision = self.revision
         old_track_ids = set(self.tracks)
         old_observation_keys = set(self.observations)
+        old_gap_keys = set(self.gaps)
         self.tracks = {
             item.track_id: replace(item, revision=revision)
             for item in state.tracks}
@@ -109,14 +119,21 @@ class VideoProjectModel:
         self.frame_states = {
             item.pts: replace(item, revision=revision)
             for item in state.frame_states}
+        self.gaps = {
+            (item.track_id, item.start_pts, item.end_pts): replace(
+                item, revision=revision)
+            for item in getattr(state, 'gaps', ())}
         self.classes = list(state.classes)
         self._changed_tracks.update(self.tracks)
         self._changed_observations.update(self.observations)
         self._changed_frames.update(self.frame_states)
+        self._changed_gaps.update(self.gaps)
         for track_id in old_track_ids - set(self.tracks):
             self._deleted_tracks[track_id] = revision
         for key in old_observation_keys - set(self.observations):
             self._deleted_observations[key] = revision
+        for key in old_gap_keys - set(self.gaps):
+            self._deleted_gaps[key] = revision
         self._classes_changed_revision = revision
 
     def _advance(self):
@@ -198,6 +215,40 @@ class VideoProjectModel:
         self._deleted_observations.pop(key, None)
         return value
 
+    def upsert_gap(self, gap):
+        if not isinstance(gap, TrackGapRecord):
+            raise TypeError('gap must be a TrackGapRecord')
+        if int(gap.end_pts) < int(gap.start_pts):
+            raise ValueError('gap end_pts must be greater than or equal to start_pts')
+        if gap.track_id not in self.tracks:
+            raise KeyError(gap.track_id)
+        revision = self._advance()
+        key = (gap.track_id, int(gap.start_pts), int(gap.end_pts))
+        value = replace(
+            gap, start_pts=key[1], end_pts=key[2], revision=revision)
+        self.gaps[key] = value
+        self._changed_gaps[key] = value
+        self._deleted_gaps.pop(key, None)
+        track = replace(self.tracks[gap.track_id], revision=revision)
+        self.tracks[gap.track_id] = track
+        self._changed_tracks[gap.track_id] = track
+        return value
+
+    def delete_gap(self, track_id, start_pts, end_pts):
+        key = (track_id, int(start_pts), int(end_pts))
+        if key not in self.gaps:
+            return False
+        revision = self._advance()
+        del self.gaps[key]
+        self._changed_gaps.pop(key, None)
+        self._deleted_gaps[key] = revision
+        track = self.tracks.get(track_id)
+        if track is not None:
+            track = replace(track, revision=revision)
+            self.tracks[track_id] = track
+            self._changed_tracks[track_id] = track
+        return True
+
     def review(self, track_id, pts, review_state):
         if review_state not in ('accepted', 'pending', 'rejected'):
             raise ValueError('invalid review state: %s' % review_state)
@@ -248,6 +299,11 @@ class VideoProjectModel:
                 del self.observations[key]
                 self._changed_observations.pop(key, None)
                 self._deleted_observations[key] = revision
+        for key in tuple(self.gaps):
+            if key[0] == track_id:
+                del self.gaps[key]
+                self._changed_gaps.pop(key, None)
+                self._deleted_gaps[key] = revision
 
     def set_frame_verified(self, pts, verified):
         revision = self._advance()
@@ -267,6 +323,10 @@ class VideoProjectModel:
             render = ('pending' if exact.review_state == 'pending'
                       else 'exact')
             return MaterializedTrack(track, exact, render)
+        if any(item.track_id == track_id
+               and item.start_pts <= int(pts) <= item.end_pts
+               for item in self.gaps.values()):
+            return None
         if track.shape_type != 'rectangle':
             return None
         anchors = sorted(
@@ -303,15 +363,23 @@ class VideoProjectModel:
         frames = tuple(
             value for value in self._changed_frames.values()
             if value.revision <= target)
+        gaps = tuple(
+            value for value in self._changed_gaps.values()
+            if value.revision <= target)
         deleted_observations = tuple(
             key for key, revision in self._deleted_observations.items()
             if revision <= target)
         deleted_tracks = tuple(
             key for key, revision in self._deleted_tracks.items()
             if revision <= target)
+        deleted_gaps = tuple(
+            key for key, revision in self._deleted_gaps.items()
+            if revision <= target)
         touched = set(item.track_id for item in observations)
         touched.update(item.track_id for item in tracks)
         touched.update(key[0] for key in deleted_observations)
+        touched.update(item.track_id for item in gaps)
+        touched.update(key[0] for key in deleted_gaps)
         classes = (tuple(self.classes)
                    if self._classes_changed_revision is not None
                    and self._classes_changed_revision <= target else ())
@@ -320,7 +388,8 @@ class VideoProjectModel:
             tracks=tracks, observations=observations,
             deleted_observations=deleted_observations,
             deleted_tracks=deleted_tracks, frame_states=frames,
-            classes=classes, touched_tracks=tuple(sorted(touched)))
+            classes=classes, touched_tracks=tuple(sorted(touched)),
+            gaps=gaps, deleted_gaps=deleted_gaps)
 
     def mark_saved(self, target_revision):
         target_revision = int(target_revision)
@@ -334,11 +403,17 @@ class VideoProjectModel:
         self._changed_frames = {
             key: value for key, value in self._changed_frames.items()
             if value.revision > target_revision}
+        self._changed_gaps = {
+            key: value for key, value in self._changed_gaps.items()
+            if value.revision > target_revision}
         self._deleted_observations = {
             key: value for key, value in self._deleted_observations.items()
             if value > target_revision}
         self._deleted_tracks = {
             key: value for key, value in self._deleted_tracks.items()
+            if value > target_revision}
+        self._deleted_gaps = {
+            key: value for key, value in self._deleted_gaps.items()
             if value > target_revision}
         if (self._classes_changed_revision is not None
                 and self._classes_changed_revision <= target_revision):
