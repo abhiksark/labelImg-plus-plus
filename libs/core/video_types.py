@@ -121,6 +121,16 @@ class FrameStateRecord:
 
 
 @dataclass(frozen=True)
+class TrackGapRecord:
+    track_id: str
+    start_pts: int
+    end_pts: int
+    reason: str
+    backend: str
+    revision: int = 0
+
+
+@dataclass(frozen=True)
 class VideoSaveRequest:
     project_path: str
     expected_durable_revision: int
@@ -132,6 +142,52 @@ class VideoSaveRequest:
     frame_states: tuple = ()
     classes: tuple = ()
     touched_tracks: tuple = ()
+    gaps: tuple = ()
+    deleted_gaps: tuple = ()
+
+
+@dataclass(frozen=True)
+class PropagationRequest:
+    request_id: int
+    generation: int
+    document_revision: int
+    source_path: str
+    fingerprint: VideoFingerprint
+    stream_index: int
+    time_base_num: int
+    time_base_den: int
+    start_pts: int
+    end_pts: int
+    current_pts: int
+    direction: int
+    seeds: tuple
+    manual_anchors: tuple
+    track_revisions: tuple
+
+
+@dataclass(frozen=True)
+class PropagationBatch:
+    request_id: int
+    generation: int
+    direction: int
+    observations: tuple = ()
+    gaps: tuple = ()
+    processed_frames: int = 0
+    total_frames: int = 0
+    active_tracks: int = 0
+    completed_tracks: int = 0
+    eta_seconds: object = None
+    finished: bool = False
+
+
+@dataclass(frozen=True)
+class PropagationResult:
+    request_id: int
+    generation: int
+    document_revision: int
+    observations: tuple = ()
+    gaps: tuple = ()
+    failures: tuple = ()
 
 
 @dataclass(frozen=True)
