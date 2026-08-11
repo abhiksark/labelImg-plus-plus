@@ -8,13 +8,15 @@ import shutil
 import sqlite3
 
 from libs.core.video_types import (
-    FrameStateRecord, ObservationRecord, TrackRecord, VideoFingerprint,
+    FrameStateRecord, ObservationRecord, TrackGapRecord, TrackRecord,
+    VideoFingerprint,
 )
 
 
 PROJECT_SUFFIX = '.labelimgpp.sqlite'
 APPLICATION_ID = 0x4C495050  # ASCII-ish "LIPP", stored in SQLite's header.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+LEGACY_SCHEMA_VERSION = 1
 SAMPLE_BYTES = 1024 * 1024
 
 
@@ -49,6 +51,9 @@ class ProjectContents:
     observations: tuple
     frame_states: tuple
     classes: tuple
+    gaps: tuple = ()
+    read_only: bool = False
+    warning: object = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,14 @@ def _connect(path):
     return connection
 
 
+def _connect_read_only(path):
+    uri = 'file:%s?mode=ro' % os.path.abspath(path)
+    connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+    connection.execute('PRAGMA foreign_keys=ON')
+    connection.execute('PRAGMA busy_timeout=5000')
+    return connection
+
+
 def _validate_existing(path):
     uri = 'file:%s?mode=ro' % os.path.abspath(path)
     connection = sqlite3.connect(uri, uri=True, timeout=5.0)
@@ -107,9 +120,52 @@ def _validate_existing(path):
         raise NewerSchemaError(
             'project schema %s is newer than supported schema %s' %
             (version, SCHEMA_VERSION))
-    if version != SCHEMA_VERSION:
+    if version not in (LEGACY_SCHEMA_VERSION, SCHEMA_VERSION):
         raise UnknownProjectError(
             'unsupported LabelImg++ video project schema %s' % version)
+    return int(version)
+
+
+def _require_current_schema(path):
+    version = _validate_existing(path)
+    if version != SCHEMA_VERSION:
+        raise UnknownProjectError(
+            'LabelImg++ video project schema %s is read-only; expected %s' %
+            (version, SCHEMA_VERSION))
+    return version
+
+
+def _track_gaps_schema_sql():
+    return """
+    CREATE TABLE track_gaps (
+        track_id TEXT NOT NULL REFERENCES tracks(track_id) ON DELETE CASCADE,
+        start_pts INTEGER NOT NULL,
+        end_pts INTEGER NOT NULL CHECK (end_pts >= start_pts),
+        reason TEXT NOT NULL CHECK (length(reason) > 0),
+        backend TEXT NOT NULL CHECK (length(backend) > 0),
+        revision INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (track_id, start_pts, end_pts)
+    );
+    CREATE INDEX track_gaps_pts_idx ON track_gaps(start_pts, end_pts);
+    """
+
+
+def _create_track_gaps_schema(connection):
+    connection.execute("""
+        CREATE TABLE track_gaps (
+            track_id TEXT NOT NULL
+                REFERENCES tracks(track_id) ON DELETE CASCADE,
+            start_pts INTEGER NOT NULL,
+            end_pts INTEGER NOT NULL CHECK (end_pts >= start_pts),
+            reason TEXT NOT NULL CHECK (length(reason) > 0),
+            backend TEXT NOT NULL CHECK (length(backend) > 0),
+            revision INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (track_id, start_pts, end_pts)
+        )
+    """)
+    connection.execute(
+        'CREATE INDEX track_gaps_pts_idx '
+        'ON track_gaps(start_pts, end_pts)')
 
 
 def _schema_sql():
@@ -172,14 +228,39 @@ def _schema_sql():
         verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
         revision INTEGER NOT NULL DEFAULT 0
     );
+    %s
     CREATE INDEX observations_pts_idx ON observations(pts);
     CREATE INDEX observations_review_idx
         ON observations(review_state, pts);
-    """
+    """ % _track_gaps_schema_sql()
+
+
+def _migrate_v1_to_v2(path):
+    """Upgrade one writable v1 project without a partial schema state."""
+    connection = _connect(path)
+    try:
+        connection.execute('BEGIN IMMEDIATE')
+        version = int(connection.execute(
+            'PRAGMA user_version').fetchone()[0])
+        if version != LEGACY_SCHEMA_VERSION:
+            raise UnknownProjectError(
+                'expected schema %s for migration, found %s' %
+                (LEGACY_SCHEMA_VERSION, version))
+        _create_track_gaps_schema(connection)
+        connection.execute(
+            'UPDATE project_meta SET schema_version=? WHERE singleton=1',
+            (SCHEMA_VERSION,))
+        connection.execute('PRAGMA user_version=%d' % SCHEMA_VERSION)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize_project(path, session):
-    """Create schema v1 after a source and its first frame were decoded."""
+    """Create schema v2 after a source and its first frame were decoded."""
     path = os.path.abspath(os.fspath(path))
     if os.path.exists(path):
         _validate_existing(path)
@@ -241,7 +322,10 @@ def validate_project_source(path, source_path, fingerprint, update_path=True):
         stored = VideoFingerprint(int(row[0]), int(row[1]), row[2])
         if not stored.content_matches(fingerprint):
             raise VideoSourceChanged(
-                'video content does not match the project fingerprint')
+                'video content does not match the project fingerprint '
+                '(expected %s bytes/%s, found %s bytes/%s)' % (
+                    stored.size, stored.sampled_sha256[:12],
+                    fingerprint.size, fingerprint.sampled_sha256[:12]))
         source_path = os.path.abspath(source_path)
         if update_path and source_path != os.path.abspath(row[3]):
             relative = os.path.relpath(source_path, os.path.dirname(path))
@@ -298,9 +382,27 @@ def _observation_from_row(row):
         anchor=bool(row[7]), quality=row[8], revision=int(row[9]))
 
 
-def load_project(path):
-    _validate_existing(path)
-    connection = _connect(path)
+def _gap_from_row(row):
+    return TrackGapRecord(
+        track_id=row[0], start_pts=int(row[1]), end_pts=int(row[2]),
+        reason=row[3], backend=row[4], revision=int(row[5]))
+
+
+def load_project(path, read_only=False):
+    version = _validate_existing(path)
+    effective_read_only = bool(read_only)
+    warning = None
+    if version == LEGACY_SCHEMA_VERSION and not effective_read_only:
+        try:
+            _migrate_v1_to_v2(path)
+            version = SCHEMA_VERSION
+        except Exception as exc:
+            effective_read_only = True
+            warning = (
+                'Could not upgrade this video project to schema 2. '
+                'It was reopened read-only; make a backup and check write '
+                'permissions or free disk space before retrying. (%s)' % exc)
+    connection = _connect_read_only(path)
     try:
         revision = int(connection.execute(
             'SELECT durable_revision FROM project_meta WHERE singleton=1'
@@ -319,8 +421,15 @@ def load_project(path):
             'SELECT pts, verified, revision FROM frame_state ORDER BY pts'))
         classes = tuple(row[0] for row in connection.execute(
             'SELECT label FROM classes ORDER BY class_index'))
+        gaps = ()
+        if version >= 2:
+            gaps = tuple(_gap_from_row(row) for row in connection.execute(
+                'SELECT track_id, start_pts, end_pts, reason, backend, '
+                'revision FROM track_gaps '
+                'ORDER BY start_pts, end_pts, track_id'))
         return ProjectContents(
-            revision, tracks, observations, frame_states, classes)
+            revision, tracks, observations, frame_states, classes,
+            gaps=gaps, read_only=effective_read_only, warning=warning)
     finally:
         connection.close()
 
@@ -342,7 +451,7 @@ def _rebuild_segments(connection, track_id):
 
 def save_project_delta(request, cancelled=None, begin_commit=None):
     """Apply one immutable revision delta in a guarded transaction."""
-    _validate_existing(request.project_path)
+    _require_current_schema(request.project_path)
     if cancelled is not None and cancelled():
         return None
     connection = _connect(request.project_path)
@@ -360,6 +469,11 @@ def save_project_delta(request, cancelled=None, begin_commit=None):
             connection.execute(
                 'DELETE FROM observations WHERE track_id=? AND pts=?',
                 (track_id, int(pts)))
+        for track_id, start_pts, end_pts in request.deleted_gaps:
+            connection.execute(
+                'DELETE FROM track_gaps WHERE track_id=? '
+                'AND start_pts=? AND end_pts=?',
+                (track_id, int(start_pts), int(end_pts)))
         for track_id in request.deleted_tracks:
             connection.execute(
                 'DELETE FROM tracks WHERE track_id=?', (track_id,))
@@ -392,6 +506,15 @@ def save_project_delta(request, cancelled=None, begin_commit=None):
                  int(observation.present), observation.source,
                  observation.review_state, int(observation.anchor),
                  observation.quality, int(observation.revision)))
+        for gap in request.gaps:
+            connection.execute(
+                'INSERT INTO track_gaps (track_id, start_pts, end_pts, '
+                'reason, backend, revision) VALUES (?, ?, ?, ?, ?, ?) '
+                'ON CONFLICT(track_id, start_pts, end_pts) DO UPDATE SET '
+                'reason=excluded.reason, backend=excluded.backend, '
+                'revision=excluded.revision',
+                (gap.track_id, int(gap.start_pts), int(gap.end_pts),
+                 gap.reason, gap.backend, int(gap.revision)))
         for state in request.frame_states:
             connection.execute(
                 'INSERT INTO frame_state (pts, verified, revision) '
@@ -405,6 +528,7 @@ def save_project_delta(request, cancelled=None, begin_commit=None):
                 tuple(enumerate(request.classes)))
         touched = set(request.touched_tracks)
         touched.update(item.track_id for item in request.observations)
+        touched.update(item.track_id for item in request.gaps)
         touched.update(item.track_id for item in request.tracks)
         for track_id in sorted(touched):
             if connection.execute(
@@ -429,7 +553,7 @@ def save_project_delta(request, cancelled=None, begin_commit=None):
 
 
 def checkpoint_project(path):
-    _validate_existing(path)
+    _require_current_schema(path)
     connection = _connect(path)
     try:
         connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall()

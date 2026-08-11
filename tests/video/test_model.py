@@ -1,5 +1,5 @@
 from libs.core.video_model import VideoProjectModel
-from libs.core.video_types import ObservationRecord
+from libs.core.video_types import ObservationRecord, TrackGapRecord
 
 
 def _track(model, shape_type='rectangle'):
@@ -116,3 +116,43 @@ def test_rerun_replaces_pending_and_rejected_but_never_accepted_or_manual():
     model.upsert_manual(track.track_id, 10, [3, 3, 13, 13])
     manual = model.observations[(track.track_id, 10)]
     assert model.upsert_tracker(pending) == manual
+
+
+def test_gaps_round_trip_through_snapshot_restore_and_save_delta():
+    model = VideoProjectModel()
+    track = _track(model)
+    model.upsert_manual(track.track_id, 0, [0, 0, 10, 10])
+    model.upsert_manual(track.track_id, 20, [20, 20, 30, 30])
+    baseline = model.snapshot_state()
+
+    first = model.upsert_gap(TrackGapRecord(
+        track.track_id, 5, 10, 'occluded', 'opencv'))
+    assert model.materialize_one(track.track_id, 7) is None
+    request = model.build_save_request('/tmp/project.sqlite')
+    assert request.gaps == (first,)
+    assert request.deleted_gaps == ()
+
+    model.restore_state(baseline)
+    assert model.gaps == {}
+    restored = model.build_save_request('/tmp/project.sqlite')
+    assert restored.deleted_gaps == ((track.track_id, 5, 10),)
+
+
+def test_gap_replacement_deletion_and_track_cascade_are_revisioned():
+    model = VideoProjectModel()
+    track = _track(model)
+    first = model.upsert_gap(TrackGapRecord(
+        track.track_id, 5, 10, 'occluded', 'opencv'))
+    replacement = model.upsert_gap(TrackGapRecord(
+        track.track_id, 5, 10, 'scene_cut', 'opencv'))
+    assert replacement.revision > first.revision
+    assert tuple(model.gaps.values()) == (replacement,)
+    assert model.delete_gap(track.track_id, 5, 10) is True
+    assert model.delete_gap(track.track_id, 5, 10) is False
+    assert model.build_save_request(
+        '/tmp/project.sqlite').deleted_gaps == ((track.track_id, 5, 10),)
+
+    model.upsert_gap(TrackGapRecord(
+        track.track_id, 20, 30, 'out_of_frame', 'opencv'))
+    model.delete_track(track.track_id)
+    assert model.gaps == {}

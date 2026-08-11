@@ -192,7 +192,8 @@ def export_video_frames(request, handle):
             observations=tuple(
                 item for item in request.observations
                 if item.review_state == 'accepted'),
-            frame_states=request.frame_states, classes=request.class_order)
+            frame_states=request.frame_states, classes=request.class_order,
+            gaps=request.gaps)
         class_order = list(request.class_order)
         for track in request.tracks:
             if track.label not in class_order:
