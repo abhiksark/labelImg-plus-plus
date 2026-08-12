@@ -12,7 +12,6 @@ except ImportError:
                               QListView, QSlider, QLabel, QPolygonF)
     from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPoint, QPointF
 
-import hashlib
 import json
 import math
 import os
@@ -24,6 +23,7 @@ except ImportError:
     ElementTree = None
 
 from libs.utils.dpi import scale_px
+from libs.utils.utils import generate_color_by_text
 from libs.utils.styles import Theme, get_slider_style, get_gallery_controls_style, get_gallery_list_style
 from libs.formats.annotation_paths import find_existing_annotation
 from libs.formats.coco_io import COCOReader
@@ -38,17 +38,18 @@ RECTANGLE = 'rectangle'
 POLYGON = 'polygon'
 
 
-def generate_color_by_text(text):
-    """Generate a consistent color based on text hash."""
-    hash_val = int(hashlib.sha256(text.encode('utf-8')).hexdigest()[:8], 16)
-    r = (hash_val & 0xFF0000) >> 16
-    g = (hash_val & 0x00FF00) >> 8
-    b = hash_val & 0x0000FF
-    # Ensure colors are bright enough
-    r = max(100, r)
-    g = max(100, g)
-    b = max(100, b)
-    return QColor(r, g, b)
+def overlay_color(text):
+    """Thumbnail outline colour for a label, matching the canvas hue.
+
+    This used to be a second, independent hash, so the same label was drawn
+    one colour on the canvas and a different one here. The hue now comes from
+    the single canonical source; only the presentation differs, because a
+    thumbnail outline is 2px wide and needs full alpha and a legible value
+    where the canvas fill wants alpha 100 and can afford to be dark.
+    """
+    base = generate_color_by_text(text)
+    hue, saturation, value, _alpha = base.getHsv()
+    return QColor.fromHsv(hue, max(saturation, 120), max(value, 180))
 
 
 def _read_classes(classes_path):
@@ -688,7 +689,7 @@ class ThumbnailLoaderWorker(QRunnable):
 
         try:
             for shape in annotations:
-                color = generate_color_by_text(shape.label)
+                color = overlay_color(shape.label)
                 pen = QPen(color)
                 pen.setWidth(2)
                 painter.setPen(pen)

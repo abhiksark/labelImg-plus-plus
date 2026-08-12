@@ -956,5 +956,41 @@ class TestGalleryStatusFilter(unittest.TestCase):
             self.gallery.set_status_filter(4)
 
 
+class TestOverlayColourMatchesCanvas(unittest.TestCase):
+    """Gallery overlays and canvas shapes must agree on a label's colour.
+
+    These were two independent hashes: the same label was drawn one colour on
+    the canvas and a different one on its thumbnail. Only the presentation may
+    differ -- a 2px thumbnail outline needs full alpha and a legible value,
+    where the canvas fill wants alpha 100 and can afford to be dark.
+    """
+
+    LABELS = ('car', 'person', 'dog', 'traffic light', 'bicycle', 'bus')
+
+    def test_hue_is_identical_to_the_canvas_colour(self):
+        from libs.utils.utils import generate_color_by_text
+        from libs.widgets.galleryWidget import overlay_color
+
+        for label in self.LABELS:
+            self.assertEqual(
+                overlay_color(label).hue(),
+                generate_color_by_text(label).hue(),
+                'hue diverged from the canvas for %r' % label)
+
+    def test_overlay_is_opaque_and_legible_on_a_thumbnail(self):
+        from libs.widgets.galleryWidget import overlay_color
+
+        for label in self.LABELS:
+            colour = overlay_color(label)
+            self.assertEqual(colour.alpha(), 255)
+            self.assertGreaterEqual(colour.value(), 180)
+
+    def test_distinct_labels_stay_distinguishable(self):
+        from libs.widgets.galleryWidget import overlay_color
+
+        names = {overlay_color(label).name() for label in self.LABELS}
+        self.assertEqual(len(names), len(self.LABELS))
+
+
 if __name__ == '__main__':
     unittest.main()

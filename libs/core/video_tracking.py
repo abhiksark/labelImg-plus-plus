@@ -10,6 +10,7 @@ from libs.core.video_decoder import (
     load_video_dependencies,
 )
 from libs.core.video_types import (
+    geometry_bounds,
     ObservationRecord, PropagationBatch, PropagationResult, TrackGapRecord,
     TrackingBatch,
 )
@@ -82,7 +83,7 @@ def _inside_ratio(rectangle, width, height):
     return inside / area
 
 
-def _transform_keypoints(keypoints, matrix, scale, cv2, np):
+def _warp_keypoints_by_affine(keypoints, matrix, scale, cv2, np):
     if keypoints is None:
         return None
     result = list(keypoints)
@@ -257,7 +258,7 @@ def track_optical_flow(request, handle):
                              current_gray.shape[0]) < .5:
                 stop_reason = 'less than half the rectangle remains in frame'
                 break
-            keypoints = _transform_keypoints(
+            keypoints = _warp_keypoints_by_affine(
                 keypoints, matrix, working_scale, cv2, np)
             observation = ObservationRecord(
                 request.track.track_id, pts,
@@ -329,18 +330,6 @@ def _propagation_frames(container, stream, request, direction, rotation,
                 yield value
         first_chunk = False
         cursor = chunk_start
-
-
-def _geometry_bounds(geometry):
-    if geometry is None:
-        return None
-    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
-        return [float(value) for value in geometry]
-    if len(geometry) < 3:
-        return None
-    xs = [float(point[0]) for point in geometry]
-    ys = [float(point[1]) for point in geometry]
-    return [min(xs), min(ys), max(xs), max(ys)]
 
 
 def _scaled_geometry(geometry, scale):
@@ -440,13 +429,13 @@ class OpenCVPropagationBackend(PropagationBackend):
                 anchors[(anchor.track_id, int(anchor.pts))] = anchor
             states = {}
             for seed in request.seeds:
-                bounds = _geometry_bounds(seed.geometry)
+                bounds = geometry_bounds(seed.geometry)
                 if (not seed.present or seed.geometry is None
                         or bounds is None):
                     raise ValueError(
                         'propagation seeds must be present accepted geometry')
                 geometry = _scaled_geometry(seed.geometry, working_scale)
-                scaled_bounds = _geometry_bounds(geometry)
+                scaled_bounds = geometry_bounds(geometry)
                 states[seed.track_id] = {
                     'active': True,
                     'geometry': geometry,
@@ -520,7 +509,7 @@ class OpenCVPropagationBackend(PropagationBackend):
                         state['keypoints'] = anchor.keypoints
                         state['points'] = _feature_points(
                             current_gray,
-                            _geometry_bounds(state['geometry']), cv2, np)
+                            geometry_bounds(state['geometry']), cv2, np)
                         state['active'] = True
                         state['steps'] = 0
                         continue
@@ -531,7 +520,7 @@ class OpenCVPropagationBackend(PropagationBackend):
                         deactivate(
                             track_id, state, pts, 'scene_cut')
                         continue
-                    bounds = _geometry_bounds(state['geometry'])
+                    bounds = geometry_bounds(state['geometry'])
                     propagated, reason = _propagate_pair(
                         previous_gray, current_gray, bounds,
                         state['points'], cv2, np)
@@ -543,7 +532,7 @@ class OpenCVPropagationBackend(PropagationBackend):
                     _bounds, matrix, points, quality = propagated
                     geometry = _transform_geometry(
                         state['geometry'], matrix, cv2, np)
-                    transformed_bounds = _geometry_bounds(geometry)
+                    transformed_bounds = geometry_bounds(geometry)
                     if (transformed_bounds[2] - transformed_bounds[0] < 4
                             or transformed_bounds[3]
                             - transformed_bounds[1] < 4
@@ -556,7 +545,7 @@ class OpenCVPropagationBackend(PropagationBackend):
                         continue
                     state['geometry'] = geometry
                     state['points'] = points
-                    state['keypoints'] = _transform_keypoints(
+                    state['keypoints'] = _warp_keypoints_by_affine(
                         state['keypoints'], matrix, working_scale,
                         cv2, np)
                     state['steps'] += 1

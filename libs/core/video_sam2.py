@@ -22,6 +22,7 @@ import time
 from libs.core.video_propagation import PropagationBackend
 from libs.core.video_project import fingerprint_video
 from libs.core.video_types import (
+    geometry_bounds,
     ObservationRecord, PropagationBatch, PropagationResult, TrackGapRecord,
 )
 
@@ -205,18 +206,6 @@ def _config_name(config_path, sam2_module):
     return relative.replace(os.sep, '/')
 
 
-def _geometry_bounds(geometry):
-    if geometry is None:
-        return None
-    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
-        return [float(value) for value in geometry]
-    if len(geometry) < 3:
-        return None
-    xs = [float(point[0]) for point in geometry]
-    ys = [float(point[1]) for point in geometry]
-    return [min(xs), min(ys), max(xs), max(ys)]
-
-
 def _is_rectangle(geometry):
     return (
         geometry is not None and len(geometry) == 4
@@ -228,7 +217,7 @@ def _seed_mask(geometry, width, height, cv2, np):
     if geometry is None:
         return mask.astype(bool)
     if _is_rectangle(geometry):
-        xmin, ymin, xmax, ymax = _geometry_bounds(geometry)
+        xmin, ymin, xmax, ymax = geometry_bounds(geometry)
         x0 = max(0, min(width - 1, int(math.floor(xmin))))
         y0 = max(0, min(height - 1, int(math.floor(ymin))))
         x1 = max(0, min(width, int(math.ceil(xmax))))
@@ -291,11 +280,11 @@ def _mask_geometry(mask, rectangle, cv2, np):
     return [[float(point[0]), float(point[1])] for point in simplified]
 
 
-def _transform_keypoints(keypoints, old_geometry, new_geometry):
+def _rescale_keypoints_to_bounds(keypoints, old_geometry, new_geometry):
     if keypoints is None:
         return None
-    old = _geometry_bounds(old_geometry)
-    new = _geometry_bounds(new_geometry)
+    old = geometry_bounds(old_geometry)
+    new = geometry_bounds(new_geometry)
     if old is None or new is None:
         return keypoints
     old_width = max(1e-9, old[2] - old[0])
@@ -549,7 +538,7 @@ class Sam2PropagationBackend(PropagationBackend):
                                 mark_gap(track_id, track_state, pts)
                                 continue
                             close_gap(track_id, track_state, resumed=True)
-                            keypoints = _transform_keypoints(
+                            keypoints = _rescale_keypoints_to_bounds(
                                 track_state['keypoints'],
                                 track_state['geometry'], geometry)
                             observation = ObservationRecord(

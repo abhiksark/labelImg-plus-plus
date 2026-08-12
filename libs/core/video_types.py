@@ -9,6 +9,25 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+def geometry_bounds(geometry):
+    """Axis-aligned bounds of a stored geometry, or None if degenerate.
+
+    Geometry reaches these records in two shapes: a flat rectangle
+    ``[x1, y1, x2, y2]`` or a polygon point list. Both tracking backends need
+    to collapse either form to bounds, so it lives here rather than being
+    copied into each of them.
+    """
+    if geometry is None:
+        return None
+    if len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
+        return [float(value) for value in geometry]
+    if len(geometry) < 3:
+        return None
+    xs = [float(point[0]) for point in geometry]
+    ys = [float(point[1]) for point in geometry]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
 class DocumentKind(Enum):
     NONE = 'none'
     IMAGE = 'image'
