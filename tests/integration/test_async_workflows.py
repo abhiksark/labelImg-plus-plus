@@ -477,9 +477,8 @@ def test_save_directory_change_rebuilds_generation_and_reloads(tmp_path):
     old_generation = window._dataset_generation
 
     try:
-        with patch(
-                'labelImgPlusPlus.QFileDialog.getExistingDirectory',
-                return_value=str(label_dir)):
+        with patch.object(
+                window, 'pick_directory', return_value=str(label_dir)):
             window.change_save_dir_dialog()
         assert _wait(
             app, lambda: window.file_path == image_path

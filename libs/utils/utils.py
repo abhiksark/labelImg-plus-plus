@@ -77,6 +77,9 @@ def new_action(parent, text, slot=None, shortcut=None, icon=None,
     a = QAction(text, parent)
     if icon is not None:
         a.setIcon(new_icon(icon))
+        # Remember the resource name so a theme change can re-render the icon;
+        # most shipped SVGs hardcode a dark stroke and vanish on dark surfaces.
+        a.setProperty('iconName', icon)
     if shortcut is not None:
         if isinstance(shortcut, (list, tuple)):
             a.setShortcuts(shortcut)

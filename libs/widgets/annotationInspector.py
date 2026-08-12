@@ -191,7 +191,11 @@ class AnnotationListModel(QAbstractListModel):
             Qt.EditRole: class_name,
             Qt.CheckStateRole: (Qt.Checked if self._visibility.get(
                 identity, True) else Qt.Unchecked),
-            Qt.ForegroundRole: color,
+            # Row text uses the theme's own foreground. Painting it in the
+            # shape colour capped contrast at 3.7:1 (dark) / 2.8:1 (light),
+            # because every shape colour carries alpha and composites toward
+            # the panel. The colour stays available through AnnotationRoles
+            # .Color for anything that wants to draw an opaque swatch.
             AnnotationRoles.Identity: identity,
             AnnotationRoles.Type: shape_type,
             AnnotationRoles.Class: class_name,

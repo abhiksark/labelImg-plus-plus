@@ -82,7 +82,8 @@ def _first_existing(dirs, name):
     return None
 
 
-def _resolve(image_path, save_dir, image_list=None, resolver=None):
+def _resolve(image_path, save_dir, image_list=None, resolver=None,
+             extensions=None):
     """Return (path, fmt) for the first matching annotation, or (None, None)."""
     dirs = _search_dirs(image_path, save_dir)
 
@@ -90,7 +91,7 @@ def _resolve(image_path, save_dir, image_list=None, resolver=None):
         image_path,
         save_dir=save_dir,
         image_list=image_list,
-        extensions=(XML_EXT, TXT_EXT, JSON_EXT),
+        extensions=extensions or (XML_EXT, TXT_EXT, JSON_EXT),
         resolver=resolver,
     )
     if path:
@@ -320,7 +321,7 @@ def _read_json(path, image_path, json_cache=None):
 
 
 def probe(image_path, save_dir=None, want_labels=False, image_list=None,
-          resolver=None, json_cache=None):
+          resolver=None, json_cache=None, extensions=None):
     """Resolve and read an image's annotation.
 
     Args:
@@ -335,7 +336,8 @@ def probe(image_path, save_dir=None, want_labels=False, image_list=None,
         An :class:`AnnotationInfo`.
     """
     path, fmt = _resolve(
-        image_path, save_dir, image_list=image_list, resolver=resolver)
+        image_path, save_dir, image_list=image_list, resolver=resolver,
+        extensions=extensions)
     info = AnnotationInfo(path=path, fmt=fmt)
     if not path:
         return info

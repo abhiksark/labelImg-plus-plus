@@ -75,6 +75,7 @@ libs/utils/stringBundle.py
 libs/utils/styles.py
 libs/utils/ustr.py
 libs/utils/utils.py
+libs/utils/window_geometry.py
 libs/widgets/__init__.py
 libs/widgets/annotationInspector.py
 libs/widgets/batchVerifyDialog.py

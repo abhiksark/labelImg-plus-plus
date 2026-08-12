@@ -23,7 +23,8 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
 from PyQt5.QtCore import QPointF, Qt, QEvent  # noqa: E402
 from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
-from PyQt5.QtWidgets import QToolButton  # noqa: E402
+from PyQt5.QtTest import QTest  # noqa: E402
+from PyQt5.QtWidgets import QMessageBox, QToolButton  # noqa: E402
 
 from labelImgPlusPlus import get_main_app  # noqa: E402
 from libs.core.shape import Shape  # noqa: E402
@@ -169,6 +170,8 @@ class TestMainWindowFileOperations(unittest.TestCase):
         with patch.object(self.win, 'may_continue', return_value=True), \
                 patch.object(self.win, 'close', return_value=True), \
                 patch.object(self.win.settings, 'reset'), \
+                patch('labelImgPlusPlus.QMessageBox.warning',
+                      return_value=QMessageBox.Yes), \
                 patch('labelImgPlusPlus.QProcess') as mock_proc:
             instance = mock_proc.return_value
             self.assertTrue(self.win.reset_all())
@@ -176,6 +179,25 @@ class TestMainWindowFileOperations(unittest.TestCase):
         instance.startDetached.assert_called_once()
         args = instance.startDetached.call_args[0]
         self.assertEqual(args[0], sys.executable)
+
+    def test_reset_all_declined_at_the_prompt_changes_nothing(self):
+        """Reset All is destructive and one misclick from Close in the menu."""
+        from unittest.mock import patch
+
+        with patch.object(self.win, 'may_continue', return_value=True), \
+                patch('labelImgPlusPlus.QMessageBox.warning',
+                      return_value=QMessageBox.Cancel) as confirm, \
+                patch.object(self.win.settings, 'reset') as reset, \
+                patch.object(self.win, 'close') as close, \
+                patch('labelImgPlusPlus.QProcess') as process:
+            self.assertFalse(self.win.reset_all())
+
+        confirm.assert_called_once()
+        # Cancel must be the default button, so Enter cannot wipe settings.
+        self.assertEqual(confirm.call_args.args[-1], QMessageBox.Cancel)
+        reset.assert_not_called()
+        close.assert_not_called()
+        process.assert_not_called()
 
     def test_cancelled_close_returns_without_persisting_settings(self):
         """Cancelling an ordinary close must leave settings untouched."""
@@ -230,6 +252,8 @@ class TestMainWindowFileOperations(unittest.TestCase):
                     patch.object(self.win.settings, 'save') as save, \
                     patch.object(self.win, 'close', side_effect=close_window) \
                     as close, \
+                    patch('labelImgPlusPlus.QMessageBox.warning',
+                          return_value=QMessageBox.Yes), \
                     patch('labelImgPlusPlus.QProcess') as process:
                 self.assertTrue(self.win.reset_all())
 
@@ -1386,6 +1410,155 @@ class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):
         button = self.win.workspace_pages.canvas_chrome.findChildren(
             QToolButton)[0]
         self.assertEqual(button.width(), 64)
+
+
+class TestCanvasKeepsFocusForToolShortcuts(unittest.TestCase):
+    """Tool shortcuts (W/P/S/K) only fire while the canvas holds focus.
+
+    Qt hands modifier-less letters to the focused widget first, so a list or
+    combo that keeps focus silently swallows them. These tests pin the paths
+    that hand focus back -- and the one that deliberately does not.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app, cls.win = get_main_app()
+        cls.temp_dir = tempfile.mkdtemp()
+        cls.paths = []
+        for index in range(2):
+            path = os.path.join(cls.temp_dir, 'frame-%d.png' % index)
+            image = QImage(80, 60, QImage.Format_RGB32)
+            image.fill(0xFFFFFF)
+            image.save(path)
+            cls.paths.append(path)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.temp_dir, ignore_errors=True)
+
+    def setUp(self):
+        self.win.reset_state()
+        self.win.default_save_dir = self.temp_dir
+        self.win.show()
+        self.app.processEvents()
+
+    def test_loading_an_image_leaves_focus_on_the_canvas(self):
+        """The annotate-next-image loop depends on this refocus."""
+        self.win.load_file(self.paths[0])
+        self.app.processEvents()
+        self.assertTrue(self.win.canvas.hasFocus())
+
+    def test_clicking_a_shape_in_the_objects_list_returns_focus(self):
+        self.win.load_file(self.paths[0])
+        self.app.processEvents()
+
+        self.win.workspace_pages.set_page('canvas')
+        self.win.canvas.setEnabled(True)
+        shape = Shape(label='person')
+        for point in ((5, 5), (40, 5), (40, 40), (5, 40)):
+            shape.add_point(QPointF(*point))
+        shape.close()
+        self.win.canvas.shapes.append(shape)
+        self.win.add_label(shape)
+        self.app.processEvents()
+
+        self.win.annotation_search.setFocus()
+        self.app.processEvents()
+        self.assertFalse(self.win.canvas.hasFocus())
+
+        index = self.win.annotation_proxy.index(0, 0)
+        self.win.label_list.clicked.emit(index)
+        self.app.processEvents()
+        self.assertTrue(self.win.canvas.hasFocus())
+
+    def test_clicking_a_file_in_the_list_returns_focus_to_canvas(self):
+        """A single click syncs selection without loading, so nothing else
+        would hand focus back and W/P/S/K would stop firing."""
+        self.win.load_file(self.paths[0])
+        self.win.m_img_list = list(self.paths)
+        self.win._path_to_idx = {
+            path: index for index, path in enumerate(self.paths)}
+        self.win.file_list_widget.clear()
+        self.win.file_list_widget.addItems(self.paths)
+        self.win.workspace_pages.set_page('canvas')
+        self.win.canvas.setEnabled(True)
+        self.app.processEvents()
+
+        self.win.annotation_search.setFocus()
+        self.app.processEvents()
+        self.assertFalse(self.win.canvas.hasFocus())
+
+        self.win.file_item_clicked(self.win.file_list_widget.item(1))
+        self.app.processEvents()
+        self.assertTrue(self.win.canvas.hasFocus())
+
+    def test_dock_gallery_click_returns_focus_but_full_gallery_does_not(self):
+        self.win.load_file(self.paths[0])
+        self.win.m_img_list = list(self.paths)
+        self.win._path_to_idx = {
+            path: index for index, path in enumerate(self.paths)}
+        self.win.workspace_pages.set_page('canvas')
+        self.win.canvas.setEnabled(True)
+        self.app.processEvents()
+
+        self.win.annotation_search.setFocus()
+        self.app.processEvents()
+        self.win.gallery_image_selected(self.paths[1], source='dock')
+        self.app.processEvents()
+        self.assertTrue(self.win.canvas.hasFocus())
+
+        # The full gallery owns the whole page; stealing focus to a canvas
+        # the user cannot see would be wrong.
+        self.win.annotation_search.setFocus()
+        self.win.workspace_pages.set_page('gallery')
+        self.app.processEvents()
+        self.win.gallery_image_selected(self.paths[0], source='full')
+        self.app.processEvents()
+        self.assertFalse(self.win.canvas.hasFocus())
+        self.win.workspace_pages.set_page('canvas')
+
+    def test_typing_in_the_search_field_is_left_alone(self):
+        """Letters must still reach the search box - that is text entry."""
+        self.win.load_file(self.paths[0])
+        self.win.workspace_pages.set_page('canvas')
+        self.win.canvas.setEnabled(True)
+        self.app.processEvents()
+
+        self.win.annotation_search.clear()
+        self.win.annotation_search.setFocus()
+        QTest.keyClicks(self.win.annotation_search, 'wps')
+        self.app.processEvents()
+        self.assertEqual(self.win.annotation_search.text(), 'wps')
+        self.assertTrue(self.win.annotation_search.hasFocus())
+
+    def test_keyboard_navigation_of_the_objects_list_keeps_its_focus(self):
+        """Regression: refocus is wired to `clicked`, not `selectionChanged`.
+
+        Hooking selection would fire on arrow-key moves too and yank focus
+        away mid-navigation.
+        """
+        self.win.load_file(self.paths[0])
+        self.app.processEvents()
+        for label in ('person', 'car'):
+            shape = Shape(label=label)
+            for point in ((5, 5), (40, 5), (40, 40), (5, 40)):
+                shape.add_point(QPointF(*point))
+            shape.close()
+            self.win.canvas.shapes.append(shape)
+            self.win.add_label(shape)
+        self.app.processEvents()
+
+        self.win.label_list.setFocus()
+        self.win.label_list.setCurrentIndex(
+            self.win.annotation_proxy.index(0, 0))
+        self.app.processEvents()
+        self.assertTrue(self.win.label_list.hasFocus())
+
+        QTest.keyClick(self.win.label_list, Qt.Key_Down)
+        self.app.processEvents()
+        self.assertTrue(
+            self.win.label_list.hasFocus(),
+            'arrow-key navigation must not hand focus to the canvas')
 
 
 if __name__ == '__main__':

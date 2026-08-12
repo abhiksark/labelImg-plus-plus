@@ -4,7 +4,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QAction
 
 from labelImgPlusPlus import get_main_app
@@ -27,7 +27,7 @@ def test_main_window_installs_one_fixed_command_bar():
         assert window.menuWidget() is window.command_bar
         assert window.command_bar.minimumHeight() == \
             window.command_bar.maximumHeight()
-        assert window._native_menu_bar.isHidden()
+        assert window.menuWidget() is not None
         assert window.command_bar.save_button.defaultAction() is \
             window.actions.save
         assert window.command_bar.verify_button.defaultAction() is \
@@ -58,6 +58,34 @@ def test_application_menu_keeps_every_existing_menu_command_reachable():
         window.menus.plugins.addAction(plugin_action)
         assert plugin_action in _menu_actions(
             window.command_bar.application_menu)
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_menus_and_shortcuts_survive_one_event_loop_turn():
+    """setMenuWidget() deletes the menu bar via deleteLater().
+
+    DeferredDelete is only delivered once an event loop runs, so a test that
+    never enters one cannot see the menus die. Enter the loop once before
+    asserting, otherwise this whole file passes against a broken shell.
+    """
+    app, window = get_main_app([])
+    try:
+        QTimer.singleShot(0, app.quit)
+        app.exec_()
+
+        entries = window.command_bar.application_menu.actions()
+        assert len(entries) == 6
+        for entry in entries:
+            submenu = entry.menu()
+            assert submenu is not None
+            assert submenu.title()          # raises if the C++ object is gone
+
+        for name in ('undo', 'redo', 'galleryMode', 'deleteImg'):
+            action = getattr(window.actions, name)
+            assert action.associatedWidgets(), \
+                '%s lost every associated widget, so its shortcut is dead' % name
     finally:
         window.dirty = False
         window.close()

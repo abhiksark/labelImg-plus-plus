@@ -29,8 +29,11 @@ def get_dpi_scale_factor():
         if screen:
             # Logical DPI accounts for the user's display scaling setting.
             logical_dpi = screen.logicalDotsPerInch()
-            # 96 DPI is the standard baseline on most systems.
-            return logical_dpi / 96.0
+            # 96 DPI is the standard baseline on most systems. Never scale
+            # below it: macOS reports 72 and bare X11 sessions often report
+            # 75-90, which would shrink the chrome below its design size
+            # while raw-pixel widgets and the default font stayed put.
+            return max(1.0, logical_dpi / 96.0)
     except AttributeError:
         # Qt4 has no primaryScreen(); treat as unscaled.
         pass

@@ -910,6 +910,17 @@ class GalleryWidget(QWidget):
         if hasattr(self, 'list_widget'):
             self.list_widget.setStyleSheet(get_gallery_list_style(theme))
 
+        # Items bake the background brush and the status border in at creation
+        # time, so a live theme switch has to repaint the ones already on
+        # screen -- otherwise they keep light backgrounds under dark captions.
+        for path, item in self._path_to_item.items():
+            item.setBackground(QBrush(self._item_bg_color))
+            cached = self.thumbnail_cache.get(path)
+            if cached is not None:
+                self._set_item_icon(item, cached, path)
+            else:
+                item.setIcon(self._placeholder_icon())
+
     def _reload_all_thumbnails(self):
         """Reload all thumbnails at current size."""
         placeholder_icon = self._placeholder_icon()
@@ -918,12 +929,26 @@ class GalleryWidget(QWidget):
             item.setSizeHint(QSize(self._icon_size + 20, self._icon_size + 40))
         self._load_visible_thumbnails()
 
+    def _thumbnail_device_ratio(self):
+        """Device pixels per logical pixel for this widget's screen."""
+        try:
+            return float(self.devicePixelRatioF()) or 1.0
+        except AttributeError:      # Qt4 has no devicePixelRatioF()
+            return 1.0
+
+    def _thumbnail_decode_size(self):
+        """Decode thumbnails at device resolution, not logical resolution."""
+        return max(1, int(round(self._icon_size * self._thumbnail_device_ratio())))
+
     def _placeholder_icon(self):
         """Return one implicitly-shared placeholder for every unloaded item."""
-        key = (self._icon_size, self._placeholder_color.rgba())
+        ratio = self._thumbnail_device_ratio()
+        key = (self._icon_size, ratio, self._placeholder_color.rgba())
         if self._placeholder_icon_key != key:
-            placeholder = QPixmap(self._icon_size, self._icon_size)
+            side = self._thumbnail_decode_size()
+            placeholder = QPixmap(side, side)
             placeholder.fill(self._placeholder_color)
+            placeholder.setDevicePixelRatio(ratio)
             self._placeholder_icon_value = QIcon(placeholder)
             self._placeholder_icon_key = key
         return self._placeholder_icon_value
@@ -1092,11 +1117,11 @@ class GalleryWidget(QWidget):
         self._active_thumbnail_requests[image_path] = request_id
         if self._resolver is None:
             worker = ThumbnailLoaderWorker(
-                image_path, self._icon_size, self._save_dir,
+                image_path, self._thumbnail_decode_size(), self._save_dir,
                 self._image_list)
         else:
             worker = ThumbnailLoaderWorker(
-                image_path, self._icon_size, self._save_dir,
+                image_path, self._thumbnail_decode_size(), self._save_dir,
                 self._image_list, resolver=self._resolver)
         if self._coordinator is None:
             worker.signals.thumbnail_ready.connect(
@@ -1138,6 +1163,9 @@ class GalleryWidget(QWidget):
         self._thumbnail_handles.pop(path, None)
         self._loading_paths.discard(path)
         pixmap = QPixmap.fromImage(image)
+        # The worker decoded at device resolution; tag the pixmap so Qt draws
+        # it 1:1 instead of upscaling a logical-sized decode on a HiDPI screen.
+        pixmap.setDevicePixelRatio(self._thumbnail_device_ratio())
         self.thumbnail_cache.put(path, pixmap)
 
         if path in self._path_to_item:
@@ -1152,19 +1180,30 @@ class GalleryWidget(QWidget):
 
     def _add_status_border(self, pixmap, status):
         """Add colored border to pixmap based on status."""
-        border_width = 4
-        new_size = self._icon_size + border_width * 2
+        # The bordered pixmap has to match the icon box exactly. Building it
+        # larger than the box made Qt resample every thumbnail down to ~93%
+        # to fit, which is what made the grid look soft even at 1x.
+        ratio = pixmap.devicePixelRatio() or 1.0
+        box = max(1, int(round(self._icon_size * ratio)))
+        border_width = max(1, int(round(4 * ratio)))
+        inner = max(1, box - border_width * 2)
 
-        bordered = QPixmap(new_size, new_size)
+        bordered = QPixmap(box, box)
         bordered.fill(self._status_colors[status])
+
+        source = pixmap
+        if source.width() > inner or source.height() > inner:
+            source = source.scaled(
+                inner, inner, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         painter = QPainter(bordered)
         # Center the original pixmap
-        x = border_width + (self._icon_size - pixmap.width()) // 2
-        y = border_width + (self._icon_size - pixmap.height()) // 2
-        painter.drawPixmap(x, y, pixmap)
+        x = border_width + (inner - source.width()) // 2
+        y = border_width + (inner - source.height()) // 2
+        painter.drawPixmap(x, y, source)
         painter.end()
 
+        bordered.setDevicePixelRatio(ratio)
         return bordered
 
     def _on_item_clicked(self, item):

@@ -15,7 +15,7 @@ from libs.utils.dpi import scale_px
 from libs.utils.styles import (
     COMMAND_BAR_HEIGHT, Theme, get_command_bar_style,
 )
-from libs.utils.utils import new_icon
+from libs.utils.utils import new_icon, themed_icon
 
 
 class CommandBar(QWidget):
@@ -141,6 +141,7 @@ class CommandBar(QWidget):
         button.setObjectName(object_name)
         button.setText(text)
         button.setIcon(new_icon(icon_name))
+        button.setProperty('iconName', icon_name)
         button.setIconSize(QSize(scale_px(18), scale_px(18)))
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         button.setPopupMode(QToolButton.InstantPopup)
@@ -164,6 +165,12 @@ class CommandBar(QWidget):
     def apply_theme(self, theme):
         self._current_theme = theme
         self.setStyleSheet(get_command_bar_style(theme))
+        # Menu buttons own their icon instead of following an action, so the
+        # window-wide action re-icon pass does not reach them.
+        for button in self.findChildren(QToolButton):
+            icon_name = button.property('iconName')
+            if icon_name:
+                button.setIcon(themed_icon(icon_name, theme))
 
     def resizeEvent(self, event):
         """Move lower-priority labels into the always-present overflow menu."""

@@ -300,3 +300,52 @@ def test_failed_v1_migration_surfaces_warning_and_preserves_pending_rows(
     finally:
         window.dirty = False
         window.close()
+
+
+def test_opening_a_video_leaves_gallery_mode(tmp_path, make_video):
+    """A video has no gallery representation.
+
+    Regression: with gallery mode persisted on, _set_document_kind skipped the
+    page switch entirely, so the clip loaded behind an empty gallery page and
+    the user saw a blank workspace with no frame and no timeline.
+    """
+    _app, window = get_main_app()
+    try:
+        window.toggle_gallery_mode(True)
+        assert window.gallery_mode_enabled
+        assert window.workspace_pages.current_page() == 'gallery'
+
+        assert window.open_video(make_video(tmp_path / 'clip.mp4'))
+
+        assert window.document_kind == DocumentKind.VIDEO
+        assert not window.gallery_mode_enabled
+        assert window.workspace_pages.current_page() == 'canvas'
+        assert not window.actions.galleryMode.isChecked()
+        assert window.workspace_pages.timeline.isVisible()
+
+        # The gallery must also be unreachable while the video is open,
+        # otherwise re-entering it strands the user on an empty page.
+        assert not window.actions.galleryMode.isEnabled()
+        window.toggle_gallery_mode(True)
+        assert not window.gallery_mode_enabled
+        assert window.workspace_pages.current_page() == 'canvas'
+        assert window.workspace_pages.timeline.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_gallery_becomes_available_again_after_the_video_closes(
+        tmp_path, make_video):
+    """Disabling the gallery for video must not be a one-way trip."""
+    _app, window = get_main_app()
+    try:
+        assert window.open_video(make_video(tmp_path / 'clip.mp4'))
+        assert not window.actions.galleryMode.isEnabled()
+
+        window.reset_state()
+        assert window.document_kind == DocumentKind.NONE
+        assert window.actions.galleryMode.isEnabled()
+    finally:
+        window.dirty = False
+        window.close()

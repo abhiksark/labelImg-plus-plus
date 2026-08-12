@@ -16,7 +16,7 @@ except ImportError:
     from PyQt4.QtCore import Qt, QPoint
 
 from libs.utils.utils import new_icon, label_validator, trimmed
-from libs.utils.styles import Theme, get_label_dialog_style
+from libs.utils.styles import Theme, get_label_dialog_style, get_theme_colors
 
 BB = QDialogButtonBox
 
@@ -49,6 +49,10 @@ class LabelDialog(QDialog):
         bb.button(BB.Cancel).setIcon(new_icon('undo'))
         bb.accepted.connect(self.validate)
         bb.rejected.connect(self.reject)
+        # An empty field makes validate() a silent no-op, which reads as a
+        # frozen dialog. Disable OK instead so it explains itself.
+        self.edit.textChanged.connect(self._sync_ok_enabled)
+        self._sync_ok_enabled(self.edit.text())
 
         layout = QVBoxLayout()
         layout.addWidget(bb, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -116,6 +120,27 @@ class LabelDialog(QDialog):
             self.filter_label.setStyleSheet(styles['filter_label'])
         if hasattr(self, 'count_label'):
             self.count_label.setStyleSheet(styles['count_label'])
+
+        # The completer popup is its own top-level window, so it inherits
+        # neither this dialog's sheet nor MainWindow's and would otherwise
+        # drop a light list onto a dark UI.
+        completer = self.edit.completer()
+        if completer is not None and completer.popup() is not None:
+            colors = get_theme_colors(theme)
+            completer.popup().setStyleSheet(
+                'background: %(background)s; color: %(text)s;'
+                ' border: 1px solid %(border)s;'
+                ' selection-background-color: %(accent_light)s;'
+                ' selection-color: %(accent_text)s;' % {
+                    'background': colors['background'],
+                    'text': colors['text'],
+                    'border': colors['border'],
+                    'accent_light': colors['accent_light'],
+                    'accent_text': colors['accent_text'],
+                })
+
+    def _sync_ok_enabled(self, text):
+        self.button_box.button(BB.Ok).setEnabled(bool(trimmed(text)))
 
     def validate(self):
         if trimmed(self.edit.text()):

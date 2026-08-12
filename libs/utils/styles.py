@@ -100,7 +100,9 @@ DARK_COLORS = {
     'accent_hover': '#70b7ff',
     'accent_pressed': '#2f8fe8',
     'accent_light': '#264f78',
-    'accent_text': '#4da6ff',
+    # Lightened from #4da6ff, which sat at 3.32:1 on accent_light and failed
+    # the 4.5:1 body-text bar for every selected row, menu item and caption.
+    'accent_text': '#a8d3ff',
     'on_accent': '#101820',
     'focus': '#70b7ff',
     'hover': '#3d3d3d',
@@ -374,22 +376,22 @@ QDockWidget::title {{
     border-bottom: {scale_px(1)}px solid {c['border']};
 }}
 
-QListWidget {{
+QListWidget, QListView {{
     background: {c['background']};
     border: {scale_px(1)}px solid {c['border']};
     color: {c['text']};
 }}
 
-QListWidget::item {{
+QListWidget::item, QListView::item {{
     padding: {scale_px(4)}px;
 }}
 
-QListWidget::item:selected {{
+QListWidget::item:selected, QListView::item:selected {{
     background: {c['accent_light']};
     color: {c['accent_text']};
 }}
 
-QListWidget::item:hover {{
+QListWidget::item:hover, QListView::item:hover {{
     background: {c['hover']};
 }}
 
@@ -738,6 +740,11 @@ def get_gallery_controls_style(theme: Theme) -> str:
             font-weight: bold;
             font-size: {scale_px(11)}px;
             color: {c['text']};
+            /* The main-window sheet sets padding: 6px 17px on every
+               QPushButton. These are fixed at 32px wide, so inheriting it
+               leaves a negative content width and clips S/M/L/XL to a
+               sliver. */
+            padding: 0px;
         }}
         QPushButton:hover {{
             background-color: {c['hover']};

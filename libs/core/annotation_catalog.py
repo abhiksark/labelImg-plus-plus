@@ -37,7 +37,8 @@ def _fingerprint(path):
         return None
 
 
-def _catalog_entry(snapshot, image_path, include_labels, json_cache):
+def _catalog_entry(snapshot, image_path, include_labels, json_cache,
+                   extensions=None):
     info = probe(
         image_path,
         snapshot.save_dir,
@@ -45,6 +46,7 @@ def _catalog_entry(snapshot, image_path, include_labels, json_cache):
         image_list=snapshot.image_paths,
         resolver=snapshot.resolver,
         json_cache=json_cache,
+        extensions=extensions,
     )
     if info.verified:
         status = VERIFIED
@@ -84,12 +86,18 @@ class AnnotationCatalog(QObject):
         self._stats_handle = None
         self._want_statistics = False
         self._json_cache = shared_json_cache
+        # Sidecar search order; MainWindow keeps this in step with the active
+        # format so the catalog resolves the same file the canvas loads.
+        self.extensions = None
 
     def start(self, snapshot):
         self.cancel()
         self.snapshot = snapshot
         self.entries = {}
-        self._want_statistics = False
+        # _want_statistics describes what the UI is showing, not what this
+        # scan holds, so it stays armed across restarts. Clearing it here
+        # meant Batch Verify / Change Save Dir / Open Dir silently switched
+        # statistics off until the user pressed Refresh.
         self._handle = self._submit(
             snapshot.image_paths, include_labels=False,
             priority=JobPriority.CATALOG, key='annotation-catalog')
@@ -154,6 +162,7 @@ class AnnotationCatalog(QObject):
         generation = snapshot.generation
         paths = tuple(paths)
         json_cache = self._json_cache
+        extensions = self.extensions
         batch_size = self.batch_size
 
         def run(handle):
@@ -165,7 +174,8 @@ class AnnotationCatalog(QObject):
             for index, image_path in enumerate(paths, 1):
                 handle.check_cancelled()
                 entry = _catalog_entry(
-                    snapshot, image_path, include_labels, json_cache)
+                    snapshot, image_path, include_labels, json_cache,
+                    extensions)
                 batch[image_path] = entry
                 all_entries[image_path] = entry
                 now = time.monotonic()
@@ -192,7 +202,11 @@ class AnnotationCatalog(QObject):
             'background', run, priority=priority, key=key, latest=True,
             generation=generation)
         handle.progress.connect(self._on_progress)
-        handle.result.connect(self._on_result)
+        # Carry the handle into the slot: a single-image invalidate() result
+        # must not clear the full scan's handle, which would defeat the
+        # request_statistics guard and start a duplicate dataset-wide pass.
+        handle.result.connect(
+            lambda payload, owner=handle: self._on_result(payload, owner))
         handle.error.connect(self._on_error)
         return handle
 
@@ -212,7 +226,7 @@ class AnnotationCatalog(QObject):
         else:
             self.progress.emit(*value)
 
-    def _on_result(self, payload):
+    def _on_result(self, payload, owner=None):
         generation, include_labels, entries = payload
         if not self._is_current(generation):
             return
@@ -228,8 +242,9 @@ class AnnotationCatalog(QObject):
                 path: entry.status for path, entry in changed.items()
             })
         if include_labels:
-            self._stats_handle = None
-        else:
+            if owner is None or owner is self._stats_handle:
+                self._stats_handle = None
+        elif owner is None or owner is self._handle:
             self._handle = None
             self.finished.emit()
         if self._want_statistics:

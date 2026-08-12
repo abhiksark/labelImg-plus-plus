@@ -25,6 +25,45 @@ def test_palette_keys_match():
     assert set(LIGHT_COLORS) == set(DARK_COLORS)
 
 
+def _relative_luminance(hex_color):
+    channels = []
+    for offset in (1, 3, 5):
+        value = int(hex_color[offset:offset + 2], 16) / 255.0
+        channels.append(
+            value / 12.92 if value <= 0.03928
+            else ((value + 0.055) / 1.055) ** 2.4)
+    red, green, blue = channels
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast_ratio(foreground, background):
+    light = _relative_luminance(foreground)
+    dark = _relative_luminance(background)
+    if light < dark:
+        light, dark = dark, light
+    return (light + 0.05) / (dark + 0.05)
+
+
+def test_text_on_its_own_surface_meets_wcag_aa():
+    """Body-text token pairs must clear 4.5:1 in both palettes.
+
+    Dark accent_text sat at 3.32:1 on accent_light, which covered every
+    selected row, highlighted menu entry and selected gallery caption.
+    """
+    pairs = (
+        ('text', 'background'),
+        ('text', 'surface'),
+        ('accent_text', 'accent_light'),
+    )
+    for palette_name, palette in (
+            ('light', LIGHT_COLORS), ('dark', DARK_COLORS)):
+        for foreground, background in pairs:
+            ratio = _contrast_ratio(palette[foreground], palette[background])
+            assert ratio >= 4.5, (
+                '%s %s on %s is %.2f:1' % (
+                    palette_name, foreground, background, ratio))
+
+
 def test_workspace_tokens_cover_interaction_and_status_states():
     for theme in (Theme.LIGHT, Theme.DARK):
         tokens = get_design_tokens(theme)

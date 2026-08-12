@@ -67,6 +67,30 @@ def meta_for_enum(enum):
     return _BY_ENUM.get(enum, _FORMATS[0])
 
 
+#: Order sidecars are searched in when no format prefers otherwise.
+DEFAULT_EXTENSION_ORDER = (XML_EXT, TXT_EXT, JSON_EXT)
+
+
+def extension_order(enum):
+    """Return the sidecar search order for an active ``LabelFileFormat``.
+
+    Both the canvas loader and the catalog probe must resolve the same file
+    for a given image; when they used different orders, a folder holding both
+    a .xml and a .json sidecar showed gallery statuses and thumbnail overlays
+    describing one file while the Objects list edited the other.
+
+    Deliberately mirrors what the canvas loader already did rather than
+    deriving the order from each format's suffix: only COCO and YOLO-seg
+    reordered, and changing that for YOLO or CreateML would alter which
+    sidecar an existing mixed-format dataset opens.
+    """
+    if enum == LabelFileFormat.COCO:
+        return (JSON_EXT, XML_EXT, TXT_EXT)
+    if enum == LabelFileFormat.YOLO_SEG:
+        return (TXT_EXT, XML_EXT, JSON_EXT)
+    return DEFAULT_EXTENSION_ORDER
+
+
 def next_in_cycle(enum):
     """Return ``(next_format_name, warning)`` for cycling from ``enum``.
 

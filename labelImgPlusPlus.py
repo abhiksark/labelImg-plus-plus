@@ -15,11 +15,11 @@ from functools import partial
 try:
     from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
     from PyQt5.QtCore import (
-        Qt, QFileInfo, QItemSelectionModel, QProcess, QSize, QTimer, QPoint,
-        QPointF, QVariant
+        Qt, QFileInfo, QItemSelectionModel, QProcess, QRect, QSize, QTimer,
+        QPoint, QPointF, QUrl, QVariant
     )
     from PyQt5.QtWidgets import (
-        QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
+        QAction, QActionGroup, QApplication, QCheckBox, QComboBox, QListView,
         QDialog, QFileDialog, QHBoxLayout, QLabel,
         QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
         QScrollArea, QTabWidget, QToolButton,
@@ -161,6 +161,7 @@ from libs.utils.utils import (
     generate_color_by_text, have_qstring, natural_sort
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
+from libs.utils.window_geometry import default_window_size, fit_to_available
 from libs.utils.stringBundle import StringBundle
 from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
@@ -174,7 +175,12 @@ __appname__ = 'labelImgPlusPlus'
 class WindowMixin(object):
 
     def menu(self, title, actions=None):
-        menu = self.menuBar().addMenu(title)
+        # Own the menu at the window level rather than letting menuBar()
+        # parent it. setMenuWidget() (used to install the command bar) deletes
+        # the menu bar, and a menu parented to it dies with it -- taking the
+        # application menu's contents and every menu-only shortcut along.
+        menu = QMenu(title, self)
+        self.menuBar().addMenu(menu)
         if actions:
             add_actions(menu, actions)
         return menu
@@ -353,11 +359,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.use_default_label_checkbox.setChecked(False)
         self.default_label_combo_box = DefaultLabelComboBox(self,items=self.label_hist)
 
-        use_default_label_qhbox_layout = QHBoxLayout()
-        use_default_label_qhbox_layout.addWidget(self.use_default_label_checkbox)
-        use_default_label_qhbox_layout.addWidget(self.default_label_combo_box)
+        # Stacked, not side by side: together the checkbox label and the class
+        # combo needed more width than the inspector can ever give them, and a
+        # QCheckBox clips its text instead of eliding it.
+        use_default_label_layout = QVBoxLayout()
+        use_default_label_layout.setContentsMargins(0, 0, 0, 0)
+        use_default_label_layout.addWidget(self.use_default_label_checkbox)
+        use_default_label_layout.addWidget(self.default_label_combo_box)
         use_default_label_container = QWidget()
-        use_default_label_container.setLayout(use_default_label_qhbox_layout)
+        use_default_label_container.setLayout(use_default_label_layout)
 
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
@@ -400,6 +410,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_list.selectionModel().selectionChanged.connect(
             self.label_selection_changed)
         self.label_list.doubleClicked.connect(self.edit_label)
+        # Clicking a shape leaves focus in the list, where Qt hands plain
+        # letters to the view's keyboard search and the tool shortcuts
+        # (W/P/S/K) stop firing. Hand focus back so the draw loop survives.
+        # Deliberately `clicked` and not `selectionChanged`: the latter also
+        # fires for arrow-key navigation, which would fight the keyboard.
+        self.label_list.clicked.connect(
+            lambda _index: self._refocus_canvas_after_pick())
         self.annotation_model.visibilityChangeRequested.connect(
             self._annotation_visibility_changed)
         self.annotation_model.classEditRequested.connect(
@@ -1121,12 +1138,14 @@ class MainWindow(QMainWindow, WindowMixin):
         # former QToolBar settings remain serialized for downgrade use, but no
         # legacy toolbar is instantiated or configured in the modern shell.
         self.tools = None
+        # Labels come from the bundle where a key already exists; the rail is
+        # the most visible chrome in the app and was hardcoded English.
         self.tool_rail = AnnotationToolRail((
             ('select', 'Select', edit_mode),
-            ('box', 'Bounding Box', create),
-            ('polygon', 'Polygon', create_polygon),
+            ('box', get_str('rectangleTool'), create),
+            ('polygon', get_str('polygonTool'), create_polygon),
             ('smartSelect', 'Smart Select', sam_mode_action),
-            ('keypoints', 'Keypoints', keypoint_mode_action),
+            ('keypoints', get_str('keypointMode'), keypoint_mode_action),
         ), self)
 
         # Keep a hidden native QStatusBar as the compatibility message bus;
@@ -1231,7 +1250,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         compatibility_status = self.statusBar()
         compatibility_status.messageChanged.connect(
-            self.label_status_message.setText)
+            self.workspace_pages.set_status_message)
         compatibility_status.showMessage('%s started.' % __appname__)
         compatibility_status.hide()
 
@@ -1259,14 +1278,27 @@ class MainWindow(QMainWindow, WindowMixin):
         self.workspace_pages.empty_page.set_recent_paths(
             path for path in self.recent_files if os.path.exists(path))
 
-        size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
-        position = QPoint(0, 0)
-        saved_position = settings.get(SETTING_WIN_POSE, position)
-        # Fix the multiple monitors issue
-        for i in range(QApplication.desktop().screenCount()):
-            if QApplication.desktop().availableGeometry(i).contains(saved_position):
-                position = saved_position
-                break
+        # Open relative to the screen rather than at a fixed 600x500, and keep
+        # a restored geometry on the display it actually lands on: a size saved
+        # on a 4K monitor used to reopen larger than a laptop screen, and the
+        # old position check only tested the top-left corner.
+        saved_size = settings.get(SETTING_WIN_SIZE, None)
+        saved_position = settings.get(SETTING_WIN_POSE, None)
+
+        screen = None
+        if isinstance(saved_position, QPoint):
+            screen = QApplication.screenAt(saved_position)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else QRect()
+
+        if saved_size is None:
+            size = default_window_size(available)
+            position = available.topLeft() if available.isValid() else QPoint(0, 0)
+        else:
+            size, position = fit_to_available(
+                available, saved_size, saved_position)
+
         self.resize(size)
         self.move(position)
         save_dir = ustr(settings.get(SETTING_SAVE_DIR, None))
@@ -1332,7 +1364,23 @@ class MainWindow(QMainWindow, WindowMixin):
             ),
             parent=self,
         )
-        self._native_menu_bar = native_menu_bar
+        # Shortcuts live on the QAction, but an action only reacts while it is
+        # attached to a live widget. Attaching every shortcut-bearing action to
+        # the window keeps it firing no matter which menu or bar owns it.
+        #
+        # Only the first claimant of a sequence may be promoted: Qt answers an
+        # ambiguous overload by firing NEITHER action, and this app ships
+        # duplicates (create and the legacy createMode both default to W).
+        claimed = set()
+        for candidate in vars(self.actions).values():
+            if not isinstance(candidate, QAction):
+                continue
+            sequence = candidate.shortcut().toString()
+            if not sequence or sequence in claimed:
+                continue
+            claimed.add(sequence)
+            self.addAction(candidate)
+
         self.setMenuWidget(self.command_bar)
         self.command_bar.apply_theme(self._current_theme)
         self._sync_command_bar()
@@ -1366,6 +1414,45 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.save_format.setIcon(themed_icon(meta.icon, theme))
         self.label_file_format = meta.enum
         LabelFile.suffix = meta.suffix
+        # Keep the catalog resolving the same sidecar the canvas will load.
+        if getattr(self, 'annotation_catalog', None) is not None:
+            self.annotation_catalog.extensions = \
+                format_metadata.extension_order(meta.enum)
+
+    def pick_directory(self, caption, start_dir):
+        """Open a directory chooser and return the chosen path, or ''.
+
+        Qt uses the desktop's own chooser when a platform-theme plugin
+        provides one. Where none is installed -- the common case for pip and
+        conda PyQt5 builds -- it silently falls back to its built-in widget
+        dialog, which opens at a tiny default size with truncated columns, no
+        theme and a useless sidebar. Configure that fallback explicitly; the
+        settings below are ignored when a native chooser is available.
+        """
+        dialog = QFileDialog(self, caption, start_dir)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.DontResolveSymlinks, True)
+        dialog.setViewMode(QFileDialog.List)
+        dialog.resize(scale_px(880), scale_px(560))
+        dialog.setStyleSheet(get_stylesheet(self._current_theme))
+
+        places = [QUrl.fromLocalFile(os.path.expanduser('~'))]
+        for recent in (self.last_open_dir, self.default_save_dir):
+            if recent and os.path.isdir(recent):
+                url = QUrl.fromLocalFile(recent)
+                if url not in places:
+                    places.append(url)
+        dialog.setSidebarUrls(places)
+        sidebar = dialog.findChild(QListView, 'sidebar')
+        if sidebar is not None:
+            # Ships ~40px wide, which clips every entry to three characters.
+            sidebar.setMinimumWidth(scale_px(180))
+
+        if dialog.exec_() != QFileDialog.Accepted:
+            return ''
+        chosen = dialog.selectedFiles()
+        return chosen[0] if chosen else ''
 
     def change_format(self):
         """Cycle through annotation formats: VOC -> YOLO -> CreateML -> COCO -> YOLO-seg -> VOC."""
@@ -1433,6 +1520,13 @@ class MainWindow(QMainWindow, WindowMixin):
     def toggle_gallery_mode(self, value=True):
         """Switch the central stack without detaching workspace chrome."""
         if hasattr(self, '_toggling_gallery') and self._toggling_gallery:
+            return
+        if value and self.document_kind == DocumentKind.VIDEO:
+            # Guarded here as well as on the action: the gallery has no
+            # entries for a video, so entering it strands the user on an
+            # empty page with the timeline and canvas hidden.
+            self.status(self.string_bundle.get_string(
+                'galleryModeVideoDisabled'))
             return
         self._toggling_gallery = True
         self._gallery_batch_id += 1
@@ -1734,6 +1828,26 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'workspace_pages'):
             self.workspace_pages.set_video_visible(
                 kind == DocumentKind.VIDEO)
+            # The gallery lists images from the dataset snapshot and has
+            # nothing to show for a video. Leaving it reachable was a dead
+            # end: the page went empty, the timeline and canvas disappeared,
+            # and nothing said why.
+            video_document = kind == DocumentKind.VIDEO
+            gallery_action = getattr(self.actions, 'galleryMode', None)
+            if gallery_action is not None:
+                gallery_action.setEnabled(not video_document)
+                gallery_action.setToolTip(self.string_bundle.get_string(
+                    'galleryModeVideoDisabled' if video_document
+                    else 'galleryModeDetail'))
+            if video_document and self.gallery_mode_enabled:
+                self.gallery_mode_enabled = False
+                if gallery_action is not None:
+                    gallery_action.blockSignals(True)
+                    gallery_action.setChecked(False)
+                    gallery_action.blockSignals(False)
+                # Say it out loud rather than silently changing modes.
+                self.status(self.string_bundle.get_string(
+                    'galleryModeVideoDisabled'))
             if not self.gallery_mode_enabled:
                 self.workspace_pages.set_page(
                     'empty' if kind == DocumentKind.NONE else 'canvas')
@@ -2301,6 +2415,8 @@ class MainWindow(QMainWindow, WindowMixin):
         index = self.current_item()
         if index is None:
             return
+        # Dialogs are themed by their caller at open time.
+        self.label_dialog.apply_theme(self._current_theme)
         text = self.label_dialog.pop_up(
             self.annotation_model.data(index, AnnotationRoles.Class))
         if text is not None:
@@ -2325,6 +2441,9 @@ class MainWindow(QMainWindow, WindowMixin):
             if item_path in self._path_to_idx:
                 self.cur_img_idx = self._path_to_idx[item_path]
                 self.gallery_widget.select_image(item_path)
+        # A single click syncs selection without loading, so nothing else
+        # hands focus back; without this the tool shortcuts stop firing.
+        self._refocus_canvas_after_pick()
 
     def gallery_image_selected(self, image_path, source=None):
         """Handle single click on gallery thumbnail - sync all views.
@@ -2355,6 +2474,11 @@ class MainWindow(QMainWindow, WindowMixin):
                     self.full_gallery.select_image(image_path)
         finally:
             self._selecting_gallery = False
+        # Same as the file list: a thumbnail click selects without loading.
+        # The full gallery owns the whole workspace page, so only the dock
+        # gallery hands focus back (the guard would refuse the other anyway).
+        if source == 'dock':
+            self._refocus_canvas_after_pick()
 
     def gallery_image_activated(self, image_path):
         """Handle double-click on gallery thumbnail - load image."""
@@ -3031,6 +3155,24 @@ class MainWindow(QMainWindow, WindowMixin):
         self._pending_provisional_shape = None
         self.canvas.discard_provisional_shape()
         self._sync_tool_actions()
+        self._restore_canvas_focus()
+
+    def _refocus_canvas_after_pick(self):
+        """Return keyboard focus to the canvas after a mouse-driven pick.
+
+        A single click in the file list or dock gallery only syncs selection;
+        no image load follows, so focus stays in the list and Qt feeds plain
+        letters to its keyboard search instead of firing the W/P/S/K tool
+        shortcuts. Guarded so it never fires while another page owns the
+        workspace or an in-flight load has the canvas disabled.
+        """
+        # The visible page is the authoritative check: gallery_mode_enabled
+        # can lag behind it, and focusing a canvas the user cannot see would
+        # be worse than leaving focus alone.
+        if self.workspace_pages.current_page() != 'canvas':
+            return
+        if not self.canvas.isEnabled():
+            return
         self._restore_canvas_focus()
 
     def _restore_canvas_focus(self):
@@ -5405,12 +5547,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if not file_path:
             return
 
-        if self.label_file_format == LabelFileFormat.COCO:
-            extensions = (JSON_EXT, XML_EXT, TXT_EXT)
-        elif self.label_file_format == LabelFileFormat.YOLO_SEG:
-            extensions = (TXT_EXT, XML_EXT, JSON_EXT)
-        else:
-            extensions = (XML_EXT, TXT_EXT, JSON_EXT)
+        extensions = format_metadata.extension_order(self.label_file_format)
 
         resolver = self._active_annotation_resolver(file_path)
         annotation_path = find_existing_annotation(
@@ -5600,9 +5737,8 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             path = '.'
 
-        dir_path = ustr(QFileDialog.getExistingDirectory(self,
-                                                         '%s - Save annotations to the directory' % __appname__, path,  QFileDialog.ShowDirsOnly
-                                                         | QFileDialog.DontResolveSymlinks))
+        dir_path = ustr(self.pick_directory(
+            '%s - Save annotations to the directory' % __appname__, path))
 
         if dir_path is not None and len(dir_path) > 1:
             current_path = self.file_path
@@ -5664,9 +5800,8 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             default_open_dir_path = os.path.dirname(self.file_path) if self.file_path else '.'
         if not silent:
-            target_dir_path = ustr(QFileDialog.getExistingDirectory(self,
-                                                                    '%s - Open Directory' % __appname__, default_open_dir_path,
-                                                                    QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks))
+            target_dir_path = ustr(self.pick_directory(
+                '%s - Open Directory' % __appname__, default_open_dir_path))
         else:
             target_dir_path = ustr(default_open_dir_path)
         self.request_import_dir_images(target_dir_path)
@@ -6175,6 +6310,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.cur_img_idx = 0
         self._annotation_status_cache.clear()
         self.frame_cache.clear()
+        # Blank the statistics panel too. Leaving the previous dataset's
+        # counts on screen beside the new folder's thumbnails is worse than
+        # showing nothing: it reads as a description of what is displayed.
+        if getattr(self, 'gallery_stats', None) is not None:
+            self.gallery_stats.clear_stats()
         self.reset_state()
 
         self.file_list_widget.setUpdatesEnabled(False)
@@ -6666,6 +6806,18 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.may_continue():
             return False
 
+        # Destructive and irreversible: the settings file is deleted and the
+        # app relaunches. It sits one entry below Close in the overflow menu,
+        # so a misclick must not be able to trigger it silently.
+        confirm = QMessageBox.warning(
+            self, 'Reset All',
+            'Reset all preferences and restart %s?\n\n'
+            'Save directory, annotation format, theme, recent files, window '
+            'layout and shortcut overrides will be lost.' % __appname__,
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if confirm != QMessageBox.Yes:
+            return False
+
         self._reset_all_in_progress = True
         try:
             self.settings.reset()
@@ -6760,6 +6912,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.undo_stack.can_undo():
             self.undo_stack.undo()
             self.set_dirty()
+            self._update_current_image_stats()
             self.canvas.update()
 
     def redo_action(self):
@@ -6772,6 +6925,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.undo_stack.can_redo():
             self.undo_stack.redo()
             self.set_dirty()
+            self._update_current_image_stats()
             self.canvas.update()
 
     def update_undo_redo_actions(self):
@@ -7162,6 +7316,8 @@ class MainWindow(QMainWindow, WindowMixin):
         # Apply theme to keypoint panel
         if hasattr(self, 'keypoint_panel'):
             self.keypoint_panel.apply_theme(theme)
+        if hasattr(self, 'class_picker'):
+            self.class_picker.apply_theme(theme)
 
         if hasattr(self, 'command_bar'):
             self.command_bar.apply_theme(theme)
@@ -7172,6 +7328,20 @@ class MainWindow(QMainWindow, WindowMixin):
             # recognize the previous theme's color token.
             is_saved = self.label_save_status.toolTip() == 'Saved'
             self._update_save_status_style(saved=is_saved)
+
+        # Re-render every icon that new_action() recorded a resource name for.
+        # Buttons bound with setDefaultAction follow their action, so this
+        # covers the command bar and the canvas chrome in one pass.
+        for owned_action in self.findChildren(QAction):
+            icon_name = owned_action.property('iconName')
+            if icon_name:
+                owned_action.setIcon(themed_icon(icon_name, theme))
+
+        # This one button copies its icon rather than binding an action.
+        visibility_button = self.findChild(
+            QToolButton, 'annotationVisibilityButton')
+        if visibility_button is not None and hasattr(self, 'actions'):
+            visibility_button.setIcon(self.actions.showAll.icon())
 
         # Refresh format button icon for current theme
         if hasattr(self, 'label_file_format') and hasattr(self, 'actions'):

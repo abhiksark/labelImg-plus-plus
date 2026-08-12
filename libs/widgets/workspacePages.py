@@ -206,6 +206,7 @@ class WorkspacePages(QWidget):
         self.status_strip.setObjectName('workspaceStatusStrip')
         self.status_strip.setFixedHeight(scale_px(24))
         self.status_widgets = tuple(status_widgets)
+        self._status_message = self.status_widgets[0].text()
         self.status_widgets[0].setMinimumWidth(0)
         self.status_widgets[0].setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -234,16 +235,58 @@ class WorkspacePages(QWidget):
     def set_video_visible(self, visible):
         self.timeline.setVisible(bool(visible))
 
+    def set_status_message(self, text):
+        """Show a status message, eliding it rather than clipping it.
+
+        The label has an Ignored size policy so the strip can shrink it, but
+        QLabel clips instead of eliding -- which silently truncated the save
+        directory with no ellipsis and no tooltip to recover it.
+        """
+        self._status_message = text or ''
+        self._refresh_status_message()
+
+    def _refresh_status_message(self):
+        label = self.status_widgets[0]
+        label.setToolTip(self._status_message)
+        available = label.width() - scale_px(4)
+        if available <= 0:
+            label.setText(self._status_message)
+            return
+        label.setText(label.fontMetrics().elidedText(
+            self._status_message, Qt.ElideMiddle, available))
+
     def resizeEvent(self, event):
         super(WorkspacePages, self).resizeEvent(event)
         self._update_status_visibility(event.size().width())
+        self._refresh_status_message()
+
+    # Dropped in this order as room runs out; the message, save state and
+    # zoom chips are never dropped.
+    _OPTIONAL_STATUS_ORDER = (7, 5, 3, 2, 4)
 
     def _update_status_visibility(self, width):
-        # Preserve warnings/state/zoom first as the canvas column narrows.
+        """Hide status chips only once they genuinely stop fitting.
+
+        A fixed pixel breakpoint measured the canvas column rather than the
+        window, so an ordinary 1024px window dropped four chips while ~130px
+        of slack sat unused beneath the stretch-1 message label.
+        """
+        layout = self.status_strip.layout()
+        margins = layout.contentsMargins()
+        spacing = layout.spacing()
+        # Always leave the message label enough room to say something.
+        available = (width - margins.left() - margins.right()
+                     - scale_px(140))
+
+        widths = [widget.sizeHint().width() for widget in self.status_widgets]
+        needed = sum(widths[1:]) + spacing * max(0, len(widths) - 1)
+
         hidden = set()
-        if width < scale_px(650):
-            hidden.update((2, 3, 5, 7))  # dimensions, image, tool, coords
-        if width < scale_px(350):
-            hidden.add(4)  # object count
+        for index in self._OPTIONAL_STATUS_ORDER:
+            if needed <= available:
+                break
+            hidden.add(index)
+            needed -= widths[index] + spacing
+
         for index, widget in enumerate(self.status_widgets):
             widget.setVisible(index not in hidden)

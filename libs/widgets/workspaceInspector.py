@@ -85,6 +85,7 @@ class WorkspaceSplitterShell(QWidget):
         self.splitter.addWidget(inspector)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
+        self.splitter.splitterMoved.connect(self._sync_collapse_after_drag)
 
         self.reopen_button = QToolButton(self)
         self.reopen_button.setObjectName('reopenInspectorButton')
@@ -113,11 +114,17 @@ class WorkspaceSplitterShell(QWidget):
     def set_inspector_width(self, width):
         self._inspector_width = int(width)
         if not self.is_inspector_collapsed():
-            total = max(0, self.splitter.width())
-            self.splitter.setSizes([
-                max(0, total - self._inspector_width),
-                self._inspector_width,
-            ])
+            self._apply_inspector_width(self._inspector_width)
+
+    def _apply_inspector_width(self, width):
+        """Resize the splitter regardless of the collapsed state.
+
+        Reopening has to bypass the collapsed guard in set_inspector_width:
+        a drag-collapsed panel is still zero-width at that point, so the
+        guard would refuse the very resize that reopens it.
+        """
+        total = max(0, self.splitter.width())
+        self.splitter.setSizes([max(0, total - width), width])
 
     def inspector_width(self):
         sizes = self.splitter.sizes()
@@ -126,7 +133,10 @@ class WorkspaceSplitterShell(QWidget):
         return self._inspector_width
 
     def is_inspector_collapsed(self):
-        return self.inspector.isHidden()
+        # A QSplitter with collapsible children gives a drag-collapsed panel
+        # zero width without hiding it. Reporting that as "open" made the
+        # width-persist timer reopen the panel 200ms after every drag.
+        return self.inspector.isHidden() or self.inspector.width() == 0
 
     def set_inspector_collapsed(self, collapsed, emit=True):
         collapsed = bool(collapsed)
@@ -140,10 +150,23 @@ class WorkspaceSplitterShell(QWidget):
             self.inspector.hide()
         else:
             self.inspector.show()
-            self.set_inspector_width(self._inspector_width)
+            self._apply_inspector_width(self._inspector_width)
         self.reopen_button.setVisible(collapsed)
         if emit:
             self.inspectorCollapsedChanged.emit(collapsed)
+
+    def _sync_collapse_after_drag(self, _position, _index):
+        """Keep the reopen affordance in step with a drag-collapse.
+
+        Dragging the handle to the edge collapses the panel without going
+        through set_inspector_collapsed, so nothing would otherwise show the
+        chevron that brings it back.
+        """
+        collapsed = self.is_inspector_collapsed()
+        if collapsed == self.reopen_button.isVisible():
+            return
+        self.reopen_button.setVisible(collapsed)
+        self.inspectorCollapsedChanged.emit(collapsed)
 
     def apply_theme(self, theme):
         self.reopen_button.setIcon(themed_icon('chevron-left', theme))

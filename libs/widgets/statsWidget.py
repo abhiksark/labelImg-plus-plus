@@ -1,4 +1,4 @@
-# libs/statsWidget.py
+# libs/widgets/statsWidget.py
 """Statistics widget for displaying annotation statistics."""
 
 try:
@@ -54,11 +54,17 @@ class StatsWidget(QWidget):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("Annotation Progress: %p%")
+        # QProgressBar sizes itself from the "100%" digits, not from the
+        # format string, so prose inside the bar is always clipped. Keep the
+        # caption in its own label and leave the bar showing the percentage.
+        self.progress_bar.setFormat("%p%")
+        self.progress_caption = QLabel("Annotation Progress")
+        self.progress_caption.setWordWrap(True)
 
         dataset_layout.addWidget(self.total_images_label)
         dataset_layout.addWidget(self.annotated_label)
         dataset_layout.addWidget(self.verified_label)
+        dataset_layout.addWidget(self.progress_caption)
         dataset_layout.addWidget(self.progress_bar)
 
         layout.addWidget(dataset_group)
@@ -70,8 +76,14 @@ class StatsWidget(QWidget):
         self.label_table = QTableWidget()
         self.label_table.setColumnCount(2)
         self.label_table.setHorizontalHeaderLabels(["Label", "Count"])
-        self.label_table.horizontalHeader().setStretchLastSection(True)
-        self.label_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        # One sizing policy, not two: stretchLastSection pinned the Count
+        # column at its minimum while column 0 stretched, so the header
+        # overshot the viewport and left a permanent 1px scrollbar.
+        self.label_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.Stretch)
+        self.label_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeToContents)
+        self.label_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.label_table.verticalHeader().setVisible(False)
         self.label_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.label_table.setSelectionBehavior(QAbstractItemView.SelectRows)

@@ -13,6 +13,7 @@ except ImportError:
         QVBoxLayout,
     )
 
+from libs.utils.styles import Theme, get_theme_colors
 from libs.utils.utils import label_validator, trimmed
 
 
@@ -54,12 +55,30 @@ class InlineClassPicker(QFrame):
         layout.addWidget(self.edit)
         layout.addWidget(self.list_widget)
 
+        self.apply_theme(Theme.LIGHT)
+
+    def apply_theme(self, theme):
+        """Paint from the application palette, not the desktop's.
+
+        palette(base)/palette(mid) resolve against the OS theme because the
+        app never calls setPalette, so in dark mode the frame kept a white
+        ring around its dark contents.
+        """
+        self._current_theme = theme
+        colors = get_theme_colors(theme)
         self.setStyleSheet(
             'QFrame#inlineClassPicker {'
-            ' background: palette(base); border: 1px solid palette(mid);'
+            ' background: %(surface)s; border: 1px solid %(border)s;'
             ' border-radius: 6px; }'
-            'QLabel { font-weight: 600; border: none; }'
-            'QLineEdit, QListWidget { border: 1px solid palette(mid); }')
+            'QLabel { font-weight: 600; border: none; color: %(text)s; }'
+            'QLineEdit, QListWidget {'
+            ' border: 1px solid %(border)s; background: %(background)s;'
+            ' color: %(text)s; }' % {
+                'surface': colors['surface'],
+                'border': colors['border'],
+                'text': colors['text'],
+                'background': colors['background'],
+            })
 
     def open_at(self, labels, text, anchor_global):
         """Populate, position beside geometry, and show without blocking."""
