@@ -48,7 +48,7 @@ def _ref(window, pts):
         snapshot.time_base_num, snapshot.time_base_den)
 
 
-def test_batches_are_preview_only_then_commit_accepted_in_one_undo_step(
+def test_batches_are_preview_only_then_commit_pending_in_one_undo_step(
         tmp_path, make_video):
     app, window = get_main_app()
     video = make_video(
@@ -61,7 +61,7 @@ def test_batches_are_preview_only_then_commit_accepted_in_one_undo_step(
         pts = request.current_pts + direction
         observation = ObservationRecord(
             request.seeds[0].track_id, pts, [17, 14, 53, 50],
-            source='tracker', review_state='accepted', anchor=False)
+            source='tracker', review_state='pending', anchor=False)
         gap = TrackGapRecord(
             request.seeds[0].track_id, pts + 1, pts + 2,
             'occluded', 'opencv')
@@ -106,7 +106,7 @@ def test_batches_are_preview_only_then_commit_accepted_in_one_undo_step(
             item for item in window.video_model.observations.values()
             if item.source == 'tracker']
         assert len(generated) == 1
-        assert generated[0].review_state == 'accepted'
+        assert generated[0].review_state == 'pending'
         assert window.video_model.revision == baseline_revision + 1
         assert len(window.undo_stack) == baseline_undo + 1
         assert window.video_model.gaps
@@ -224,7 +224,8 @@ def test_propagate_all_includes_rectangle_and_polygon_current_anchors(
         _seed(window, 'polygon', shape_type='polygon')
         with patch(
                 'labelImgPlusPlus.OpenCVPropagationBackend.propagate',
-                capture):
+                capture), patch.object(
+                    window, '_confirm_propagation_scope', return_value=True):
             assert window.propagate_across_video() is not None
             assert _wait(app, lambda: window._propagation_handle is None)
         assert captured
