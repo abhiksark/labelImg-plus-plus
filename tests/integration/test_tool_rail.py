@@ -4,7 +4,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QKeyEvent, QKeySequence
 from PyQt5.QtWidgets import QApplication, QToolBar
 
@@ -153,6 +153,50 @@ def test_escape_from_box_returns_to_select_and_leaves_box_usable(
         # And the tool is genuinely re-armable.
         window.activate_box_tool()
         assert window.canvas.mode == window.canvas.CREATE
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_context_menu_copy_here_is_undoable(monkeypatch, tmp_path):
+    """"&Copy here" mutated canvas.shapes without pushing a Command.
+
+    end_move(copy=True) appends the drag shadow to canvas.shapes directly, so
+    without an explicit push Ctrl+Z skipped straight past the duplicate. The
+    sibling copy_selected_shape (Ctrl+D) always got this right.
+    """
+    from libs.core.shape import Shape
+
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.file_path = os.path.join(str(tmp_path), 'frame.png')
+        window.canvas.setEnabled(True)
+        window.toggle_actions(True)
+
+        original = Shape(label='crate')
+        for point in [(10, 10), (60, 10), (60, 60), (10, 60)]:
+            original.add_point(QPointF(*point))
+        original.close()
+        window.canvas.load_shapes([original])
+        window.add_label(original)
+
+        # Stand in for a right-drag: a shadow copy offset from the original.
+        window.canvas.selected_shape = original
+        shadow = original.copy()
+        for point in shadow.points:
+            point.setX(point.x() + 25)
+        window.canvas.selected_shape_copy = shadow
+
+        depth_before = len(window.canvas.shapes)
+        window.copy_shape()
+
+        assert len(window.canvas.shapes) == depth_before + 1
+        assert window.undo_stack.can_undo()
+
+        window.undo_action()
+
+        assert len(window.canvas.shapes) == depth_before
+        assert window.canvas.shapes == [original]
     finally:
         window.dirty = False
         window.close()

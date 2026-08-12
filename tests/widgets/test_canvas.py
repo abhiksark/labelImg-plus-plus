@@ -868,6 +868,38 @@ class TestEditDragDraw(_DrawFirstBase):
         self.assertIsNone(self.canvas.provisional_shape)
         self.assertIsNone(self.canvas.current)
 
+    def test_click_blocked_by_pending_geometry_is_announced(self):
+        """A swallowed click must not vanish in silence.
+
+        The class picker is a frameless Qt.Tool window that never grabs the
+        mouse, so a canvas click steals its focus; without this signal the
+        user is left with a picker that ignores typing and a canvas that
+        ignores clicks, which reads as the app having frozen.
+        """
+        blocked = []
+        self.canvas.provisionalClickBlocked.connect(
+            lambda: blocked.append(True))
+        self._drag(20, 20, 60, 50)
+        self.assertIsNotNone(self.canvas.provisional_shape)
+
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 100, 100))
+
+        self.assertEqual(len(blocked), 1)
+
+    def test_click_blocked_is_announced_in_sam_mode_too(self):
+        self.canvas.set_sam_mode(True)
+        self.canvas.commit_rectangle([20, 20, 60, 50])
+        self.assertIsNotNone(self.canvas.provisional_shape)
+        blocked = []
+        self.canvas.provisionalClickBlocked.connect(
+            lambda: blocked.append(True))
+
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 100, 100))
+
+        self.assertEqual(len(blocked), 1)
+
     def test_right_press_mid_drag_cancels_and_swallows_the_menu(self):
         # menu.exec_() is a nested event loop; letting it run here would eat
         # the pending left release and strand the gesture forever.

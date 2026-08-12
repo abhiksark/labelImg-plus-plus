@@ -1229,6 +1229,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
+        self.canvas.provisionalClickBlocked.connect(
+            self._on_provisional_click_blocked)
         self._sync_tool_actions()
 
         # Create dropdown for file/directory operations
@@ -2210,6 +2212,21 @@ class MainWindow(QMainWindow, WindowMixin):
     def _finish_tool_activation(self):
         self._sync_tool_actions()
         self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def _on_provisional_click_blocked(self):
+        """Explain a canvas click that went nowhere, and recover from it.
+
+        The class picker is a frameless Qt.Tool window: it never grabs the
+        mouse, so a canvas click steals its focus and the user is left with a
+        picker that ignores typing and a canvas that ignores clicks. Pull
+        focus back and say what is being waited on.
+        """
+        if self._pending_provisional_shape is None:
+            return
+        self.status(self.string_bundle.get_string('provisionalPending'))
+        if self.class_picker.isVisible():
+            self.class_picker.raise_()
+            self.class_picker.edit.setFocus(Qt.PopupFocusReason)
 
     def _on_canvas_mode_changed(self, mode):
         """Keep the chrome consistent when the canvas changes mode itself.

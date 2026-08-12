@@ -135,6 +135,8 @@ class Canvas(QWidget):
     shapeMoved = pyqtSignal()
     drawingPolygon = pyqtSignal(bool)
     modeChanged = pyqtSignal(int)
+    # A canvas click was ignored because unnamed geometry is still pending.
+    provisionalClickBlocked = pyqtSignal()
     # Emitted on polygon vertex insert / remove / drag-move with the
     # pre-mutation points list so MainWindow can push an undo command.
     polygonVerticesEdited = pyqtSignal(object, object)  # (shape, old_points)
@@ -837,8 +839,12 @@ class Canvas(QWidget):
             return
 
         if ev.button() == Qt.LeftButton:
-            if (self.provisional_shape is not None
-                    and (self.drawing() or self.mode == self.CREATE_SAM)):
+            if self.provisional_shape is not None:
+                # Geometry is waiting to be named, in any mode. Swallowing
+                # this click in silence is a dead end: the class picker does
+                # not grab the mouse, so clicking here moves focus off it and
+                # then neither typing nor clicking appears to do anything.
+                self.provisionalClickBlocked.emit()
                 return
             if self.mode == self.CREATE_SAM:
                 if not self.out_of_pixmap(pos):
