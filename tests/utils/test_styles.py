@@ -138,5 +138,15 @@ def test_slider_style_scales_negative_margin_at_2x():
     assert 'margin: -10px 0' in css     # was -5px 0
 
 
+def test_track_state_colours_exist_in_both_palettes():
+    """Lanes must not hardcode colours the way videoTimelineWidget does."""
+    from libs.utils.styles import LIGHT_COLORS, DARK_COLORS
+    keys = ('track_anchor', 'track_interpolated',
+            'track_pending', 'track_absent')
+    for key in keys:
+        assert key in LIGHT_COLORS, key
+        assert key in DARK_COLORS, key
+
+
 if __name__ == '__main__':
     test_hex_to_qcolor()

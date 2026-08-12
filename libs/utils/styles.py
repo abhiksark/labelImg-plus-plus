@@ -84,6 +84,10 @@ LIGHT_COLORS = {
     'grid_line': '#cccccc',
     'alignment_guide': '#4da6ff',
     'midpoint_handle': '#999999',
+    'track_anchor': '#2db45a',
+    'track_interpolated': '#468cdc',
+    'track_pending': '#eba523',
+    'track_absent': '#c9ccd1',
 }
 
 DARK_COLORS = {
@@ -132,6 +136,10 @@ DARK_COLORS = {
     'grid_line': '#404040',
     'alignment_guide': '#4da6ff',
     'midpoint_handle': '#666666',
+    'track_anchor': '#4ecb75',
+    'track_interpolated': '#6ba9e8',
+    'track_pending': '#f0b84a',
+    'track_absent': '#4a4d52',
 }
 
 
