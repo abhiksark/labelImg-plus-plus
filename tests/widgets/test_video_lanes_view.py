@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 from PyQt5.QtWidgets import QApplication
 
 from libs.core.video_model import VideoModelState
-from libs.core.video_types import ObservationRecord, TrackRecord
+from libs.core.video_types import (
+    ObservationRecord, TrackGapRecord, TrackRecord)
 from libs.widgets.videoLanesView import VideoLanesView
 from libs.utils.styles import Theme
 
@@ -33,6 +34,18 @@ def _state():
                           anchor=False),
     )
     return VideoModelState(tracks, observations, (), ('car', 'person'))
+
+
+def _one_track_state(observations, gaps=()):
+    tracks = (TrackRecord(track_id='t1', label='car',
+                          shape_type='rectangle', color=(255, 0, 0)),)
+    return VideoModelState(tracks, observations, (), ('car',), gaps)
+
+
+def _spans(view, track_id='t1'):
+    """The segments as bare tuples, so boundaries can be asserted exactly."""
+    return [(seg.start_pts, seg.end_pts, seg.kind)
+            for seg in view.segments_for(track_id)]
 
 
 class TestVideoLanesView(unittest.TestCase):
@@ -69,6 +82,71 @@ class TestVideoLanesView(unittest.TestCase):
     def test_empty_state_renders_no_lanes(self):
         self.view.set_state(VideoModelState((), (), (), ()), duration_pts=100)
         self.assertEqual(self.view.lane_count(), 0)
+
+    def test_pending_outranks_a_manual_anchor(self):
+        """Rule 1 beats rule 2: awaiting review is what the lane must show."""
+        self.view.set_state(_one_track_state((
+            ObservationRecord(track_id='t1', pts=0, geometry=[0, 0, 10, 10],
+                              source='manual', review_state='pending',
+                              anchor=True),
+        )), duration_pts=100)
+        self.assertEqual(_spans(self.view),
+                         [(0, 0, 'pending'), (0, 100, 'absent')])
+
+    def test_runs_merge_by_kind_and_tile_the_whole_duration(self):
+        """Boundaries, not just kinds: merging and gap-free tiling are fixed."""
+        self.view.set_state(_one_track_state((
+            ObservationRecord(track_id='t1', pts=10, geometry=[0, 0, 1, 1]),
+            ObservationRecord(track_id='t1', pts=20, geometry=[0, 0, 1, 1]),
+            ObservationRecord(track_id='t1', pts=30, geometry=[0, 0, 1, 1],
+                              source='tracker', anchor=False),
+            ObservationRecord(track_id='t1', pts=40, geometry=[0, 0, 1, 1],
+                              source='tracker', anchor=False),
+        )), duration_pts=100)
+        self.assertEqual(_spans(self.view), [
+            (0, 10, 'absent'),
+            (10, 20, 'anchor'),     # the two manual anchors merge
+            (20, 30, 'absent'),     # no interpolation crosses a kind boundary
+            (30, 40, 'tracker'),    # the two tracker frames merge
+            (40, 100, 'absent'),
+        ])
+
+    def test_a_gap_splits_the_run_it_overlaps(self):
+        """A declared gap is absent even where interpolation would cover."""
+        self.view.set_state(_one_track_state(
+            (ObservationRecord(track_id='t1', pts=0, geometry=[0, 0, 1, 1]),
+             ObservationRecord(track_id='t1', pts=100, geometry=[0, 0, 1, 1])),
+            gaps=(TrackGapRecord(track_id='t1', start_pts=40, end_pts=60,
+                                 reason='occluded', backend='manual'),),
+        ), duration_pts=100)
+        self.assertEqual(_spans(self.view), [
+            (0, 40, 'anchor'),
+            (40, 60, 'absent'),
+            (60, 100, 'anchor'),
+        ])
+
+    def test_rejected_observations_are_not_coverage(self):
+        """Rejected data breaks the run rather than filling it."""
+        self.view.set_state(_one_track_state((
+            ObservationRecord(track_id='t1', pts=0, geometry=[0, 0, 1, 1]),
+            ObservationRecord(track_id='t1', pts=50, geometry=[0, 0, 1, 1],
+                              review_state='rejected'),
+            ObservationRecord(track_id='t1', pts=100, geometry=[0, 0, 1, 1]),
+        )), duration_pts=200)
+        self.assertEqual(_spans(self.view), [
+            (0, 0, 'anchor'),
+            (0, 100, 'absent'),
+            (100, 100, 'anchor'),
+            (100, 200, 'absent'),
+        ])
+
+    def test_not_present_observations_are_not_coverage(self):
+        """present=False says the object is gone; the lane must agree."""
+        self.view.set_state(_one_track_state((
+            ObservationRecord(track_id='t1', pts=0, geometry=None,
+                              present=False),
+        )), duration_pts=100)
+        self.assertEqual(_spans(self.view), [(0, 100, 'absent')])
 
 
 if __name__ == '__main__':

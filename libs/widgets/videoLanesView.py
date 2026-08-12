@@ -21,10 +21,20 @@ Segments therefore tile ``[0, duration_pts]`` for every track: every pts either
 falls inside a filled run or inside an ``absent`` one.  ``absent`` is never
 painted as a filled run; the lane background shows through it.
 
-One deliberate simplification: a ``TrackGapRecord`` suppresses everything it
-overlaps here, while ``materialize_one`` lets an exact observation outrank a
-gap.  A gap is the user saying "the object is not here", and an overview that
-still drew a run inside it would be the more surprising of the two answers.
+Coverage policy, stated once so the three "not this" cases agree:
+
+* ``review_state == 'pending'`` outranks everything.  A frame awaiting review
+  reads as ``pending`` even when it is a manual anchor, because the point of
+  the lane is to find the frames that still need a human.
+* Anything the user has marked as not-data contributes no coverage and breaks
+  the run it falls in: a ``TrackGapRecord`` over the span it covers, and an
+  observation that is ``review_state == 'rejected'`` or ``present`` False at
+  its own pts.  The lane never claims coverage the user has rejected.
+* That makes this view deliberately coarser than ``materialize_one``, which
+  lets an exact observation outrank a gap and interpolates across a rejected
+  frame between two anchors.  Both differences err the same way -- toward
+  ``absent`` -- so the lane under-claims rather than hiding a hole, which is
+  the safe direction for a view whose job is finding where tracking failed.
 """
 
 from collections import namedtuple
@@ -57,16 +67,30 @@ def classify_observation(observation):
     return 'tracker'
 
 
+def is_excluded(observation):
+    """Return whether the user has marked this observation as not-data."""
+    return observation.review_state == 'rejected' or not observation.present
+
+
 def _merge_runs(observations):
-    """Collapse observations into ``[start, end, kind]`` runs of one kind."""
+    """Collapse observations into ``[start, end, kind]`` runs of one kind.
+
+    An excluded observation is a barrier: it contributes nothing and closes
+    the open run, so coverage never spans a frame the user rejected.
+    """
     runs = []
+    open_run = False
     for observation in sorted(observations, key=lambda item: int(item.pts)):
+        if is_excluded(observation):
+            open_run = False
+            continue
         kind = classify_observation(observation)
         pts = int(observation.pts)
-        if runs and runs[-1][2] == kind:
+        if open_run and runs[-1][2] == kind:
             runs[-1][1] = pts
         else:
             runs.append([pts, pts, kind])
+            open_run = True
     return runs
 
 
