@@ -10,6 +10,8 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
 from libs.core.video_distinctness import geometry_distinct_pts
@@ -17,6 +19,7 @@ from libs.core.video_model import VideoModelState
 from libs.core.video_types import ObservationRecord, TrackRecord
 from libs.utils import dpi
 from libs.utils.styles import Theme, get_theme_colors
+from libs.widgets.videoLanesView import VideoLanesView
 from libs.widgets.videoOverview import VideoOverview
 
 app = QApplication.instance() or QApplication(sys.argv)
@@ -69,6 +72,20 @@ def _split_state():
     return VideoModelState(tracks, observations, (), ('car', 'person'))
 
 
+def _many_track_state(count):
+    """More tracks than a 400px page can show at a fixed 34px per lane."""
+    tracks = tuple(
+        TrackRecord(track_id='t%d' % index, label='track %d' % index,
+                    shape_type='rectangle', color=(255, 0, 0))
+        for index in range(count))
+    observations = tuple(
+        ObservationRecord(track_id=track.track_id, pts=0,
+                          geometry=[0, 0, 10, 10])
+        for track in tracks)
+    return VideoModelState(
+        tracks, observations, (), tuple(track.label for track in tracks))
+
+
 class TestVideoOverview(unittest.TestCase):
 
     def setUp(self):
@@ -81,7 +98,9 @@ class TestVideoOverview(unittest.TestCase):
         self.assertEqual(self.overview.current_view(), 'lanes')
 
     def test_the_default_page_on_screen_is_the_lanes(self):
-        self.assertIs(self.overview.stack.currentWidget(), self.overview.lanes)
+        self.assertIs(self.overview.stack.currentWidget(),
+                      self.overview.lanes_scroll)
+        self.assertIs(self.overview.lanes_scroll.widget(), self.overview.lanes)
 
     def test_view_toggle_switches(self):
         self.overview.set_view('frames')
@@ -95,7 +114,8 @@ class TestVideoOverview(unittest.TestCase):
     def test_switching_back_to_lanes_restores_that_page(self):
         self.overview.set_view('frames')
         self.overview.set_view('lanes')
-        self.assertIs(self.overview.stack.currentWidget(), self.overview.lanes)
+        self.assertIs(self.overview.stack.currentWidget(),
+                      self.overview.lanes_scroll)
 
     def test_an_unknown_view_name_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -146,6 +166,65 @@ class TestVideoOverview(unittest.TestCase):
         self.overview.lanes.seekRequested.emit(20)
         self.assertEqual(received, [10, 20])
 
+    # -- more lanes than fit ---------------------------------------------
+
+    def test_many_lanes_overflow_the_viewport_and_stay_scrollable(self):
+        """Past ~12 tracks the surplus lanes used to be silently unpaintable."""
+        self.overview.set_state(_many_track_state(30), duration_pts=100)
+        self.overview.resize(600, 400)
+        self.overview.show()
+        app.processEvents()
+
+        viewport = self.overview.lanes_scroll.viewport()
+        self.assertGreater(self.overview.lanes.height(), viewport.height())
+        self.assertGreater(
+            self.overview.lanes_scroll.verticalScrollBar().maximum(), 0)
+        self.overview.hide()
+
+    def test_every_lane_stays_reachable_through_the_scroll_area(self):
+        """The last lane must be scrollable into view, not merely counted."""
+        self.overview.set_state(_many_track_state(30), duration_pts=100)
+        self.overview.resize(600, 400)
+        self.overview.show()
+        app.processEvents()
+
+        scroll_bar = self.overview.lanes_scroll.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        app.processEvents()
+        last_lane_top = 29 * dpi.scale_px(VideoLanesView.LANE_HEIGHT)
+        visible_top = -self.overview.lanes.pos().y()
+        visible_bottom = (
+            visible_top + self.overview.lanes_scroll.viewport().height())
+        self.assertGreaterEqual(last_lane_top, visible_top)
+        self.assertLessEqual(
+            last_lane_top + dpi.scale_px(VideoLanesView.LANE_HEIGHT),
+            visible_bottom)
+        self.overview.hide()
+
+    def test_clicking_a_scrolled_lane_selects_that_lane(self):
+        """The viewport moves the widget, so lane hit-testing must still hold.
+
+        Press coordinates arrive in the lanes widget's own space whatever the
+        scroll offset, which is exactly what makes ``y // LANE_HEIGHT`` right;
+        this pins that rather than trusting it.
+        """
+        self.overview.set_state(_many_track_state(30), duration_pts=100)
+        self.overview.resize(600, 400)
+        self.overview.show()
+        app.processEvents()
+        scroll_bar = self.overview.lanes_scroll.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        app.processEvents()
+
+        received = []
+        self.overview.lanes.trackSelected.connect(received.append)
+        lane_height = dpi.scale_px(VideoLanesView.LANE_HEIGHT)
+        QTest.mouseClick(
+            self.overview.lanes, Qt.LeftButton, Qt.NoModifier,
+            QPoint(10, 29 * lane_height + lane_height // 2))
+        self.assertEqual(received, ['t29'])
+        self.overview.hide()
+
     # -- refinement ------------------------------------------------------
 
     def test_refinement_only_adds_frames(self):
@@ -174,10 +253,33 @@ class TestVideoOverview(unittest.TestCase):
         self.assertEqual(self.overview.frames.visible_pts(),
                          list(geometry_distinct_pts(state)))
 
+    def test_distinct_pts_agrees_with_the_grid_after_a_refinement(self):
+        """The export seam and the grid must name the same frames.
+
+        ``distinct_pts`` is what an exporter reads; the grid is what the user
+        approved.  Reporting only the geometry answer exported fewer frames
+        than were on screen.
+        """
+        self.overview.set_state(_redundant_state(), duration_pts=100)
+        self.overview.set_refined_pts((0, 10, 30))
+        self.assertEqual(list(self.overview.distinct_pts()),
+                         self.overview.frames.visible_pts())
+        self.assertEqual(list(self.overview.distinct_pts()), [0, 10, 30])
+
+    def test_a_new_state_resets_the_export_seam_too(self):
+        """A refinement belongs to the state it was computed against."""
+        self.overview.set_state(_redundant_state(), duration_pts=100)
+        self.overview.set_refined_pts((0, 10, 20, 30))
+        state = _redundant_state(moved_at=20)
+        self.overview.set_state(state, duration_pts=100)
+        self.assertEqual(self.overview.distinct_pts(),
+                         geometry_distinct_pts(state))
+
     def test_refinement_before_any_state_is_harmless(self):
         overview = VideoOverview()
         overview.set_refined_pts((5,))
         self.assertEqual(overview.frames.visible_pts(), [])
+        self.assertEqual(overview.distinct_pts(), ())
 
     # -- the live count --------------------------------------------------
 

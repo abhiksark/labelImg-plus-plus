@@ -42,6 +42,25 @@ def _one_track_state(observations, gaps=()):
     return VideoModelState(tracks, observations, (), ('car',), gaps)
 
 
+def _relative_luminance(hex_color):
+    channels = []
+    for offset in (1, 3, 5):
+        value = int(hex_color[offset:offset + 2], 16) / 255.0
+        channels.append(
+            value / 12.92 if value <= 0.03928
+            else ((value + 0.055) / 1.055) ** 2.4)
+    red, green, blue = channels
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast_ratio(foreground, background):
+    lighter = _relative_luminance(foreground)
+    darker = _relative_luminance(background)
+    if lighter < darker:
+        lighter, darker = darker, lighter
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def _spans(view, track_id='t1'):
     """The segments as bare tuples, so boundaries can be asserted exactly."""
     return [(seg.start_pts, seg.end_pts, seg.kind)
@@ -78,6 +97,29 @@ class TestVideoLanesView(unittest.TestCase):
     def test_apply_theme_does_not_raise(self):
         self.view.apply_theme(Theme.DARK)
         self.view.apply_theme(Theme.LIGHT)
+
+    def test_the_selected_lane_label_stays_readable_in_both_themes(self):
+        """The label is drawn over the selection fill, so it must clear AA.
+
+        Computed, not pinned to a hex: filling with ``accent`` and lettering
+        in ``text`` measured 3.1:1 light and 1.94:1 dark, and a later palette
+        change must be caught the same way rather than by a stale literal.
+        """
+        for theme in (Theme.LIGHT, Theme.DARK):
+            self.view.apply_theme(theme)
+            fill, label = self.view.selection_colors()
+            ratio = _contrast_ratio(label, fill)
+            self.assertGreaterEqual(
+                ratio, 4.5,
+                '%s selected label %s on %s is %.2f:1' % (
+                    theme, label, fill, ratio))
+
+    def test_the_selected_lane_paints_the_colours_it_reports(self):
+        """Keeps ``selection_colors`` honest about what reaches the screen."""
+        self.view.resize(400, 200)
+        self.view.select_track('t1')
+        painted = self.view.grab().toImage().pixelColor(1, 1).name()
+        self.assertEqual(painted, self.view.selection_colors()[0])
 
     def test_empty_state_renders_no_lanes(self):
         self.view.set_state(VideoModelState((), (), (), ()), duration_pts=100)

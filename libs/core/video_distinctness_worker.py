@@ -9,6 +9,12 @@ It is bounded by stride rather than clip length: a ten-minute 30fps clip costs
 about 1,200 decodes instead of 18,000. It only ever *adds* frames, so a
 cancelled or failed pass degrades to the geometry answer, which is always
 correct and merely less thorough.
+
+Built and tested, but nothing dispatches it yet: no production code calls
+``refine_distinct_pts``. GUI wiring arrives with the frames grid's thumbnail
+plumbing, since both need the same ``task_coordinator`` video-lane work and the
+same cancel-on-state-change handling, and landing them together avoids building
+that machinery twice. Until then the overview shows the geometry answer alone.
 """
 
 from libs.core.video_distinctness import dhash, hamming
@@ -21,10 +27,14 @@ def stride_for(fps, max_per_second):
     return max(1, int(round(fps / max_per_second)))
 
 
-def refine_distinct_pts(source_path, stream_index, state, geometry_pts,
+def refine_distinct_pts(source_path, stream_index, geometry_pts,
                         fps=None, max_per_second=2.0, distance_threshold=12,
                         cancelled=None):
-    """Return geometry_pts plus frames whose appearance changed materially."""
+    """Return geometry_pts plus frames whose appearance changed materially.
+
+    Takes no model state: this pass reads pixels, and the only thing it needs
+    from the model is the geometry answer it is seeded with.
+    """
     seeded = tuple(sorted(set(int(pts) for pts in geometry_pts)))
     if cancelled is not None and cancelled():
         return seeded

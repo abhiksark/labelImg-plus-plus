@@ -8,7 +8,10 @@ that agreement is enforced:
 
 * One distinct-frames answer. The container -- not the grid -- calls
   ``geometry_distinct_pts``, so the grid can never be handed a set computed
-  from a different state than the lanes were built from.
+  from a different state than the lanes were built from. ``distinct_pts`` then
+  reports back exactly what the grid was given, refinement included: it is the
+  seam an exporter reads, and the whole design rests on the exported frames
+  being the frames the user was shown.
 * One selection. Picking a lane narrows the grid to that track, so switching
   view keeps the subject rather than resetting it.
 * One seek. Either child asking to seek reaches the host as this widget's own
@@ -26,8 +29,8 @@ forwards to each of them: this widget is the only thing the host themes.
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QButtonGroup, QHBoxLayout, QLabel, QSizePolicy, QStackedWidget,
-    QToolButton, QVBoxLayout, QWidget)
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
+    QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from libs.core.video_distinctness import geometry_distinct_pts
 from libs.utils.dpi import scale_px
@@ -68,6 +71,7 @@ class VideoOverview(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._state = None
         self._geometry_pts = ()
+        self._distinct_pts = ()
         self._setup_ui()
         self._connect()
         self._set_count(0, 0)
@@ -76,6 +80,19 @@ class VideoOverview(QWidget):
     def _setup_ui(self):
         self.lanes = VideoLanesView(self)
         self.frames = VideoFramesView(self)
+
+        # A lane is a fixed height, so a clip with more tracks than fit is the
+        # normal case, not the edge one.  Without this the surplus lanes are
+        # unpaintable and unreachable, with nothing on screen saying so.  The
+        # grid needs no equivalent: its list widget scrolls itself.
+        self.lanes_scroll = QScrollArea(self)
+        self.lanes_scroll.setObjectName('videoOverviewLanesScroll')
+        self.lanes_scroll.setWidgetResizable(True)
+        self.lanes_scroll.setFrameShape(QFrame.NoFrame)
+        self.lanes_scroll.setWidget(self.lanes)
+        #: The stack page for each view.  Lanes scroll, frames do not, so the
+        #: page and the view are not always the same widget.
+        self._pages = {'lanes': self.lanes_scroll, 'frames': self.frames}
 
         self._buttons = {}
         button_group = QButtonGroup(self)
@@ -107,7 +124,7 @@ class VideoOverview(QWidget):
         self.stack.setObjectName('videoOverviewStack')
         self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         for name in VIEWS:
-            self.stack.addWidget(getattr(self, name))
+            self.stack.addWidget(self._pages[name])
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -131,6 +148,7 @@ class VideoOverview(QWidget):
         """
         self._state = state
         self._geometry_pts = geometry_distinct_pts(state)
+        self._distinct_pts = self._geometry_pts
         self.lanes.set_state(state, duration_pts)
         self.frames.set_state(state, self._geometry_pts)
 
@@ -139,13 +157,28 @@ class VideoOverview(QWidget):
 
         Union, not replacement: refinement runs on a worker and may be
         cancelled or fail, and the geometry answer must survive that intact.
+        Each call re-derives from the geometry answer rather than accumulating,
+        so a later, narrower refinement replaces an earlier one instead of
+        stacking with it -- the grid shows one pass's result, not their sum.
+
+        A refinement arriving before any state is dropped: there is no
+        geometry answer to union it with, and recording it would make
+        ``distinct_pts`` name frames the grid has nothing to show for.
         """
+        if self._state is None:
+            return
         refined = set(self._geometry_pts) | {int(value) for value in pts or ()}
-        self.frames.set_state(self._state, tuple(sorted(refined)))
+        self._distinct_pts = tuple(sorted(refined))
+        self.frames.set_state(self._state, self._distinct_pts)
 
     def distinct_pts(self):
-        """The geometry answer the grid was seeded with."""
-        return self._geometry_pts
+        """The distinct frames as the grid is currently showing them.
+
+        The union of the geometry answer and any refinement, not the geometry
+        answer alone: this is the seam an exporter reads, and the promise the
+        overview makes is that exporting gives what the grid displays.
+        """
+        return self._distinct_pts
 
     # -- the view toggle ------------------------------------------------
 
@@ -184,6 +217,10 @@ class VideoOverview(QWidget):
         self.setStyleSheet("""
             #videoOverview {{ background-color: {surface}; }}
             #videoOverviewStack {{ background-color: {surface}; }}
+            #videoOverviewLanesScroll {{
+                background-color: {surface};
+                border: none;
+            }}
             #videoOverviewCount {{ color: {text_secondary}; }}
             #videoOverviewToggle {{
                 background-color: {surface_subtle};

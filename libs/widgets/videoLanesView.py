@@ -191,6 +191,15 @@ class VideoLanesView(QWidget):
     def segments_for(self, track_id):
         return self._segments.get(track_id, ())
 
+    def selection_colors(self):
+        """The ``(fill, label)`` hex pair the selected lane paints with.
+
+        Exposed as a pair because it is a contrast contract rather than two
+        details: the label is drawn over the fill, so neither can be changed
+        without reading the other.
+        """
+        return self._selected_color.name(), self._selected_text_color.name()
+
     def select_track(self, track_id):
         """Select a known lane and announce it; unknown ids are ignored."""
         if track_id not in self._segments:
@@ -207,7 +216,14 @@ class VideoLanesView(QWidget):
             kind: QColor(colors[key]) for kind, key in KIND_COLOR_KEYS.items()}
         self._absent_color = QColor(colors['track_absent'])
         self._text_color = QColor(colors['text'])
-        self._accent_color = QColor(colors['accent'])
+        # The selected lane paints its label over its own fill, so the two
+        # are chosen as a pair rather than separately: accent_light/accent_text
+        # is the pair the palette guarantees is readable, and the same one the
+        # overview toggle and the frames chips already select with.  Filling
+        # with ``accent`` and lettering in ``text`` measured 3.1:1 in light and
+        # 1.94:1 in dark -- selecting a lane made its label disappear.
+        self._selected_color = QColor(colors['accent_light'])
+        self._selected_text_color = QColor(colors['accent_text'])
         self._border_color = QColor(colors['border'])
         self.setStyleSheet(
             '#videoLanesView { background-color: %s; }' % colors['surface'])
@@ -221,9 +237,17 @@ class VideoLanesView(QWidget):
             scale_px(self.LABEL_WIDTH) * 3, lanes * scale_px(self.LANE_HEIGHT))
 
     def minimumSizeHint(self):
+        """Never shrink below the lanes there are.
+
+        Lanes are a fixed height, so a widget shorter than their sum simply
+        cannot paint the remainder.  Refusing to shrink is what turns that
+        into a scrollbar in the enclosing ``QScrollArea`` -- which resizes its
+        child to the viewport but no smaller than this -- rather than into
+        lanes that silently do not exist.
+        """
         return QSize(
             scale_px(self.LABEL_WIDTH + self.RIGHT_MARGIN),
-            scale_px(self.LANE_HEIGHT))
+            max(1, len(self._tracks)) * scale_px(self.LANE_HEIGHT))
 
     def _track_geometry(self):
         """Return the left edge and width of the painted lane area."""
@@ -251,9 +275,10 @@ class VideoLanesView(QWidget):
     def _paint_lane(self, painter, track, top, lane_height, left, width):
         padding = scale_px(self.LANE_PADDING)
         bar = QRect(left, top + padding, width, lane_height - 2 * padding)
-        if track.track_id == self._selected_track_id:
+        selected = track.track_id == self._selected_track_id
+        if selected:
             painter.fillRect(
-                QRect(0, top, self.width(), lane_height), self._accent_color)
+                QRect(0, top, self.width(), lane_height), self._selected_color)
         painter.fillRect(bar, self._absent_color)
         for segment in self._segments.get(track.track_id, ()):
             color = self._kind_colors.get(segment.kind)
@@ -267,9 +292,9 @@ class VideoLanesView(QWidget):
         painter.setPen(self._border_color)
         painter.drawLine(0, top + lane_height - 1, self.width(),
                          top + lane_height - 1)
-        self._paint_label(painter, track, top, lane_height)
+        self._paint_label(painter, track, top, lane_height, selected)
 
-    def _paint_label(self, painter, track, top, lane_height):
+    def _paint_label(self, painter, track, top, lane_height, selected):
         swatch = scale_px(self.SWATCH_SIZE)
         padding = scale_px(self.LANE_PADDING)
         painter.fillRect(
@@ -280,7 +305,8 @@ class VideoLanesView(QWidget):
             text_left, top,
             max(1, scale_px(self.LABEL_WIDTH) - text_left - padding),
             lane_height)
-        painter.setPen(self._text_color)
+        painter.setPen(
+            self._selected_text_color if selected else self._text_color)
         metrics = QFontMetrics(painter.font())
         painter.drawText(
             text_rect, Qt.AlignVCenter | Qt.AlignLeft,
