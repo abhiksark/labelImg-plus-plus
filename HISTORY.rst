@@ -1,6 +1,131 @@
 History
 =======
 
+4.0.0rc0 (2026-08-12)
+---------------------
+
+Consolidated release replacing 3.3.0, 3.4.0, and 3.5.0, which were published
+within five hours of each other and have been yanked from PyPI. It carries all
+of their functionality, reviewed together rather than shipped overnight, and
+adds a draw-first canvas. Annotation formats, filenames, command-line entry
+points, plugin APIs, document methods, shortcut identifiers, and Python 3.8
+through 3.13 support remain compatible. Existing video project sidecars are
+read and migrated as before.
+
+Draw-First Canvas
+~~~~~~~~~~~~~~~~~
+
+* Draw a rectangle by dragging on empty image pixels, with no tool armed first.
+  The canvas never leaves its editing mode during the gesture, and promotion
+  from a click to a drag uses the platform drag distance so a plain click still
+  only deselects.
+* Move panning to the middle mouse button. Left-drag on empty pixels previously
+  panned, which made moving the image the default action of an annotation tool.
+  Wheel scrolling and the scrollbars are unchanged.
+* Return to Select after a box is named, with the new box selected. Polygon and
+  Smart Select stay armed, because both are used repeatedly per image.
+* Make Escape two-stage: it cancels whatever is in flight, and a press with
+  nothing left to cancel returns to Select. Keypoint mode keeps its existing
+  skip-to-next-unplaced behaviour.
+* Show a crosshair over pixels where a drag would draw, from the same predicate
+  that governs the gesture, so the cursor cannot advertise something the press
+  would refuse.
+* Enable annotation autosave by default. Annotations resolve beside the image
+  when no save directory has been chosen, so no save path can raise a modal
+  dialog from a timer or a navigation.
+
+Inline Class Confirmation
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Keep new boxes, polygons, Smart Select results, and video geometry provisional
+  while a non-modal class picker opens beside the annotation. Enter commits one
+  undoable annotation; Escape discards it without changing the document. Default
+  labels and established single-class sessions bypass the picker.
+* Announce and recover from a canvas click that arrives while geometry is still
+  waiting to be named. The picker does not grab the mouse, so such a click used
+  to be swallowed in silence while also moving focus off the picker, leaving
+  both the keyboard and the mouse apparently dead.
+
+Smart Select Output Modes
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Choose Box or Polygon from the compact canvas control while Smart Select is
+  active. The choice persists between sessions, and either result follows the
+  same provisional class-confirmation and undo workflow.
+
+Propagation and Gap Contracts
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Add gap-aware schema v2 for video project sidecars, with explicit inclusive
+  gap records and a migration from v1 in a single transaction.
+* Define the shared propagation request, batch, and result contracts used by
+  every tracking backend.
+
+Portable Whole-Video Propagation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Propagate every accepted manual anchor on the current frame, or only the
+  selected object, from the integrated timeline. The portable OpenCV backend
+  processes rectangles, polygons, and associated keypoints together, shows
+  preview-only progress, protects later manual anchors, and commits accepted
+  observations and explicit gap records atomically in one undo step.
+* Regenerate only the bounded neighbouring segments as a separate undoable
+  change when generated geometry is edited into a manual correction.
+
+Optional SAM 2 Backend
+~~~~~~~~~~~~~~~~~~~~~~
+
+* Add Auto, OpenCV, and explicit SAM 2 backend settings plus local checkpoint
+  and model-config paths. Auto evaluates availability only when propagation is
+  invoked; explicit SAM 2 reports an actionable error and never silently falls
+  back.
+* Require Linux, Python 3.10 or newer, CUDA-enabled PyTorch and torchvision, and
+  a source-installed SAM 2. Torch, torchvision, SAM 2, checkpoints, and model
+  configs remain user-managed and are not bundled, downloaded, or added to any
+  published extra. Base startup imports none of them.
+
+Workspace Corrections
+~~~~~~~~~~~~~~~~~~~~~
+
+* Size the main window from the screen it opens on rather than a fixed
+  600x500, and clamp restored geometry to fit the display it lands on.
+* Keep menus and tool shortcuts alive across the workspace menu widget, and
+  register only the first claimant of a shortcut sequence, so a duplicate
+  binding no longer silences both actions.
+* Re-render action icons on theme change, raise dark-mode accent text to meet
+  WCAG AA, and theme the class picker, label-dialog completer, and command-bar
+  menus, which were previously light on dark.
+* Disable gallery mode while a video is open and force it off on open. A
+  persisted gallery preference previously showed an empty grid over a loaded
+  video.
+* Embed the Feather icon license resource in the distribution.
+* Ignore annotation-catalog refreshes that arrive after shutdown.
+
+Corrections and Cleanup
+~~~~~~~~~~~~~~~~~~~~~~~
+
+* Draw gallery thumbnail overlays from the same label colour as the canvas.
+  These were two independent hashes, so every label appeared in one colour on
+  the canvas and a different one on its thumbnail.
+* Push an undo command for the context-menu duplicate, which previously
+  mutated the document without recording a step.
+* Remove two orphaned status controllers that had no caller but retained
+  passing tests, and de-duplicate geometry and keypoint helpers shared by the
+  tracking backends.
+
+Qualification
+~~~~~~~~~~~~~
+
+* 1063 offscreen tests pass on the base install, including new coverage for the
+  drag-to-draw gesture, middle-button panning, two-stage Escape, blocked
+  provisional clicks, canvas and gallery colour agreement, and the
+  context-menu duplicate undo step.
+* Base startup imports no optional dependency, verified in-process.
+* Exercised end to end under Xvfb on a fresh profile: a drag with no tool armed
+  produces a labelled box, the status strip returns to Select, Escape leaves
+  the box tool re-armable, and annotations are written beside the image with no
+  dialog and no explicit save.
+
 3.2.0 (2026-08-11)
 ------------------
 

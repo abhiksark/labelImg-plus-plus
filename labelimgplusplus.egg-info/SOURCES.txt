@@ -85,7 +85,6 @@ libs/widgets/combobox.py
 libs/widgets/commandBar.py
 libs/widgets/default_label_combobox.py
 libs/widgets/galleryWidget.py
-libs/widgets/gallery_status_controller.py
 libs/widgets/inlineClassPicker.py
 libs/widgets/keypointPanel.py
 libs/widgets/labelCheckerDialog.py
@@ -96,7 +95,6 @@ libs/widgets/sam_settings_dialog.py
 libs/widgets/shortcutsDialog.py
 libs/widgets/splitDialog.py
 libs/widgets/statsWidget.py
-libs/widgets/stats_controller.py
 libs/widgets/toolBar.py
 libs/widgets/toolRail.py
 libs/widgets/ultralyticsExportDialog.py
