@@ -434,28 +434,31 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         save.assert_called_once_with()
 
-    def test_save_file_returns_false_when_dialog_is_cancelled(self):
-        """Cancelling the initial Save dialog keeps dirty edits in place."""
-        from unittest.mock import MagicMock, patch
+    def test_first_save_without_save_dir_writes_beside_the_image(self):
+        """No save directory means beside the image, never a dialog.
+
+        Autosave is on by default and can fire from a timer or a navigation,
+        so this path must never be able to raise a modal file chooser.
+        """
+        import os
+        from unittest.mock import patch
 
         self.win.default_save_dir = None
         self.win.load_file(self.test_image_path)
         self.win.label_file = None
         self.win.set_dirty()
-        full_gallery = MagicMock()
 
-        with patch.object(self.win, 'save_file_dialog', return_value=''), \
-                patch.object(self.win, 'save_labels') as save_labels, \
-                patch.object(self.win.gallery_widget,
-                             'refresh_thumbnail') as dock_refresh, \
-                patch.object(self.win, 'full_gallery', full_gallery,
-                             create=True):
-            self.assertFalse(self.win.save_file())
+        expected = os.path.splitext(self.test_image_path)[0]
+        with patch.object(self.win, 'save_file_dialog') as dialog, \
+                patch.object(self.win, 'save_labels',
+                             return_value=True) as save_labels:
+            self.assertTrue(self.win.save_file())
 
-        self.assertTrue(self.win.dirty)
-        save_labels.assert_not_called()
-        dock_refresh.assert_not_called()
-        full_gallery.refresh_thumbnail.assert_not_called()
+        dialog.assert_not_called()
+        save_labels.assert_called_once()
+        written = save_labels.call_args[0][0]
+        self.assertEqual(os.path.splitext(written)[0], expected)
+        self.assertFalse(self.win.dirty)
 
     def test_save_file_propagates_label_save_failure(self):
         """A writer-reported failure leaves the window dirty."""

@@ -985,7 +985,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Auto saving : Enable auto saving if pressing next
         self.auto_saving = QAction(get_str('autoSaveMode'), self)
         self.auto_saving.setCheckable(True)
-        self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, False))
+        # On by default: save_file resolves a path beside the image when no
+        # save directory is chosen, so this can never surface a dialog.
+        self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, True))
         self.auto_saving.setToolTip(get_str('autoSaveModeDetail'))
 
         # Auto-save timer (Issue #13)
@@ -1226,7 +1228,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self._inspector_collapsed_changed)
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
-        self.canvas.modeChanged.connect(self._sync_tool_actions)
+        self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
         self._sync_tool_actions()
 
         # Create dropdown for file/directory operations
@@ -2209,6 +2211,27 @@ class MainWindow(QMainWindow, WindowMixin):
         self._sync_tool_actions()
         self.canvas.setFocus(Qt.OtherFocusReason)
 
+    def _on_canvas_mode_changed(self, mode):
+        """Keep the chrome consistent when the canvas changes mode itself.
+
+        Escape returns the canvas to EDIT without going through
+        activate_select_tool, and when nothing was in flight it emits no
+        drawingPolygon(False) either, so toggle_drawing_sensitive never runs.
+        _sync_tool_actions only mirrors *checked* state, so without this the
+        Box button would stay disabled and the user could not draw again.
+        """
+        if not hasattr(self, 'actions'):
+            return
+        if mode == self.canvas.EDIT:
+            self.sam_controller.set_enabled(False)
+            if hasattr(self, 'keypoint_panel'):
+                self.keypoint_panel.hide()
+            enabled = self._video_editable() and bool(self.file_path)
+            self.actions.create.setEnabled(enabled)
+            self.actions.create_polygon.setEnabled(enabled)
+            self.actions.editMode.setEnabled(False)
+        self._sync_tool_actions(mode)
+
     def _sync_tool_actions(self, _mode=None):
         """Mirror the authoritative canvas mode into the exclusive actions."""
         if not hasattr(self, 'actions'):
@@ -3148,7 +3171,18 @@ class MainWindow(QMainWindow, WindowMixin):
         if text not in self.label_hist:
             self.label_hist.append(text)
         self._update_current_image_stats()
-        self._sync_tool_actions()
+
+        # Creation is transient: hand the user back to Select with the new
+        # shape selected, so the next gesture edits rather than redraws.
+        # Gated on the drawing modes because SAM's commit_rectangle and
+        # commit_polygon reach here too, and Smart Select is meant to stay
+        # armed across clicks. Polygon keeps its tool for bulk segmentation.
+        if self.canvas.mode == self.canvas.CREATE:
+            self.activate_select_tool()
+        else:
+            self._sync_tool_actions()
+        self.canvas.select_shape(shape)
+        self.shape_selection_changed(True)
         self._restore_canvas_focus()
 
     def _cancel_provisional_shape(self):
@@ -6411,13 +6445,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
-        if self.auto_saving.isChecked():
-            if self.default_save_dir is not None:
-                if self.dirty is True:
-                    self.save_file()
-            else:
-                self.change_save_dir_dialog()
-                return
+        # save_file now always resolves a path without prompting, so autosave
+        # no longer has to refuse to navigate when no save dir is set.
+        if self.auto_saving.isChecked() and self.dirty:
+            self.save_file()
 
         if not self.may_continue():
             return
@@ -6436,13 +6467,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def open_next_image(self, _value=False):
         # Proceeding next image without dialog if having any label
-        if self.auto_saving.isChecked():
-            if self.default_save_dir is not None:
-                if self.dirty is True:
-                    self.save_file()
-            else:
-                self.change_save_dir_dialog()
-                return
+        # save_file now always resolves a path without prompting, so autosave
+        # no longer has to refuse to navigate when no save dir is set.
+        if self.auto_saving.isChecked() and self.dirty:
+            self.save_file()
 
         if not self.may_continue():
             return
@@ -6516,11 +6544,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.file_path, ustr(self.default_save_dir), self.m_img_list,
                 resolver=resolver)
         else:
+            # No save directory chosen: annotations land beside the image.
+            # This used to prompt on an image's first save, which a timer or
+            # a navigation-triggered autosave must never be able to do.
             image_dir = os.path.dirname(self.file_path)
             image_stem = os.path.splitext(os.path.basename(self.file_path))[0]
             annotation_base = os.path.join(image_dir, image_stem)
-            if self.label_file is None:
-                annotation_base = self.save_file_dialog(remove_ext=False)
         if not annotation_base:
             return None
 
@@ -6634,12 +6663,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 resolver=resolver)
             return self._save_file(saved_path)
         else:
+            # Mirrors request_save_file: beside the image, never a dialog.
             image_file_dir = os.path.dirname(self.file_path)
             image_file_name = os.path.basename(self.file_path)
             saved_file_name = os.path.splitext(image_file_name)[0]
             saved_path = os.path.join(image_file_dir, saved_file_name)
-            return self._save_file(saved_path if self.label_file
-                                   else self.save_file_dialog(remove_ext=False))
+            return self._save_file(saved_path)
 
     def save_file_as(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:
@@ -7020,8 +7049,26 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.canvas.selected_shape is None:
             # True if one accidentally touches the left mouse button before releasing
             return
+        before = (self.video_model.snapshot_state()
+                  if self.document_kind == DocumentKind.VIDEO else None)
         self.canvas.end_move(copy=True)
-        self.add_label(self.canvas.selected_shape)
+        shape = self.canvas.selected_shape
+        self.add_label(shape)
+
+        # end_move mutates canvas.shapes directly, so the duplicate has to be
+        # wrapped in a Command here or Ctrl+Z skips straight past it.
+        if self.document_kind == DocumentKind.VIDEO:
+            if hasattr(shape, 'video_track_id'):
+                del shape.video_track_id
+            self._selected_video_track_id = (
+                self._store_video_shape_as_manual(shape))
+            self.undo_stack.push(VideoModelCommand(
+                self, before, self.video_model.snapshot_state(),
+                'Duplicate video track'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+        else:
+            self.undo_stack.push(CreateShapeCommand(self, shape))
         self.set_dirty()
 
     def move_shape(self):
@@ -7229,25 +7276,16 @@ class MainWindow(QMainWindow, WindowMixin):
         return 60  # Default 1 minute
 
     def _auto_save_triggered(self):
-        """Synchronous auto-save compatibility hook for extensions/tests."""
-        if not self.dirty:
-            return  # Nothing to save
+        """Synchronous auto-save compatibility hook for extensions/tests.
 
-        if not self.file_path:
-            return  # No file loaded
-
-        if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            save_path = annotation_output_base(
-                self.file_path, ustr(self.default_save_dir), self.m_img_list,
-                resolver=self._active_annotation_resolver(self.file_path))
-        else:
-            image_dir = os.path.dirname(self.file_path)
-            image_stem = os.path.splitext(os.path.basename(self.file_path))[0]
-            save_path = os.path.join(image_dir, image_stem)
-        if save_path:
-            self.status("Auto-saving...")
-            self._save_file(save_path)
-            self.status("Auto-saved to %s" % os.path.basename(save_path))
+        Delegates to save_file so there is exactly one place that decides
+        where an annotation lands; this used to carry its own copy of that
+        resolution and could drift from the real save path.
+        """
+        if not self.dirty or not self.file_path:
+            return
+        self.status("Auto-saving...")
+        self.save_file()
 
     def _request_auto_save_triggered(self):
         if self.dirty and self.file_path:

@@ -341,10 +341,11 @@ def bounded_move_vertex(self, pos):
 def keyPressEvent(self, ev):
     key = ev.key()
 
-    if key == Qt.Key_Escape and self.current:
-        # Cancel current drawing
-        self.current = None
-        self.drawingPolygon.emit(False)
+    if key == Qt.Key_Escape:
+        # Two-stage: cancel whatever is in flight (drag-draw, freehand,
+        # in-progress polygon, keypoint step); once nothing is left to
+        # cancel, return the canvas to EDIT.
+        self.cancel_to_edit()
 
     elif key == Qt.Key_Return and self.can_close_shape():
         # Finalize current shape
@@ -379,16 +380,43 @@ def wheelEvent(self, ev):
 
 ### Pan Implementation
 
-```python
-# In mousePressEvent (no shape selected):
-QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
-self.pan_initial_pos = ev.pos()
+Panning is on the **middle button**. Left-drag on empty pixels draws a
+rectangle instead (see below), and `Space` is already bound to `verify`, so
+it is not available as a pan modifier.
 
-# In mouseMoveEvent:
+```python
+# In mousePressEvent, before the _locked guard so panning stays available
+# while the canvas is locked during video propagation:
+if ev.button() == Qt.MiddleButton:
+    self._panning = True
+    self.pan_initial_pos = ev.pos()
+    self._pre_pan_cursor = self._cursor
+    self.override_cursor(CURSOR_MOVE)
+    return
+
+# In mouseMoveEvent. The delta is cumulative from the press point on
+# purpose: scroll_request divides by 120 and truncates, so incremental
+# deltas would round to zero and panning would stall.
 delta = ev.pos() - self.pan_initial_pos
 self.scrollRequest.emit(delta.x(), Qt.Horizontal)
 self.scrollRequest.emit(delta.y(), Qt.Vertical)
 ```
+
+### Draw-first (EDIT-mode drag-to-draw)
+
+A left-drag starting on empty image pixels draws a rectangle **without
+leaving `EDIT`** — `mode` is untouched for the whole gesture, so
+`paintEvent`, `_sync_tool_actions` and `editing()` never see a transient
+`CREATE`. A `_edit_drag_draw` flag carries the state, and `handle_drawing()`
+is reused verbatim, so snapping, `draw_square`, pixmap clipping and the
+`drawingPolygon`/`newShape` emissions are identical to CREATE mode.
+
+`_can_edit_draw_at(pos)` is the single predicate gating both the press-time
+arming and the hover cursor, so the crosshair can never advertise a gesture
+the press would refuse. Promotion from "armed" to "drawing" requires
+`QApplication.startDragDistance()` of travel in **widget** coordinates, which
+keeps the threshold zoom-independent; below it the press stays a plain
+deselect.
 
 ## Key Methods Reference
 

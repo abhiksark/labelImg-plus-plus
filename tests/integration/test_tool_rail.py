@@ -4,7 +4,8 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeyEvent, QKeySequence
 from PyQt5.QtWidgets import QApplication, QToolBar
 
 from labelImgPlusPlus import MainWindow
@@ -115,5 +116,43 @@ def test_shortcut_dialog_updates_smart_select_action_and_tooltip(
             'Smart Select (Alt+S)'
     finally:
         dialog.close()
+        window.dirty = False
+        window.close()
+
+
+def test_escape_from_box_returns_to_select_and_leaves_box_usable(
+        monkeypatch, tmp_path):
+    """Escape must not strand the Box action disabled.
+
+    activate_box_tool disables actions.create so the armed tool cannot be
+    re-armed. Escape returns the canvas to EDIT without going through
+    activate_select_tool, and with nothing in flight it emits no
+    drawingPolygon(False) either, so toggle_drawing_sensitive never runs.
+    Only _on_canvas_mode_changed re-enables it -- without that slot the user
+    can never draw again.
+    """
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.file_path = os.path.join(str(tmp_path), 'frame.png')
+        window.canvas.setEnabled(True)
+        window.toggle_actions(True)
+
+        window.activate_box_tool()
+        assert window.canvas.mode == window.canvas.CREATE
+        assert not window.actions.create.isEnabled()
+
+        window.canvas.keyPressEvent(
+            QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+        QApplication.processEvents()
+
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.actions.editMode.isChecked()
+        assert window.actions.create.isEnabled()
+        assert window.actions.create_polygon.isEnabled()
+
+        # And the tool is genuinely re-armable.
+        window.activate_box_tool()
+        assert window.canvas.mode == window.canvas.CREATE
+    finally:
         window.dirty = False
         window.close()

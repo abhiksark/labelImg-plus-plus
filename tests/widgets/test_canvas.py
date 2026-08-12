@@ -12,10 +12,11 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from PyQt5.QtCore import QPointF, QPoint, Qt, QEvent
-from PyQt5.QtGui import QPixmap, QColor, QKeyEvent
+from PyQt5.QtGui import QPixmap, QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QApplication
 
-from libs.widgets.canvas import Canvas
+from libs.widgets.canvas import (
+    Canvas, CURSOR_DEFAULT, CURSOR_DRAW, CURSOR_GRAB)
 from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
@@ -711,6 +712,326 @@ class TestKeypointHitTest(unittest.TestCase):
         canvas.scale = 4.0  # threshold = 12 / 4 = 3 image px
         self.assertEqual(canvas._keypoint_at(QPointF(108, 100)), -1)  # 8 > 3
         self.assertEqual(canvas._keypoint_at(QPointF(101, 100)), 0)   # 1 < 3
+
+
+class _DrawFirstBase(unittest.TestCase):
+    """Shared fixture for the EDIT-mode drag-to-draw gesture.
+
+    The canvas is sized to the pixmap so offset_to_center() is zero and
+    widget coordinates equal image coordinates, which keeps the geometry
+    assertions readable.
+    """
+
+    def setUp(self):
+        self.canvas = Canvas()
+        self.canvas.load_pixmap(QPixmap(200, 200))
+        self.canvas.resize(200, 200)
+        self.canvas.scale = 1.0
+        self.log = []
+        self.canvas.drawingPolygon.connect(
+            lambda v: self.log.append(('poly', v)))
+        self.canvas.newShape.connect(lambda: self.log.append(('new',)))
+        self.modes = []
+        self.canvas.modeChanged.connect(self.modes.append)
+
+    @staticmethod
+    def _mouse(kind, x, y, button=Qt.LeftButton, buttons=Qt.LeftButton):
+        return QMouseEvent(
+            kind, QPointF(x, y), button, buttons, Qt.NoModifier)
+
+    def _drag(self, x0, y0, x1, y1, button=Qt.LeftButton):
+        held = button
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, x0, y0, button, held))
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, x1, y1, Qt.NoButton, held))
+        self.canvas.mouseReleaseEvent(
+            self._mouse(
+                QEvent.MouseButtonRelease, x1, y1, button, Qt.NoButton))
+
+    def _corners(self):
+        shape = self.canvas.provisional_shape
+        return None if shape is None else [
+            (p.x(), p.y()) for p in shape.points]
+
+
+class TestEditDragDraw(_DrawFirstBase):
+    """A left-drag on empty pixels draws a rectangle without leaving EDIT."""
+
+    def test_drag_emits_the_create_mode_signal_sequence(self):
+        self._drag(20, 20, 60, 50)
+
+        # Ordering matters: MainWindow.new_shape reads provisional_shape on
+        # newShape, and toggle_drawing_sensitive restores the cursor on the
+        # drawingPolygon(False) that must precede it.
+        self.assertEqual(
+            self.log, [('poly', True), ('poly', False), ('new',)])
+        self.assertEqual(
+            self._corners(),
+            [(20.0, 20.0), (60.0, 20.0), (60.0, 50.0), (20.0, 50.0)])
+        self.assertEqual(self.canvas.shapes, [])
+
+    def test_drag_never_changes_mode(self):
+        seen = []
+        self.canvas.drawingPolygon.connect(
+            lambda _v: seen.append(self.canvas.mode))
+
+        self._drag(20, 20, 60, 50)
+
+        self.assertEqual(seen, [Canvas.EDIT, Canvas.EDIT])
+        self.assertEqual(self.modes, [])
+        self.assertEqual(self.canvas.mode, Canvas.EDIT)
+
+    def test_sub_threshold_click_draws_nothing(self):
+        self._drag(20, 20, 21, 21)
+
+        self.assertEqual(self.log, [])
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertIsNone(self.canvas._edit_draw_origin)
+
+    def test_threshold_is_start_drag_distance(self):
+        threshold = QApplication.startDragDistance()
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 20, 20))
+
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, 20 + threshold - 1, 20,
+                        Qt.NoButton, Qt.LeftButton))
+        self.assertIsNone(self.canvas.current)
+
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, 20 + threshold, 20,
+                        Qt.NoButton, Qt.LeftButton))
+        self.assertIsNotNone(self.canvas.current)
+        self.assertEqual(len(self.canvas.current), 1)
+
+    def test_drag_starting_outside_the_pixmap_draws_nothing(self):
+        # Pixmap 200x200 inside a 400x400 widget: (5, 5) is letterbox.
+        self.canvas.resize(400, 400)
+
+        self._drag(5, 5, 60, 60)
+
+        self.assertEqual(self.log, [])
+        self.assertIsNone(self.canvas._edit_draw_origin)
+
+    def test_drag_on_a_shape_body_moves_it_instead(self):
+        shape = Shape(label='box')
+        for point in [(10, 10), (80, 10), (80, 80), (10, 80)]:
+            shape.add_point(QPointF(*point))
+        shape.close()
+        self.canvas.load_shapes([shape])
+
+        self._drag(40, 40, 70, 70)
+
+        self.assertEqual(self.log, [])
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertNotEqual(
+            [(p.x(), p.y()) for p in shape.points][0], (10.0, 10.0))
+
+    def test_pending_provisional_shape_blocks_a_new_drag(self):
+        self._drag(20, 20, 60, 50)
+        self.log.clear()
+
+        self._drag(90, 90, 140, 140)
+
+        self.assertEqual(self.log, [])
+
+    def test_draw_square_applies_during_an_edit_drag(self):
+        # Proves handle_drawing is reused rather than a forked rect builder.
+        self.canvas.draw_square = True
+
+        self._drag(20, 20, 80, 40)
+
+        xs = [x for x, _y in self._corners()]
+        ys = [y for _x, y in self._corners()]
+        self.assertEqual(max(xs) - min(xs), max(ys) - min(ys))
+
+    def test_degenerate_drag_is_discarded_as_in_create_mode(self):
+        # Purely horizontal: first corner equals last, so finalise drops it.
+        self._drag(20, 20, 80, 20)
+
+        self.assertEqual(self.log, [('poly', True), ('poly', False)])
+        self.assertIsNone(self.canvas.provisional_shape)
+
+    def test_locking_mid_drag_cancels_without_creating(self):
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 20, 20))
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, 60, 50, Qt.NoButton, Qt.LeftButton))
+
+        self.canvas.locked = True
+        self.canvas.mouseReleaseEvent(
+            self._mouse(QEvent.MouseButtonRelease, 60, 50,
+                        Qt.LeftButton, Qt.NoButton))
+
+        self.assertEqual(self.log, [('poly', True), ('poly', False)])
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertIsNone(self.canvas.current)
+
+    def test_right_press_mid_drag_cancels_and_swallows_the_menu(self):
+        # menu.exec_() is a nested event loop; letting it run here would eat
+        # the pending left release and strand the gesture forever.
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 20, 20))
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, 60, 50, Qt.NoButton, Qt.LeftButton))
+
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 60, 50,
+                        Qt.RightButton, Qt.RightButton))
+
+        self.assertFalse(self.canvas._edit_drag_draw)
+        self.assertIsNone(self.canvas.current)
+        self.assertTrue(self.canvas._suppress_context_menu)
+        self.assertEqual(self.log, [('poly', True), ('poly', False)])
+
+        # The swallow is one-shot: the next right-click gets its menu back.
+        self.canvas.mouseReleaseEvent(
+            self._mouse(QEvent.MouseButtonRelease, 60, 50,
+                        Qt.RightButton, Qt.NoButton))
+        self.assertFalse(self.canvas._suppress_context_menu)
+
+    def test_reset_state_clears_drag_draw_fields(self):
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 20, 20))
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, 60, 50, Qt.NoButton, Qt.LeftButton))
+
+        self.canvas.reset_state()
+
+        self.assertFalse(self.canvas._edit_drag_draw)
+        self.assertIsNone(self.canvas._edit_draw_origin)
+        self.assertFalse(self.canvas._panning)
+
+
+class TestCanvasPanning(_DrawFirstBase):
+    """Panning moved off left-drag so left-drag could draw."""
+
+    def setUp(self):
+        super(TestCanvasPanning, self).setUp()
+        self.scrolls = []
+        self.canvas.scrollRequest.connect(
+            lambda delta, orientation: self.scrolls.append(
+                (delta, orientation)))
+
+    def test_middle_drag_pans(self):
+        self._drag(10, 10, 60, 40, button=Qt.MiddleButton)
+
+        self.assertEqual(
+            self.scrolls, [(50, Qt.Horizontal), (30, Qt.Vertical)])
+        self.assertFalse(self.canvas._panning)
+
+    def test_middle_drag_pans_while_locked(self):
+        # Panning mutates nothing, so it stays available during propagation.
+        self.canvas.locked = True
+
+        self._drag(10, 10, 60, 40, button=Qt.MiddleButton)
+
+        self.assertEqual(
+            self.scrolls, [(50, Qt.Horizontal), (30, Qt.Vertical)])
+
+    def test_left_drag_no_longer_pans(self):
+        self._drag(20, 20, 60, 50)
+
+        self.assertEqual(self.scrolls, [])
+
+
+class TestCanvasHoverCursor(_DrawFirstBase):
+    """The crosshair advertises exactly where a drag would draw."""
+
+    def _hover(self, x, y):
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, x, y, Qt.NoButton, Qt.NoButton))
+        return self.canvas._cursor
+
+    def test_empty_pixels_offer_the_draw_cursor(self):
+        self.assertEqual(self._hover(100, 100), CURSOR_DRAW)
+
+    def test_shape_body_keeps_the_grab_cursor(self):
+        shape = Shape(label='box')
+        for point in [(10, 10), (80, 10), (80, 80), (10, 80)]:
+            shape.add_point(QPointF(*point))
+        shape.close()
+        self.canvas.load_shapes([shape])
+
+        self.assertEqual(self._hover(40, 40), CURSOR_GRAB)
+
+    def test_letterbox_outside_the_image_keeps_the_arrow(self):
+        self.canvas.resize(400, 400)
+
+        self.assertEqual(self._hover(5, 5), CURSOR_DEFAULT)
+
+
+class TestCanvasEscape(_DrawFirstBase):
+    """Escape is two-stage: cancel what is in flight, then go home."""
+
+    @staticmethod
+    def _escape():
+        return QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+
+    def test_escape_in_create_returns_to_edit_once(self):
+        self.canvas.set_editing(False)
+        self.modes.clear()
+
+        self.canvas.keyPressEvent(self._escape())
+
+        self.assertEqual(self.canvas.mode, Canvas.EDIT)
+        self.assertEqual(self.modes, [Canvas.EDIT])
+
+    def test_escape_in_edit_changes_nothing(self):
+        self.canvas.keyPressEvent(self._escape())
+
+        self.assertEqual(self.canvas.mode, Canvas.EDIT)
+        self.assertEqual(self.modes, [])
+
+    def test_escape_cancels_an_in_flight_polygon_before_leaving(self):
+        self.canvas.set_polygon_drawing(True)
+        self.modes.clear()
+        self.log.clear()
+        self.canvas.handle_drawing(QPointF(20, 20))
+        self.canvas.handle_drawing(QPointF(60, 20))
+
+        self.canvas.keyPressEvent(self._escape())
+
+        # First press cancels the geometry and stays in the tool.
+        self.assertIsNone(self.canvas.current)
+        self.assertEqual(self.log, [('poly', True), ('poly', False)])
+        self.assertEqual(self.canvas.mode, Canvas.CREATE_POLYGON)
+        self.assertEqual(self.modes, [])
+
+        self.canvas.keyPressEvent(self._escape())
+
+        self.assertEqual(self.canvas.mode, Canvas.EDIT)
+        self.assertEqual(self.modes, [Canvas.EDIT])
+
+    def test_escape_mid_edit_drag_cancels_and_release_is_inert(self):
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.MouseButtonPress, 20, 20))
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.MouseMove, 60, 50, Qt.NoButton, Qt.LeftButton))
+
+        self.canvas.keyPressEvent(self._escape())
+        self.canvas.mouseReleaseEvent(
+            self._mouse(QEvent.MouseButtonRelease, 60, 50,
+                        Qt.LeftButton, Qt.NoButton))
+
+        self.assertEqual(self.log, [('poly', True), ('poly', False)])
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertEqual(self.canvas.mode, Canvas.EDIT)
+
+    def test_escape_keeps_placed_keypoints_when_it_exits(self):
+        shape = Shape(label='person', shape_type=ShapeType.POLYGON)
+        for point in [(10, 10), (80, 10), (80, 80)]:
+            shape.add_point(QPointF(*point))
+        shape.close()
+        self.canvas.set_keypoint_mode(shape, 'person')
+        self.modes.clear()
+
+        for _ in range(self.canvas._keypoint_count() + 1):
+            self.canvas.keyPressEvent(self._escape())
+
+        self.assertEqual(self.canvas.mode, Canvas.EDIT)
+        self.assertIsNone(self.canvas._keypoint_shape)
 
 
 if __name__ == '__main__':

@@ -105,18 +105,22 @@ same **Help → Keyboard Shortcuts** editor as image actions.
 | Shortcut | Action | Description |
 |----------|--------|-------------|
 | `Ctrl` (hold) | Draw Square | Constrain to square while drawing |
-| `Escape` | Cancel | Cancel current drawing operation |
+| `Escape` | Cancel / go to Select | Two-stage: cancels whatever is in flight, and a press with nothing left to cancel returns the canvas to Select. In keypoint mode the first presses still skip to the next unplaced point. |
 | `Return` | Finalize | Complete current shape |
+
+Drawing a box returns you to Select with the new box selected. Polygon mode
+stays armed, so consecutive polygons do not need `P` re-pressed.
 
 ## Mouse Controls
 
 | Action | Description |
 |--------|-------------|
-| Left Click + Drag | Draw new box (CREATE mode) |
-| Left Click | Select shape (EDIT mode) |
+| Left Drag on empty image | Draw a new box, without arming a tool first |
+| Left Click | Select shape, or deselect on empty image |
 | Left Drag on shape | Move entire shape |
 | Left Drag on vertex | Resize shape |
 | Right Click + Drag | Copy and move shape |
+| Middle Drag | Pan the image |
 | Scroll Wheel | Scroll canvas |
 | Ctrl + Scroll | Zoom in/out |
 | Ctrl+Shift + Scroll | Adjust brightness |

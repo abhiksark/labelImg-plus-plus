@@ -217,8 +217,22 @@ class Canvas(QWidget):
         self._coordinate_timer.setSingleShot(True)
         self._coordinate_timer.timeout.connect(self._flush_coordinate_text)
 
-        # initialisation for panning
+        # Panning. Middle-drag only: left-drag on empty pixels draws a
+        # rectangle (see _can_edit_draw_at), and Space is taken by "verify".
         self.pan_initial_pos = QPoint()
+        self._panning = False
+        self._pre_pan_cursor = None
+
+        # Draw-first: rectangle drawing from a left-drag while still in EDIT.
+        #   origin set, _edit_drag_draw False -> armed, below drag threshold
+        #   origin set, _edit_drag_draw True  -> gesture in flight
+        #   origin None                       -> idle
+        self._edit_draw_origin = None
+        self._edit_draw_origin_image = None
+        self._edit_drag_draw = False
+        # One-shot: swallow the context menu of a right-click that cancelled
+        # a drag, so its exec_() cannot eat the pending left release.
+        self._suppress_context_menu = False
 
         # Freehand polygon drawing state
         self._freehand_active = False
@@ -402,9 +416,91 @@ class Canvas(QWidget):
     def locked(self, value):
         self._locked = value
         if value:
+            # A lock landing mid-gesture must abort it: mouseMoveEvent bails
+            # on _locked but mouseReleaseEvent would still finalise a shape
+            # into a canvas that is meant to be read-only.
+            self.cancel_edit_drag_draw()
             self.un_highlight()
             self.de_select_shape()
             self.override_cursor(CURSOR_DEFAULT)
+        self.update()
+
+    def _can_edit_draw_at(self, pos):
+        """Whether a left-drag from image-space ``pos`` may draw a rectangle.
+
+        Shared by the press-time arming check and the hover cursor so the
+        crosshair never advertises a gesture the press would refuse.
+        """
+        return (self.mode == self.EDIT
+                and not self._locked
+                and self.provisional_shape is None
+                # A stale self.current (from undo_last_line/reset_all_lines)
+                # would send handle_drawing down its *finish* branch and
+                # finalise garbage off an old self.line.
+                and self.current is None
+                and self.pixmap is not None
+                and not self.pixmap.isNull()
+                and not self.out_of_pixmap(pos))
+
+    def _begin_edit_drag_draw(self):
+        """Promote an armed press into a live rectangle gesture."""
+        self._edit_drag_draw = True
+        # handle_drawing seeds self.current and self.line and emits
+        # drawingPolygon(True); reusing it keeps snapping, draw_square and
+        # pixmap clipping identical to CREATE mode.
+        self.handle_drawing(self._edit_draw_origin_image)
+
+    def cancel_edit_drag_draw(self):
+        """Abort an in-flight EDIT drag-draw. Never touches ``mode``."""
+        if not self._edit_drag_draw and self._edit_draw_origin is None:
+            return False
+        had_current = self.current is not None
+        self._edit_drag_draw = False
+        self._edit_draw_origin = None
+        self._edit_draw_origin_image = None
+        self.current = None
+        self.prev_point = QPointF()
+        self.set_hiding(False)
+        if had_current:
+            # Pair handle_drawing's drawingPolygon(True). An unpaired False
+            # pops a cursor-stack entry that was never pushed.
+            self.drawingPolygon.emit(False)
+        self.update()
+        return True
+
+    def _end_pan(self):
+        if not self._panning:
+            return
+        self._panning = False
+        self.override_cursor(self._pre_pan_cursor or CURSOR_DEFAULT)
+        self._pre_pan_cursor = None
+
+    def cancel_to_edit(self):
+        """Abort any in-flight gesture and return the canvas to EDIT."""
+        self._end_pan()
+        if self.cancel_edit_drag_draw():
+            return
+        if self._freehand_active:
+            # The freehand path never called handle_drawing, so no
+            # drawingPolygon(True) is outstanding to pair.
+            self._freehand_active = False
+            self._freehand_points = []
+            self.update()
+            return
+        if self.current is not None:
+            self.current = None
+            self.set_hiding(False)
+            self.drawingPolygon.emit(False)
+            self.prev_point = QPointF()
+            self.update()
+            return
+        if self.mode == self.KEYPOINT_MODE:
+            self.exit_keypoint_mode()
+            return
+        self.prev_point = QPointF()
+        # set_editing already emits modeChanged only on a real change, and
+        # does not deselect -- Escape drops the tool, not the selection.
+        self.set_editing(True)
         self.update()
 
     def un_highlight(self, shape=None):
@@ -430,6 +526,19 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, ev):
         """Update line with last point and current coordinates."""
+        # Pan first, for the same reasons as in mousePressEvent. The delta is
+        # deliberately cumulative from the press point: scroll_request divides
+        # by 120 and truncates, so incremental deltas would round to zero.
+        if self._panning:
+            if not (Qt.MiddleButton & ev.buttons()):
+                self._end_pan()
+            else:
+                delta = ev.pos() - self.pan_initial_pos
+                self.scrollRequest.emit(delta.x(), Qt.Horizontal)
+                self.scrollRequest.emit(delta.y(), Qt.Vertical)
+                self.update()
+                return
+
         if self._locked:
             return
         pos = self.transform_pos(ev.pos())
@@ -454,8 +563,24 @@ class Canvas(QWidget):
             self._hovered_keypoint = self._keypoint_at(pos)
             self.update()
 
+        # Promote an armed press once the pointer has travelled far enough.
+        # Measured in widget coordinates: the threshold models hand motion on
+        # screen, so at 0.1x zoom an image-space threshold would need 100
+        # widget pixels and at 10x it would fire sub-pixel.
+        if self._edit_draw_origin is not None:
+            if not (Qt.LeftButton & ev.buttons()):
+                self._edit_draw_origin = None
+                self._edit_draw_origin_image = None
+            elif not self._edit_drag_draw:
+                moved = (ev.pos() - self._edit_draw_origin).manhattanLength()
+                if moved < QApplication.startDragDistance():
+                    return
+                # Falls through to the drawing branch below, which sets
+                # line[1] to the live position in this same event.
+                self._begin_edit_drag_draw()
+
         # Polygon drawing.
-        if self.drawing():
+        if self.drawing() or self._edit_drag_draw:
             self.override_cursor(CURSOR_DRAW)
             if self.current:
                 color = self.drawing_line_color
@@ -554,12 +679,6 @@ class Canvas(QWidget):
                 current_height = rect.height()
                 self._set_coordinate_text(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
-            else:
-                # pan
-                delta = ev.pos() - self.pan_initial_pos
-                self.scrollRequest.emit(delta.x(), Qt.Horizontal)
-                self.scrollRequest.emit(delta.y(), Qt.Vertical)
-                self.update()
             return
 
         # Just hovering over the canvas, 2 possibilities:
@@ -618,7 +737,12 @@ class Canvas(QWidget):
                     self.h_shape.highlight_clear()
                     self.update()
                 self.h_vertex, self.h_shape = None, None
-                self.override_cursor(CURSOR_DEFAULT)
+                # Advertise drag-to-draw over empty image pixels. The shared
+                # predicate keeps the cursor honest: the letterbox around the
+                # image keeps the arrow, because a drag there will not draw.
+                self.override_cursor(
+                    CURSOR_DRAW if self._can_edit_draw_at(pos)
+                    else CURSOR_DEFAULT)
 
     def _keypoint_at(self, pos):
         """Index of the placed keypoint within hover range of image-space pos.
@@ -638,6 +762,18 @@ class Canvas(QWidget):
         return -1
 
     def mousePressEvent(self, ev):
+        # Middle-button pan is handled before transform_pos (which needs a
+        # pixmap), before the _locked guard (panning mutates nothing, so it
+        # stays available during propagation) and before the keypoint block
+        # (whose return would otherwise swallow middle clicks).
+        if ev.button() == Qt.MiddleButton:
+            if not self._edit_drag_draw:
+                self._panning = True
+                self.pan_initial_pos = ev.pos()
+                self._pre_pan_cursor = self._cursor
+                self.override_cursor(CURSOR_MOVE)
+            return
+
         pos = self.transform_pos(ev.pos())
 
         # Snapshot polygon points before any potential vertex drag.
@@ -741,16 +877,32 @@ class Canvas(QWidget):
                 selection = self.select_shape_point(pos)
                 self.prev_point = pos
 
-                if selection is None:
-                    QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
-                    self.pan_initial_pos = ev.pos()
+                # Nothing under the cursor: arm a rectangle instead of the
+                # pan this used to start. A press that never crosses the drag
+                # threshold stays a plain deselect -- select_shape_point has
+                # already done that unconditionally.
+                if selection is None and self._can_edit_draw_at(pos):
+                    self._edit_draw_origin = ev.pos()
+                    self._edit_draw_origin_image = pos
 
         elif ev.button() == Qt.RightButton and self.editing():
+            if self._edit_drag_draw or self._edit_draw_origin is not None:
+                # The release handler's menu.exec_() is a nested event loop
+                # that would eat the pending left release and strand the
+                # gesture, so cancel and swallow the menu.
+                self.cancel_edit_drag_draw()
+                self._suppress_context_menu = True
+                self.update()
+                return
             self.select_shape_point(pos)
             self.prev_point = pos
         self.update()
 
     def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.MiddleButton:
+            self._end_pan()
+            return
+
         if self._freehand_active and ev.button() == Qt.LeftButton:
             self._freehand_active = False
             if len(self._freehand_points) >= 3:
@@ -764,6 +916,30 @@ class Canvas(QWidget):
             self._freehand_points = []
             self._polygon_drag_old_points = None
             self._move_shape_old_points = None
+            return
+
+        # Finish an EDIT-mode drag-draw explicitly, before the elif chain
+        # below: its `provisional_shape is not None: return` guard would
+        # otherwise leave self.current dangling.
+        if ev.button() == Qt.LeftButton and self._edit_drag_draw:
+            pos = self.transform_pos(ev.pos())
+            self._edit_drag_draw = False
+            self._edit_draw_origin = None
+            self._edit_draw_origin_image = None
+            self._polygon_drag_old_points = None
+            self._move_shape_old_points = None
+            if self._locked:
+                self.cancel_edit_drag_draw()
+            elif self.current is not None:
+                # Builds the remaining corners from current[0] and line[1],
+                # then finalises -- identical to the CREATE-mode release.
+                self.handle_drawing(pos)
+            # finalise() emits drawingPolygon(False), which reaches
+            # MainWindow.toggle_drawing_sensitive -> canvas.restore_cursor()
+            # and pops the override, so re-assert afterwards.
+            self.override_cursor(
+                CURSOR_DRAW if self._can_edit_draw_at(pos) else CURSOR_DEFAULT)
+            self.update()
             return
 
         # If a polygon was selected on press and any vertex moved during
@@ -802,8 +978,14 @@ class Canvas(QWidget):
         if ev.button() == Qt.LeftButton:
             self._polygon_drag_old_points = None
             self._move_shape_old_points = None
+            # Sub-threshold press: disarm without ever having drawn.
+            self._edit_draw_origin = None
+            self._edit_draw_origin_image = None
 
         if ev.button() == Qt.RightButton:
+            if self._suppress_context_menu:
+                self._suppress_context_menu = False
+                return
             # Check if right-clicking a polygon vertex
             if self.selected_shape and self.selected_shape.shape_type == ShapeType.POLYGON:
                 pos = self.transform_pos(ev.pos())
@@ -836,15 +1018,11 @@ class Canvas(QWidget):
                 self.override_cursor(CURSOR_POINT)
             else:
                 self.override_cursor(CURSOR_GRAB)
-        elif ev.button() == Qt.LeftButton:
+        elif ev.button() == Qt.LeftButton and self.drawing():
             pos = self.transform_pos(ev.pos())
-            if self.drawing():
-                if self.provisional_shape is not None:
-                    return
-                self.handle_drawing(pos)
-            else:
-                # pan
-                QApplication.restoreOverrideCursor()
+            if self.provisional_shape is not None:
+                return
+            self.handle_drawing(pos)
 
     def end_move(self, copy=False):
         assert self.selected_shape and self.selected_shape_copy
@@ -1477,6 +1655,9 @@ class Canvas(QWidget):
         key = ev.key()
         mods = ev.modifiers()
 
+        # Escape is two-stage: it cancels whatever is in flight, and only a
+        # press with nothing left to cancel returns the canvas to EDIT. That
+        # keeps the documented keypoint "skip to next unplaced" behaviour.
         if key == Qt.Key_Escape and self.mode == self.KEYPOINT_MODE:
             kp_count = self._keypoint_count()
             if self._keypoint_index < kp_count:
@@ -1509,10 +1690,8 @@ class Canvas(QWidget):
             self.update()
             return
 
-        if key == Qt.Key_Escape and self.current:
-            self.current = None
-            self.drawingPolygon.emit(False)
-            self.update()
+        if key == Qt.Key_Escape:
+            self.cancel_to_edit()
         elif key == Qt.Key_Return and self.can_close_shape():
             self.finalise()
         elif (key == Qt.Key_Z and mods == Qt.ControlModifier
@@ -1626,6 +1805,9 @@ class Canvas(QWidget):
         self.shapes = []
         self.provisional_shape = None
         self.propagation_preview_shapes = []
+        # An async image commit can land mid-gesture; without this the flag
+        # would survive pointing at a self.current that was just cleared.
+        self.cancel_edit_drag_draw()
         self._spatial_index.clear()
         self._grid_overlay = None
         self._grid_overlay_key = None
@@ -1634,6 +1816,7 @@ class Canvas(QWidget):
     def load_shapes(self, shapes):
         self.shapes = list(shapes)
         self.rebuild_spatial_index()
+        self.cancel_edit_drag_draw()
         self.current = None
         self.provisional_shape = None
         self.update()
@@ -1680,6 +1863,12 @@ class Canvas(QWidget):
         self._keypoint_template = None
         self._freehand_active = False
         self._freehand_points = []
+        self._edit_draw_origin = None
+        self._edit_draw_origin_image = None
+        self._edit_drag_draw = False
+        self._panning = False
+        self._pre_pan_cursor = None
+        self._suppress_context_menu = False
         self.current = None
         self.provisional_shape = None
         self.propagation_preview_shapes = []

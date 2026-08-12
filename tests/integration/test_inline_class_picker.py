@@ -62,7 +62,10 @@ def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         assert window.annotation_model.rowCount() == 1
         assert window.dirty
         assert window.undo_stack.can_undo()
-        assert window.actions.create.isChecked()
+        # Creation is transient: confirming a box hands the user back to
+        # Select with the new shape selected.
+        assert window.actions.editMode.isChecked()
+        assert window.canvas.selected_shape is shape
         assert window.canvas.hasFocus()
 
         window.undo_action()
@@ -120,7 +123,7 @@ def test_default_and_single_class_modes_bypass_after_required_confirmation(
         assert [shape.label for shape in window.canvas.shapes] == [
             'dog', 'car', 'car']
         assert not window.class_picker.isVisible()
-        assert window.actions.create.isChecked()
+        assert window.actions.editMode.isChecked()
     finally:
         window.dirty = False
         window.close()
