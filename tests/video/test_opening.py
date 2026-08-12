@@ -302,12 +302,13 @@ def test_failed_v1_migration_surfaces_warning_and_preserves_pending_rows(
         window.close()
 
 
-def test_opening_a_video_leaves_gallery_mode(tmp_path, make_video):
-    """A video has no gallery representation.
+def test_opening_a_video_keeps_browsing_and_shows_the_overview(
+        tmp_path, make_video):
+    """The browse slot follows the document instead of closing for video.
 
-    Regression: with gallery mode persisted on, _set_document_kind skipped the
-    page switch entirely, so the clip loaded behind an empty gallery page and
-    the user saw a blank workspace with no frame and no timeline.
+    4.0.0rc0 forced browse mode off and disabled its action here, because the
+    image gallery had no entries for a clip. The slot was never wrong -- its
+    content was -- so browsing now stays on and shows the video overview.
     """
     _app, window = get_main_app()
     try:
@@ -318,34 +319,115 @@ def test_opening_a_video_leaves_gallery_mode(tmp_path, make_video):
         assert window.open_video(make_video(tmp_path / 'clip.mp4'))
 
         assert window.document_kind == DocumentKind.VIDEO
-        assert not window.gallery_mode_enabled
+        assert window.gallery_mode_enabled
+        assert window.workspace_pages.current_page() == 'overview'
+        assert window.actions.galleryMode.isEnabled()
+
+        # Leaving the slot lands on the clip, timeline and all.
+        window.toggle_gallery_mode(False)
         assert window.workspace_pages.current_page() == 'canvas'
-        assert not window.actions.galleryMode.isChecked()
         assert window.workspace_pages.timeline.isVisible()
 
-        # The gallery must also be unreachable while the video is open,
-        # otherwise re-entering it strands the user on an empty page.
-        assert not window.actions.galleryMode.isEnabled()
+        # And re-entering it returns to the overview, not the image gallery.
         window.toggle_gallery_mode(True)
-        assert not window.gallery_mode_enabled
-        assert window.workspace_pages.current_page() == 'canvas'
-        assert window.workspace_pages.timeline.isVisible()
+        assert window.workspace_pages.current_page() == 'overview'
     finally:
         window.dirty = False
         window.close()
 
 
-def test_gallery_becomes_available_again_after_the_video_closes(
+def test_opening_a_second_clip_while_browsing_replaces_the_overview(
         tmp_path, make_video):
-    """Disabling the gallery for video must not be a one-way trip."""
+    """The routed page must carry the clip that is open, not the last one.
+
+    _set_document_kind runs before the new VideoProjectModel is assigned, so
+    refreshing the overview from there alone leaves the previous clip's tracks
+    on screen under the new clip's name -- the same "the slot's content was
+    wrong" failure this whole change exists to retire.
+    """
+    _app, window = get_main_app()
+    try:
+        assert window.open_video(make_video(tmp_path / 'first.mp4'))
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_manual(
+            track.track_id, window.current_video_frame_ref.pts,
+            [2, 3, 22, 23])
+        window._on_video_model_mutation()
+        assert window.save_video_project()
+
+        window.toggle_gallery_mode(True)
+        overview = window.workspace_pages.video_overview
+        assert list(overview.lanes.lane_track_ids()) == ['track-1']
+
+        assert window.open_video(make_video(tmp_path / 'second.mp4'))
+        assert window.workspace_pages.current_page() == 'overview'
+        assert list(overview.lanes.lane_track_ids()) == []
+        assert overview.distinct_pts() == ()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_the_browse_slot_returns_to_the_gallery_after_the_video_closes(
+        tmp_path, make_video):
+    """Routing to the overview must not be a one-way trip.
+
+    The old test asserted the browse action became enabled again; that can no
+    longer fail, because the action is never disabled now. What can still
+    regress is the routing: with no video open, browsing is the gallery.
+    """
     _app, window = get_main_app()
     try:
         assert window.open_video(make_video(tmp_path / 'clip.mp4'))
-        assert not window.actions.galleryMode.isEnabled()
+        window.toggle_gallery_mode(True)
+        assert window.workspace_pages.current_page() == 'overview'
 
         window.reset_state()
         assert window.document_kind == DocumentKind.NONE
         assert window.actions.galleryMode.isEnabled()
+        assert window.workspace_pages.current_page() == 'gallery'
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_the_overview_shows_the_open_clip_and_seeks_back_to_the_canvas(
+        tmp_path, make_video):
+    """The routed page carries the video's own state, not an empty shell.
+
+    Routing to a blank overview would reproduce the very dead end the disable
+    patch worked around, so this asserts content: the track that was just
+    created reaches the lanes, the count reads over real frames, and picking a
+    frame leaves the slot for the canvas at that pts.
+    """
+    _app, window = get_main_app()
+    try:
+        assert window.open_video(make_video(tmp_path / 'clip.mp4'))
+        pts = window.current_video_frame_ref.pts
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_manual(track.track_id, pts, [2, 3, 22, 23])
+        window._on_video_model_mutation()
+
+        window.toggle_gallery_mode(True)
+        overview = window.workspace_pages.video_overview
+        assert window.workspace_pages.current_page() == 'overview'
+        assert list(overview.lanes.lane_track_ids()) == ['track-1']
+        assert pts in overview.distinct_pts()
+        assert list(overview.frames.visible_pts()) == [pts]
+        assert overview.count_text() == overview.COUNT_FORMAT % (1, 1)
+
+        # A second keyframe while the overview is on screen keeps it live.
+        window.video_model.upsert_manual(
+            track.track_id, pts + 1000, [40, 41, 60, 61])
+        window._on_video_model_mutation()
+        assert overview.count_text() == overview.COUNT_FORMAT % (2, 2)
+
+        overview.seekRequested.emit(pts)
+        assert window.workspace_pages.current_page() == 'canvas'
+        assert not window.gallery_mode_enabled
+        assert not window.actions.galleryMode.isChecked()
     finally:
         window.dirty = False
         window.close()

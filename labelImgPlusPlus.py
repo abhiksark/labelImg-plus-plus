@@ -1193,6 +1193,8 @@ class MainWindow(QMainWindow, WindowMixin):
              self.label_zoom, self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.workspace_pages.video_overview.seekRequested.connect(
+            self._seek_video_from_overview)
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
             video_cancel_propagation)
@@ -1525,29 +1527,49 @@ class MainWindow(QMainWindow, WindowMixin):
         """Switch the central stack without detaching workspace chrome."""
         if hasattr(self, '_toggling_gallery') and self._toggling_gallery:
             return
-        if value and self.document_kind == DocumentKind.VIDEO:
-            # Guarded here as well as on the action: the gallery has no
-            # entries for a video, so entering it strands the user on an
-            # empty page with the timeline and canvas hidden.
-            self.status(self.string_bundle.get_string(
-                'galleryModeVideoDisabled'))
-            return
         self._toggling_gallery = True
         self._gallery_batch_id += 1
         try:
             self.gallery_mode_enabled = bool(value)
             if self.gallery_mode_enabled:
-                self.workspace_pages.set_page('gallery')
-                QTimer.singleShot(0, self._refresh_full_gallery_statuses)
-                QTimer.singleShot(100, self._refresh_all_statistics)
-                if self.file_path:
-                    self.full_gallery.select_image(self.file_path)
+                self._show_browse_page()
             else:
                 page = ('empty' if self.document_kind == DocumentKind.NONE
                         else 'canvas')
                 self.workspace_pages.set_page(page)
         finally:
             self._toggling_gallery = False
+
+    def _show_browse_page(self):
+        """Show the browse slot's content for the open document.
+
+        One slot, two contents: an image directory browses as the gallery of
+        its files, a video browses as the overview of its tracks and frames.
+        The document decides, so there is no second toggle to keep in step.
+        """
+        if self.document_kind == DocumentKind.VIDEO:
+            self._refresh_video_overview()
+            self.workspace_pages.set_page('overview')
+            return
+        self.workspace_pages.set_page('gallery')
+        QTimer.singleShot(0, self._refresh_full_gallery_statuses)
+        QTimer.singleShot(100, self._refresh_all_statistics)
+        if self.file_path:
+            self.full_gallery.select_image(self.file_path)
+
+    def _refresh_video_overview(self):
+        """Rebuild the overview from the live video model.
+
+        Guarded rather than assumed: the document kind flips to VIDEO before
+        the model exists during an open, and tests set it directly.
+        """
+        model = getattr(self, 'video_model', None)
+        if model is None:
+            return
+        snapshot = getattr(self, 'video_snapshot', None)
+        duration = 0 if snapshot is None else int(snapshot.duration_pts or 0)
+        self.workspace_pages.video_overview.set_state(
+            model.snapshot_state(), duration)
 
     def _cleanup_existing_gallery(self):
         """Compatibility hook: the embedded gallery has no resources to tear down."""
@@ -1565,6 +1587,22 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.galleryMode.setChecked(False)
         self.toggle_gallery_mode(False)
         self.gallery_image_activated(image_path)
+
+    def _seek_video_from_overview(self, pts):
+        """Leave the browse slot for the frame the user picked.
+
+        The gallery's precedent, restated for video: activating an item in the
+        browse slot lands the user on the canvas showing it, rather than
+        seeking behind a page they then have to dismiss themselves.
+        """
+        snapshot = self.video_snapshot
+        if self.document_kind != DocumentKind.VIDEO or snapshot is None:
+            return
+        self.actions.galleryMode.setChecked(False)
+        self.toggle_gallery_mode(False)
+        self.request_video_frame(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index, int(pts),
+            snapshot.time_base_num, snapshot.time_base_den))
 
     def _refresh_full_gallery_statuses(self):
         """Apply the shared progressive catalog to the full gallery."""
@@ -1832,27 +1870,15 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'workspace_pages'):
             self.workspace_pages.set_video_visible(
                 kind == DocumentKind.VIDEO)
-            # The gallery lists images from the dataset snapshot and has
-            # nothing to show for a video. Leaving it reachable was a dead
-            # end: the page went empty, the timeline and canvas disappeared,
-            # and nothing said why.
-            video_document = kind == DocumentKind.VIDEO
-            gallery_action = getattr(self.actions, 'galleryMode', None)
-            if gallery_action is not None:
-                gallery_action.setEnabled(not video_document)
-                gallery_action.setToolTip(self.string_bundle.get_string(
-                    'galleryModeVideoDisabled' if video_document
-                    else 'galleryModeDetail'))
-            if video_document and self.gallery_mode_enabled:
-                self.gallery_mode_enabled = False
-                if gallery_action is not None:
-                    gallery_action.blockSignals(True)
-                    gallery_action.setChecked(False)
-                    gallery_action.blockSignals(False)
-                # Say it out loud rather than silently changing modes.
-                self.status(self.string_bundle.get_string(
-                    'galleryModeVideoDisabled'))
-            if not self.gallery_mode_enabled:
+            # The browse slot follows the document rather than being closed
+            # off for one of them: 4.0.0rc0 disabled it for video because the
+            # image gallery had nothing to show for a clip, but the slot was
+            # never wrong -- its content was. Switching document while it is
+            # open re-routes it, so an image dataset is never left being
+            # browsed as a video's tracks, or the reverse.
+            if self.gallery_mode_enabled:
+                self._show_browse_page()
+            else:
                 self.workspace_pages.set_page(
                     'empty' if kind == DocumentKind.NONE else 'canvas')
         if hasattr(self, 'annotation_model'):
@@ -3561,6 +3587,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.frame_cache.put(first)
         self.video_timeline.set_session(snapshot)
         self._refresh_video_timeline_markers()
+        # _set_document_kind routed the browse slot to the overview before
+        # this clip's model existed, so it is still showing the previous
+        # clip's tracks until it is refreshed from here.
+        if self.workspace_pages.current_page() == 'overview':
+            self._refresh_video_overview()
         self._materialize_video_frame(first.frame_ref.pts)
         self.set_clean()
         self.canvas.setEnabled(True)
@@ -3785,6 +3816,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_save_status(saved=not self.dirty)
         self._refresh_video_timeline_markers()
         self._refresh_video_track_list()
+        # Only while it is on screen: rebuilding it recomputes distinctness
+        # over every observation, and nothing would see the result.
+        if self.workspace_pages.current_page() == 'overview':
+            self._refresh_video_overview()
         self.update_box_count()
         self._publish_plugin_document()
 
@@ -7335,6 +7370,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.workspace_inspector.apply_theme(theme)
         if hasattr(self, 'workspace_shell'):
             self.workspace_shell.apply_theme(theme)
+        if hasattr(self, 'workspace_pages'):
+            # One call, not three: the overview forwards to the lanes and the
+            # frames grid, both of which construct with Theme.LIGHT.
+            self.workspace_pages.video_overview.apply_theme(theme)
 
         # Update canvas background
         if hasattr(self, 'canvas') and self.canvas:

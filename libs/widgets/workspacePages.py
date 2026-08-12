@@ -1,4 +1,10 @@
-"""Central Empty, Canvas, and Gallery pages for the modern workspace."""
+"""Central Empty, Canvas, Gallery, and Overview pages for the workspace.
+
+Gallery and Overview are one slot with two contents: the browse page for an
+image directory is the gallery, and for a video it is the overview. Which one
+shows is the host's routing decision from the document kind, never a second
+user-facing toggle, so both live in this stack side by side.
+"""
 
 import os
 
@@ -16,6 +22,7 @@ except ImportError:
     )
 
 from libs.utils.dpi import scale_px
+from libs.widgets.videoOverview import VideoOverview
 
 
 def _action_button(action, parent):
@@ -169,6 +176,13 @@ class WorkspacePages(QWidget):
     EMPTY = 0
     CANVAS = 1
     GALLERY = 2
+    OVERVIEW = 3
+
+    #: Page names in stack order, so an index into the stack is an index into
+    #: this tuple. set_page() and current_page() both read it: adding a page
+    #: to one and not the other is how current_page() starts raising
+    #: IndexError on the page it was never told about.
+    PAGES = ('empty', 'canvas', 'gallery', 'overview')
 
     def __init__(self, scroll_area, timeline, gallery_page, status_widgets,
                  actions, zoom_widget, parent=None):
@@ -202,6 +216,9 @@ class WorkspacePages(QWidget):
         self.gallery_page = gallery_page
         self.stack.addWidget(gallery_page)
 
+        self.video_overview = VideoOverview(self.stack)
+        self.stack.addWidget(self.video_overview)
+
         self.status_strip = QWidget(self)
         self.status_strip.setObjectName('workspaceStatusStrip')
         self.status_strip.setFixedHeight(scale_px(24))
@@ -225,12 +242,12 @@ class WorkspacePages(QWidget):
         self.set_page('empty')
 
     def set_page(self, name):
-        index = {'empty': self.EMPTY, 'canvas': self.CANVAS,
-                 'gallery': self.GALLERY}.get(name, self.EMPTY)
+        index = (self.PAGES.index(name) if name in self.PAGES
+                 else self.EMPTY)
         self.stack.setCurrentIndex(index)
 
     def current_page(self):
-        return ('empty', 'canvas', 'gallery')[self.stack.currentIndex()]
+        return self.PAGES[self.stack.currentIndex()]
 
     def set_video_visible(self, visible):
         self.timeline.setVisible(bool(visible))
