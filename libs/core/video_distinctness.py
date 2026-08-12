@@ -74,3 +74,44 @@ def geometry_distinct_pts(state, iou_threshold=0.85):
             kept.append(pts)
             last = current
     return tuple(kept)
+
+
+# dHash: downscale to 9x8 greyscale, compare each pixel with its right
+# neighbour, pack the 64 comparisons into an integer. Robust to brightness and
+# scale, sensitive to structure. Implemented here rather than pulled from
+# imagehash because tests/video/test_compatibility.py asserts the extras
+# verbatim and this is ten lines.
+_HASH_WIDTH = 9
+_HASH_HEIGHT = 8
+
+
+def _greyscale(image):
+    numpy = __import__('numpy')
+    array = numpy.asarray(image)
+    if array.ndim == 3:
+        array = array[..., :3].mean(axis=2)
+    return array.astype(numpy.float64)
+
+
+def _resize_nearest(array, width, height):
+    numpy = __import__('numpy')
+    rows = (numpy.linspace(0, array.shape[0] - 1, height)
+            .round().astype(numpy.int64))
+    cols = (numpy.linspace(0, array.shape[1] - 1, width)
+            .round().astype(numpy.int64))
+    return array[rows][:, cols]
+
+
+def dhash(image):
+    """64-bit difference hash of a greyscale or colour image array."""
+    small = _resize_nearest(_greyscale(image), _HASH_WIDTH, _HASH_HEIGHT)
+    bits = small[:, 1:] > small[:, :-1]
+    value = 0
+    for bit in bits.flatten():
+        value = (value << 1) | int(bit)
+    return value
+
+
+def hamming(first, second):
+    """Number of differing bits between two hashes."""
+    return bin(int(first) ^ int(second)).count('1')
