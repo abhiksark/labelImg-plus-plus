@@ -9,10 +9,21 @@ frame or narrow down to the ones still awaiting review.
 
 The three filters, stated once so they cannot drift apart:
 
-* ``distinct``   -- exactly the pts the engine handed us in ``distinct_pts``.
+* ``distinct``   -- the pts the engine handed us in ``distinct_pts``.
 * ``annotated``  -- every pts carrying any observation at all.
 * ``pending``    -- only the pts carrying a ``review_state == 'pending'``
-  observation.
+  observation.  Not "anything unaccepted": ``rejected`` is a third state the
+  project schema enforces, and a rejected frame is reviewed, not awaiting
+  review.
+
+Every filter selects *among annotated frames*.  ``distinct_pts`` arrives from
+an engine reading the same state, so an entry with no observation on it means
+the caller passed a list computed from an older state; showing a tile for it
+would put a frame with nothing on it under a filter family whose whole domain
+is annotated frames, and would let ``shown`` exceed ``total`` -- "1 of 0" from
+a widget whose one job is making counts legible.  Such a pts is dropped, which
+also keeps the no-track-filter case consistent with the track-filtered one
+(narrowing already requires an observation to match against).
 
 A track filter narrows whichever set the chip selected to the frames where
 that one track is represented; it never widens it.  The total reported by
@@ -217,6 +228,10 @@ class VideoFramesView(QWidget):
             selected = set(self._annotated)
         else:
             selected = set(self._pending)
+        # Every filter selects among annotated frames; for 'annotated' and
+        # 'pending' this is already true, so it only bites a stale distinct
+        # pts.  Keeping it unconditional is what makes shown <= total hold.
+        selected &= set(self._annotated)
         if self._track_filter is not None:
             membership = self._membership()
             selected = {pts for pts in selected

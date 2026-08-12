@@ -124,6 +124,54 @@ class TestFilterSemantics(unittest.TestCase):
         self.view.set_filter('pending')
         self.assertEqual(self.view.visible_pts(), [10])
 
+    def test_rejected_frames_are_not_pending(self):
+        """'rejected' is a third schema-enforced state, not a near-synonym.
+
+        video_project.py constrains review_state to accepted/pending/rejected,
+        so reading pending as "anything not accepted" would file frames the
+        user has already thrown out under the chip that means "still needs a
+        human" -- the one thing that chip must never say.
+        """
+        tracks = (TrackRecord(track_id='t1', label='car',
+                              shape_type='rectangle', color=(255, 0, 0)),)
+        observations = (
+            ObservationRecord(track_id='t1', pts=0, geometry=[0, 0, 1, 1],
+                              review_state='accepted'),
+            ObservationRecord(track_id='t1', pts=10, geometry=[0, 0, 1, 1],
+                              review_state='rejected'),
+            ObservationRecord(track_id='t1', pts=20, geometry=[0, 0, 1, 1],
+                              review_state='pending'),
+        )
+        self.view.set_state(
+            VideoModelState(tracks, observations, (), ('car',)),
+            distinct_pts=(0,))
+        self.view.set_filter('pending')
+        self.assertEqual(self.view.visible_pts(), [20])
+        # A rejected frame is still an annotated frame, so it stays here.
+        self.view.set_filter('annotated')
+        self.assertEqual(self.view.visible_pts(), [0, 10, 20])
+
+    def test_a_rejected_track_is_not_pending_under_a_track_filter(self):
+        """The narrowed path reads the same review_state as the wide one."""
+        tracks = (TrackRecord(track_id='t1', label='car',
+                              shape_type='rectangle', color=(255, 0, 0)),)
+        observations = (
+            ObservationRecord(track_id='t1', pts=0, geometry=[0, 0, 1, 1],
+                              review_state='rejected'),
+        )
+        self.view.set_state(
+            VideoModelState(tracks, observations, (), ('car',)),
+            distinct_pts=(0,))
+        self.view.set_filter('pending')
+        self.view.set_track_filter('t1')
+        self.assertEqual(self.view.visible_pts(), [])
+
+    def test_a_distinct_pts_with_no_annotation_is_not_shown(self):
+        """A stale engine pts is not an annotated frame, so it gets no tile."""
+        self.view.set_state(_state(), distinct_pts=(0, 20, 999))
+        self.assertEqual(self.view.visible_pts(), [0, 20])
+        self.assertEqual(self.view.tile_count(), 2)
+
     def test_visible_pts_is_sorted_and_deduplicated(self):
         """Unsorted input and a shared pts must still read left to right once."""
         self.view.set_state(_two_track_state(), distinct_pts=(40, 20, 0))
@@ -199,6 +247,17 @@ class TestCountChanged(unittest.TestCase):
         self.view.set_filter('annotated')
         self.view.set_track_filter('t2')
         self.assertEqual(self.received[-1], (2, 5))
+
+    def test_shown_never_exceeds_the_total(self):
+        """"1 of 0" is nonsense from a widget whose job is legible counts."""
+        self.view.set_state(VideoModelState((), (), (), ()), distinct_pts=(5,))
+        self.assertEqual(self.received[-1], (0, 0))
+
+    def test_a_stale_distinct_pts_is_not_counted_as_shown(self):
+        self.view.set_state(_state(), distinct_pts=(0, 20, 999))
+        shown, total = self.received[-1]
+        self.assertEqual((shown, total), (2, 4))
+        self.assertLessEqual(shown, total)
 
     def test_the_total_is_never_narrowed_by_the_track_filter(self):
         """"2 of 5" is the redundancy story; "2 of 2" tells the user nothing."""
