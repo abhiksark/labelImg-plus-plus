@@ -666,13 +666,13 @@ class MainWindow(QMainWindow, WindowMixin):
         video_accept_run = action(
             'Accept Full Propagation',
             lambda: self.review_full_propagation('accepted'),
-            None, 'verify',
+            self.shortcut_config.get('video_accept_run'), 'verify',
             'Accept pending observations from the latest propagation run',
             enabled=False)
         video_reject_run = action(
             'Reject Full Propagation',
             lambda: self.review_full_propagation('rejected'),
-            None, 'close',
+            self.shortcut_config.get('video_reject_run'), 'close',
             'Reject pending observations from the latest propagation run',
             enabled=False)
         video_export = action(
@@ -1748,7 +1748,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def update_image_count(self):
         """Update image counter in status bar."""
-        if self.m_img_list and self.file_path:
+        if self.document_kind == DocumentKind.VIDEO:
+            # m_img_list is emptied when a video loads, so the image branch
+            # below would report a permanent, meaningless "Image: 0 / 0".
+            timeline = getattr(self, 'video_timeline', None)
+            self.label_image_count.setText(
+                timeline.position_label.text()
+                if timeline is not None else 'PTS — · Frame ~—')
+        elif self.m_img_list and self.file_path:
             idx = self._path_to_idx.get(self.file_path, -1) + 1
             self.label_image_count.setText(f'Image: {idx} / {len(self.m_img_list)}')
         else:
@@ -4051,19 +4058,63 @@ class MainWindow(QMainWindow, WindowMixin):
         seeds = self._qualifying_propagation_seeds()
         if not seeds:
             self.status(
-                'This frame has no exact accepted manual anchors to propagate')
+                'This frame has no exact accepted manual anchors to '
+                'propagate. Tracker suggestions must be accepted before '
+                'they can seed another run.')
             return None
-        return self._start_video_propagation(seeds, (-1, 1))
+        return self._start_video_propagation(seeds, (-1, 1), confirm=True)
 
     def propagate_selected_object(self):
         seeds = self._qualifying_propagation_seeds(selected_only=True)
         if not seeds:
             self.status(
-                'Select an exact accepted manual anchor before propagation')
+                'Select an exact accepted manual anchor before propagation. '
+                'Tracker suggestions must be accepted before they can seed '
+                'another run.')
             return None
-        return self._start_video_propagation(seeds, (-1, 1))
+        return self._start_video_propagation(seeds, (-1, 1), confirm=True)
 
-    def _start_video_propagation(self, seeds, directions, endpoints=None):
+    @staticmethod
+    def _propagation_frame_totals(request, directions):
+        """Estimated frames per direction, and their sum.
+
+        Pure arithmetic over fields the request already carries, so the scope
+        can be stated before any work starts. The estimate comes from the
+        average rate, so it is approximate on variable-rate media and zero
+        when the rate is unknown.
+        """
+        totals = []
+        for direction in directions:
+            endpoint = (request.end_pts if direction > 0
+                        else request.start_pts)
+            seconds = abs(endpoint - request.current_pts) * \
+                request.time_base_num / request.time_base_den
+            totals.append(int(round(
+                seconds * request.average_rate_num / request.average_rate_den))
+                if request.average_rate_num and request.average_rate_den else 0)
+        return totals, sum(totals)
+
+    def _confirm_propagation_scope(self, request, directions, track_count):
+        """Ask before a sweeping run. Returns False when the user declines."""
+        _totals, frames = self._propagation_frame_totals(request, directions)
+        if len(directions) > 1:
+            span = 'forward and backward'
+        elif directions[0] > 0:
+            span = 'forward'
+        else:
+            span = 'backward'
+        scope = ('~%d frames' % frames if frames
+                 else 'the remainder of the clip')
+        message = self.string_bundle.get_string('propagateScopeConfirm') % (
+            track_count, scope, span)
+        reply = QMessageBox.question(
+            self, self.string_bundle.get_string('propagateScopeTitle'),
+            message,
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        return reply == QMessageBox.Yes
+
+    def _start_video_propagation(self, seeds, directions, endpoints=None,
+                                 confirm=False):
         if not self._ensure_video_editable():
             return None
         snapshot = self.video_snapshot
@@ -4108,7 +4159,14 @@ class MainWindow(QMainWindow, WindowMixin):
                 for track_id in track_ids)),
             average_rate_num=snapshot.average_rate_num,
             average_rate_den=snapshot.average_rate_den)
+        if confirm and not self._confirm_propagation_scope(
+                request, directions, len(track_ids)):
+            self._active_propagation_request = None
+            return None
         self._active_propagation_request = request
+        # A previous run's keys must not survive into this one, or "Accept
+        # Full Propagation" would silently act on stale suggestions.
+        self._tracking_run_keys = set()
         self._propagation_before_state = model.snapshot_state()
         self._propagation_preview = {}
         self._propagation_preview_gaps = {}
@@ -4116,22 +4174,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.video_propagation_backend,
             self.video_sam2_checkpoint, self.video_sam2_config)
 
+        totals, combined_total = self._propagation_frame_totals(
+            request, directions)
+
         def propagate(handle):
             results = []
             processed_offset = 0
-            totals = []
-            for direction in directions:
-                endpoint = (request.end_pts if direction > 0
-                            else request.start_pts)
-                seconds = abs(endpoint - request.current_pts) * \
-                    request.time_base_num / request.time_base_den
-                total = (int(round(
-                    seconds * request.average_rate_num /
-                    request.average_rate_den))
-                         if request.average_rate_num
-                         and request.average_rate_den else 0)
-                totals.append(total)
-            combined_total = sum(totals)
             for index, direction in enumerate(directions):
                 handle.check_cancelled()
 
@@ -4230,16 +4278,45 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview_gaps = {}
         applied = model.apply_propagation_result(result)
         after = model.snapshot_state()
-        if before != after:
+        changed = before != after
+        if changed:
             self.undo_stack.push(VideoModelCommand(
                 self, before, after, 'Propagate video objects'))
             self._on_video_model_mutation()
+
+        # apply_propagation_result returns the *request* unchanged when a run
+        # is fully blocked by manual anchors or gaps, so reporting its counts
+        # unconditionally would claim work that was never written.
+        written = applied.observations if changed else ()
+        # Make the run reviewable as a unit. Without this the propagated
+        # suggestions are unreachable by "Accept Full Propagation", which only
+        # ever saw the optical-flow path.
+        self._tracking_run_keys = {
+            (item.track_id, item.pts) for item in written
+            if item.review_state == 'pending'}
+
         self._materialize_video_frame(self.current_video_frame_ref.pts)
         self._set_propagation_running(False)
-        self.status(
-            'Propagation complete: %s observations, %s gaps, %s failures' % (
-                len(applied.observations), len(applied.gaps),
-                len(applied.failures)))
+        self._report_propagation_outcome(
+            len(written), len(applied.gaps) if changed else 0,
+            len(applied.failures), len(self._tracking_run_keys))
+
+    def _report_propagation_outcome(self, observations, gaps, failures,
+                                    awaiting_review):
+        """Summarise a finished run.
+
+        Deliberately not a modal. Propagation output is now pending, so the
+        durable feedback is already on screen and stays there — amber dashed
+        boxes, the Pending chip, and the timeline's pending ticks. A dialog on
+        top of that would be dismissed reflexively every single run, and a
+        modal raised from a worker callback also blocks any headless caller.
+        """
+        summary = ('%d observation(s), %d gap(s), %d failure(s)'
+                   % (observations, gaps, failures))
+        if awaiting_review:
+            summary += (' — %d awaiting review; they are not exported until '
+                        'accepted (Ctrl+Shift+Enter)' % awaiting_review)
+        self.status('Propagation complete: ' + summary, delay=15000)
 
     def _on_propagation_error(self, message):
         self._clear_propagation_state()
@@ -4826,8 +4903,33 @@ class MainWindow(QMainWindow, WindowMixin):
             snapshot.time_base_num, snapshot.time_base_den)
             for pts in pts_values)
 
+    def _confirm_unreviewed_before_export(self):
+        """Warn before exporting while tracker suggestions await review.
+
+        Export filters to accepted observations in three independent places,
+        so unreviewed propagation silently contributes nothing. Without this
+        a user can propagate, save, quit, reopen, export, and receive an empty
+        dataset having been told nothing at any point.
+        """
+        model = self.video_model
+        if model is None:
+            return True
+        pending = sum(1 for item in model.observations.values()
+                      if item.review_state == 'pending')
+        if not pending:
+            return True
+        reply = QMessageBox.question(
+            self, 'Unreviewed suggestions',
+            '%d tracker suggestion(s) are still awaiting review and will not '
+            'be exported.\n\nAccept them first (Tools → Accept Full '
+            'Propagation) or continue without them?' % pending,
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        return reply == QMessageBox.Yes
+
     def open_video_export_dialog(self):
         if self.document_kind != DocumentKind.VIDEO:
+            return None
+        if not self._confirm_unreviewed_before_export():
             return None
         dialog = VideoExportDialog(self.label_file_format, self)
         stem = os.path.splitext(

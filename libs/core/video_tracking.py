@@ -556,7 +556,9 @@ class OpenCVPropagationBackend(PropagationBackend):
                         track_id, int(pts),
                         _unscaled_geometry(geometry, working_scale),
                         keypoints=state['keypoints'], present=True,
-                        source='tracker', review_state='accepted',
+                        # Provisional until a human reviews it. Machine output
+                        # must never be indistinguishable from hand-drawn work.
+                        source='tracker', review_state='pending',
                         anchor=False, quality=quality,
                         revision=request.document_revision)
                     observations.append(observation)

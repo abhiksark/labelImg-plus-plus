@@ -266,7 +266,8 @@ def test_sam2_adapter_converts_masks_and_records_no_object_gap(tmp_path):
     assert result.gaps == (
         result.gaps[0].__class__('rect', 20, 30, 'occluded', 'sam2', 4),)
     assert result.failures == (('rect', 'occluded'),)
-    assert all(item.source == 'tracker' and item.review_state == 'accepted'
+    # SAM 2 output is provisional, same contract as the OpenCV backend.
+    assert all(item.source == 'tracker' and item.review_state == 'pending'
                and not item.anchor for item in result.observations)
     assert batches[-1].finished is True
     assert batches[-1].completed_tracks == 0

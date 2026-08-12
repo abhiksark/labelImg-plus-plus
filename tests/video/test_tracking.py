@@ -217,7 +217,8 @@ def test_portable_backend_propagates_multiple_geometry_types_and_keypoints(
                        if item.track_id == track_id]
             for track_id in ('rectangle', 'polygon')}
         assert all(len(values) >= 8 for values in by_track.values())
-        assert all(item.review_state == 'accepted'
+        # Propagated output is provisional until a human accepts it.
+        assert all(item.review_state == 'pending'
                    and item.source == 'tracker' and not item.anchor
                    for item in result.observations)
         assert by_track['rectangle'][-1].geometry[0] > 20
