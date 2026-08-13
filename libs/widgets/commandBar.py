@@ -27,13 +27,14 @@ class CommandBar(QWidget):
     """
 
     _FORMAT_BREAKPOINT = 900
-    _VERIFY_BREAKPOINT = 760
+    _SAVE_STATE_BREAKPOINT = 1040
     _APP_LABEL_BREAKPOINT = 720
     _POSITION_BREAKPOINT = 640
 
     def __init__(self, application_name, menus, open_entries,
                  previous_action, next_action, save_action, verify_action,
-                 format_action, overflow_entries=(), parent=None):
+                 format_action, overflow_entries=(), primary_action=None,
+                 parent=None):
         super(CommandBar, self).__init__(parent)
         self.setObjectName('workspaceCommandBar')
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -60,6 +61,10 @@ class CommandBar(QWidget):
         self.dirty_indicator.setToolTip('Unsaved changes')
         self.dirty_indicator.hide()
 
+        self.save_state_label = QLabel('Saved')
+        self.save_state_label.setObjectName('documentSaveState')
+        self.save_state_label.setAccessibleName('Document save state')
+
         self.document_label = QLabel('No document')
         self.document_label.setObjectName('documentLabel')
         self.document_label.setSizePolicy(
@@ -77,12 +82,25 @@ class CommandBar(QWidget):
         self.next_button = self._action_button(
             next_action, 'nextButton', 'Next')
 
+        self.primary_button = self._action_button(
+            primary_action or next_action, 'primaryActionButton',
+            'Complete current item')
+        self.primary_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+
         self.save_button = self._action_button(
             save_action, 'saveButton', 'Save')
         self.save_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.verify_button = self._action_button(
             verify_action, 'verifyButton', 'Verify')
         self.verify_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        # Save and Verify remain authoritative and reachable in overflow, but
+        # they are no longer peers of the state-derived completion action.
+        # Keep these projections for compatibility/tests without giving the
+        # annotator three competing ways to finish the current item.
+        self.save_button.setParent(self)
+        self.save_button.hide()
+        self.verify_button.setParent(self)
+        self.verify_button.hide()
         self.format_button = self._action_button(
             format_action, 'formatButton', 'Annotation format')
         self.format_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -107,8 +125,8 @@ class CommandBar(QWidget):
         layout.addWidget(self.position_label)
         layout.addWidget(self.next_button)
         layout.addSpacing(scale_px(4))
-        layout.addWidget(self.save_button)
-        layout.addWidget(self.verify_button)
+        layout.addWidget(self.save_state_label)
+        layout.addWidget(self.primary_button)
         layout.addWidget(self.format_button)
         layout.addWidget(self.overflow_button)
 
@@ -158,9 +176,23 @@ class CommandBar(QWidget):
         self.document_label.setText(display)
         self.document_label.setToolTip(full_path or display)
         self.dirty_indicator.setVisible(bool(dirty))
+        if read_only:
+            state = 'Read only'
+        elif dirty:
+            state = 'Unsaved changes'
+        else:
+            state = 'Saved'
+        self.save_state_label.setText(state)
+        self.save_state_label.setToolTip(state)
 
     def set_position(self, text):
         self.position_label.setText(text or '— / —')
+
+    def set_primary_text(self, text):
+        """Render a literal ampersand without changing the QAction text."""
+        value = str(text or '')
+        self.primary_button.setText(value.replace('&', '&&'))
+        self.primary_button.setAccessibleName(value)
 
     def apply_theme(self, theme):
         self._current_theme = theme
@@ -176,7 +208,8 @@ class CommandBar(QWidget):
         """Move lower-priority labels into the always-present overflow menu."""
         width = event.size().width()
         self.format_button.setVisible(width >= scale_px(self._FORMAT_BREAKPOINT))
-        self.verify_button.setVisible(width >= scale_px(self._VERIFY_BREAKPOINT))
+        self.save_state_label.setVisible(
+            width >= scale_px(self._SAVE_STATE_BREAKPOINT))
         self.application_button.setToolButtonStyle(
             Qt.ToolButtonTextBesideIcon
             if width >= scale_px(self._APP_LABEL_BREAKPOINT)

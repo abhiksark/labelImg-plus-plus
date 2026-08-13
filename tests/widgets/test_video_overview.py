@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 if 'QT_QPA_PLATFORM' not in os.environ:
@@ -12,7 +13,7 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
 from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QAction, QApplication
 
 from libs.core.video_distinctness import geometry_distinct_pts
 from libs.core.video_model import VideoModelState
@@ -280,6 +281,39 @@ class TestVideoOverview(unittest.TestCase):
         overview.set_refined_pts((5,))
         self.assertEqual(overview.frames.visible_pts(), [])
         self.assertEqual(overview.distinct_pts(), ())
+
+    # -- review/export readiness ----------------------------------------
+
+    def test_ready_state_names_the_exact_accepted_export_frame_count(self):
+        self.overview.set_state(_state(), duration_pts=100)
+        self.assertEqual(
+            self.overview.readiness_text(),
+            'Review complete · ready to export 3 accepted frames')
+        self.assertTrue(self.overview.review_button.isHidden())
+        self.assertFalse(self.overview.export_button.isHidden())
+
+    def test_pending_state_explains_what_annotated_export_will_omit(self):
+        state = _state()
+        observations = tuple(
+            replace(item, review_state=(
+                'pending' if item.track_id == 't1' and item.pts == 10
+                else item.review_state))
+            for item in state.observations)
+        self.overview.set_state(VideoModelState(
+            state.tracks, observations, state.frame_states,
+            state.classes, state.gaps), duration_pts=100)
+        self.assertEqual(
+            self.overview.readiness_text(),
+            '1 suggestion needs review · annotated export currently '
+            'includes 3 accepted frames')
+        self.assertFalse(self.overview.review_button.isHidden())
+
+    def test_readiness_buttons_reuse_the_authoritative_actions(self):
+        review = QAction('Review queue', self.overview)
+        export = QAction('Export', self.overview)
+        self.overview.set_workflow_actions(review, export)
+        self.assertIs(self.overview.review_button.defaultAction(), review)
+        self.assertIs(self.overview.export_button.defaultAction(), export)
 
     # -- the live count --------------------------------------------------
 

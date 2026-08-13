@@ -149,6 +149,9 @@ def test_escape_from_box_returns_to_select_and_leaves_box_usable(
         assert window.actions.editMode.isChecked()
         assert window.actions.create.isEnabled()
         assert window.actions.create_polygon.isEnabled()
+        assert 'Select objects' in window.statusBar().currentMessage()
+        assert window.workspace_pages.canvas_chrome.\
+            annotation_session_hint.isHidden()
 
         # And the tool is genuinely re-armable.
         window.activate_box_tool()

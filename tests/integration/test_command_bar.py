@@ -32,6 +32,8 @@ def test_main_window_installs_one_fixed_command_bar():
             window.actions.save
         assert window.command_bar.verify_button.defaultAction() is \
             window.actions.verify
+        assert window.command_bar.primary_button.defaultAction() is \
+            window.actions.primary
         assert window.command_bar.format_button.defaultAction() is \
             window.actions.save_format
     finally:
@@ -107,6 +109,8 @@ def test_command_bar_syncs_document_position_dirty_state_and_actions():
         window.set_dirty()
         assert not window.command_bar.dirty_indicator.isHidden()
         assert window.command_bar.save_button.isEnabled()
+        assert window.command_bar.save_state_label.text() == \
+            'Unsaved changes'
         window.set_clean()
         assert window.command_bar.dirty_indicator.isHidden()
         assert not window.command_bar.save_button.isEnabled()
@@ -117,7 +121,9 @@ def test_command_bar_syncs_document_position_dirty_state_and_actions():
         assert window.command_bar.height() == \
             window.command_bar.minimumHeight()
         assert window.command_bar.format_button.isVisible()
-        assert window.command_bar.verify_button.isVisible()
+        assert window.command_bar.verify_button.isHidden()
+        assert window.command_bar.save_button.isHidden()
+        assert window.command_bar.primary_button.isVisible()
         assert window.command_bar.overflow_button.geometry().right() < \
             window.command_bar.width()
         assert window.command_bar.save_button.focusPolicy() == Qt.StrongFocus

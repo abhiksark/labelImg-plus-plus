@@ -162,6 +162,16 @@ def test_canvas_chrome_reuses_actions_and_status_bar_is_hidden_bus(
         assert 'Saved' in window.label_save_status.text()
         assert window.label_active_tool.text()
 
+        assert chrome.annotation_session_hint.isHidden()
+        window.activate_box_tool()
+        QApplication.processEvents()
+        assert not chrome.annotation_session_hint.isHidden()
+        assert 'Box stays active' in chrome.annotation_session_hint.text()
+
+        window.activate_select_tool()
+        QApplication.processEvents()
+        assert chrome.annotation_session_hint.isHidden()
+
         window._original_image_size = QSize(1920, 1080)
         window.update_status_bar()
         assert window.label_dimensions.text() == '1920 x 1080'

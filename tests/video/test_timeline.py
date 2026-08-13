@@ -37,6 +37,8 @@ def test_normalized_slider_handles_long_duration_without_overflow(
         widget.set_current_frame(ref)
         assert 0 <= widget.slider.value() <= TIMELINE_MAX
         assert abs(widget.slider.value() - TIMELINE_MAX // 2) <= 1
+        assert 'PTS' not in widget.position_label.text()
+        assert 'Exact PTS' in widget.position_label.toolTip()
         widget.close()
     finally:
         decoder.close()
@@ -94,5 +96,30 @@ def test_propagation_actions_and_progress_replace_each_other():
         0, 0, 0, 0, None, 0, running=False)
     assert widget.progress_label.isHidden() is True
     assert widget.cancel_propagation_button.isHidden() is True
-    assert widget.propagate_all_button.isHidden() is False
+    assert widget.propagate_all_button.isHidden() is True
+    widget.close()
+
+
+def test_workflow_stage_follows_canonical_markers():
+    widget = VideoTimelineWidget()
+    assert widget.workflow_stage() == 'anchor'
+
+    widget.set_markers(accepted=(10,))
+    assert widget.workflow_stage() == 'propagate'
+
+    widget.set_markers(spans=((10, 30),), accepted=(10,), pending=(20,))
+    assert widget.workflow_stage() == 'review'
+
+    widget.set_markers(spans=((10, 30),), accepted=(10,))
+    assert widget.workflow_stage() == 'export'
+
+    widget.set_propagation_progress(
+        1, 10, 1, 0, 2.0, 0, running=True)
+    assert widget.workflow_stage() == 'propagate'
+
+    widget._update_responsive_chrome(640)
+    assert widget.position_label.isHidden()
+    assert [label.text() for label in widget.workflow_stages
+            if not label.isHidden()] == ['● Propagate']
+    assert all(arrow.isHidden() for arrow in widget.workflow_arrows)
     widget.close()

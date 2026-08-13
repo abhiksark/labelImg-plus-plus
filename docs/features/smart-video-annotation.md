@@ -29,8 +29,9 @@ annotations; locate the original source, create a new project, or cancel.
 
 The bottom timeline contains play/pause, previous/next frame, an exact
 `HH:MM:SS.mmm` entry, a normalized long-duration slider, and 0.25x, 0.5x, 1x,
-and 2x playback. The PTS is exact; the displayed frame number is approximate
-because variable-frame-rate media has no reliable integer frame index.
+and 2x playback. Elapsed time is the primary position language. Exact PTS and
+the approximate frame number remain in the position tooltip because
+variable-frame-rate media has no reliable integer frame index.
 
 - `A` and `D` step backward and forward in video mode.
 - `Ctrl+Space` toggles silent playback. `Space` verifies the current frame.
@@ -41,6 +42,24 @@ because variable-frame-rate media has no reliable integer frame index.
 Blue spans show track coverage, green markers show accepted manual anchors,
 amber markers show legacy pending suggestions, red spans show propagation
 gaps, and purple markers show verified frames.
+
+## Browse the video overview
+
+Press `Ctrl+G` while a video is open to switch the browse slot between track
+lanes and annotated frames. **Distinct** shows frames where stored track
+geometry changes. A bounded background decoder may add frames with material
+pixel changes, but decode failure or cancellation leaves the immediate
+geometry result unchanged.
+
+**Annotated** still shows every frame carrying a stored observation, including
+rejected or absent records. **Pending** shows every suggestion awaiting review;
+selecting a lane narrows the frame answer to that track.
+
+The readiness row makes the export boundary explicit before a dialog opens.
+It reports the live pending-suggestion count and the number of PTS values
+carrying accepted, present observations, the exact count used by the default
+**Annotated frames** export selection. With no pending work it exposes the
+authoritative export action directly.
 
 ## Tracks, anchors, and interpolation
 
@@ -68,10 +87,12 @@ tracker.
 
 ## Whole-video propagation
 
-Use **Propagate across video** to include every exact accepted manual anchor on
-the current frame, or **Propagate selected object** for only the selected
-qualifying track. Directional tracking actions remain compatibility aliases
-that use the same accepted-result pipeline.
+Select an exact accepted manual anchor and use **Propagate…** in its contextual
+Objects card. **More → Propagate across video** includes every qualifying
+anchor on the current frame. Directional tracking actions remain compatibility
+aliases that use the same accepted-result pipeline. The timeline keeps the
+Anchor → Propagate → Review → Export stage and active progress visible without
+duplicating the selected-track commands.
 
 The portable OpenCV backend decodes each direction once, updates active
 rectangles, polygons, and associated keypoints together, and uses bounded
@@ -123,10 +144,12 @@ uses bounded-resolution pyramidal Lucas–Kanade flow with forward/backward
 validation and RANSAC, and stops on weak geometry, excessive error, bounds
 loss, or a scene cut.
 
-Suggestions remain pending until reviewed:
+Suggestions remain pending until reviewed. **Review queue** starts or resumes
+the ordered live queue on the canvas, holding the affected track selected:
 
-- `Shift+Enter` accepts the current suggestion.
-- `Backspace` rejects the current suggestion.
+- `Shift+Enter` accepts the current suggestion and advances.
+- `Backspace` rejects the current suggestion and advances.
+- **Previous** moves backward and wraps at the queue boundary.
 - The **Tools** menu can accept or reject the visible range or the full latest
   propagation run.
 
@@ -148,7 +171,8 @@ project state.
 Choose **Tools → Export Video Frames…**. The destination must be new or empty.
 Select the current, annotated, or verified frames, or a time range sampled by
 frames or seconds. JPEG quality 95 is the default; PNG is lossless. Annotation
-output can be Pascal VOC, YOLO, YOLO-seg, COCO, or CreateML.
+output can be Pascal VOC, YOLO, YOLO-seg, COCO, or CreateML. Annotated and
+verified selection labels show their exact frame counts before confirmation.
 
 Only accepted manual/tracker states and accepted rectangle interpolation are
 exported. Pending and rejected suggestions are excluded. Names are stable:

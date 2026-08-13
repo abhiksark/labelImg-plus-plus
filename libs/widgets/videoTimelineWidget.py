@@ -105,13 +105,34 @@ class VideoTimelineWidget(QWidget):
             style.standardIcon(QStyle.SP_MediaSkipForward))
         self.next_button.setToolTip('Next frame (D)')
         self.time_edit = QLineEdit('00:00:00.000')
-        self.time_edit.setMaximumWidth(110)
+        self.time_edit.setFixedWidth(138)
         self.time_edit.setToolTip('Exact presentation time (HH:MM:SS.mmm)')
         self.speed_combo = QComboBox()
         for speed in (0.25, 0.5, 1.0, 2.0):
             self.speed_combo.addItem('%gx' % speed, speed)
         self.speed_combo.setCurrentIndex(2)
-        self.position_label = QLabel('PTS — · Frame ~—')
+        self.position_label = QLabel('00:00:00.000 / —')
+        self.position_label.setObjectName('videoElapsedPosition')
+        self._marker_spans = ()
+        self._marker_accepted = ()
+        self._marker_pending = ()
+        self.workflow_stages = []
+        self.workflow_arrows = []
+        workflow = QHBoxLayout()
+        workflow.setContentsMargins(0, 0, 0, 0)
+        workflow.setSpacing(4)
+        for index, name in enumerate(
+                ('Anchor', 'Propagate', 'Review', 'Export')):
+            if index:
+                arrow = QLabel('›')
+                arrow.setObjectName('videoWorkflowArrow')
+                workflow.addWidget(arrow)
+                self.workflow_arrows.append(arrow)
+            stage = QLabel(name)
+            stage.setObjectName('videoWorkflowStage')
+            workflow.addWidget(stage)
+            self.workflow_stages.append(stage)
+        self._set_workflow_stage(0)
         self.propagate_all_button = QToolButton()
         self.propagate_selected_button = QToolButton()
         self.cancel_propagation_button = QToolButton()
@@ -134,6 +155,8 @@ class VideoTimelineWidget(QWidget):
         top.addWidget(self.time_edit)
         top.addWidget(self.speed_combo)
         top.addWidget(self.position_label)
+        top.addSpacing(8)
+        top.addLayout(workflow)
         top.addStretch(1)
         top.addWidget(self.progress_label)
         top.addWidget(self.propagate_all_button)
@@ -161,13 +184,20 @@ class VideoTimelineWidget(QWidget):
         self.propagate_all_button.setDefaultAction(all_action)
         self.propagate_selected_button.setDefaultAction(selected_action)
         self.cancel_propagation_button.setDefaultAction(cancel_action)
+        self.propagate_all_button.hide()
+        self.propagate_selected_button.hide()
 
     def set_propagation_progress(self, processed, total, active, completed,
                                  eta_seconds, failures, running=True):
-        self.propagate_all_button.setVisible(not running)
-        self.propagate_selected_button.setVisible(not running)
+        # Propagation now lives with the selected track in the inspector.
+        # The timeline retains the authoritative actions for compatibility,
+        # but only active progress/cancellation belongs in this footer.
+        self.propagate_all_button.hide()
+        self.propagate_selected_button.hide()
         self.cancel_propagation_button.setVisible(running)
         self.progress_label.setVisible(running)
+        self._set_workflow_stage(
+            1 if running else self._stage_from_markers())
         if not running:
             self.progress_label.clear()
             return
@@ -184,7 +214,9 @@ class VideoTimelineWidget(QWidget):
         self.setEnabled(snapshot is not None)
         if snapshot is None:
             self.slider.setValue(0)
-            self.position_label.setText('PTS — · Frame ~—')
+            self.position_label.setText('00:00:00.000 / —')
+            self.position_label.setToolTip('No video frame')
+            self._set_workflow_stage(0)
             return
         self.set_current_frame(snapshot.initial_frame.frame_ref)
 
@@ -195,11 +227,19 @@ class VideoTimelineWidget(QWidget):
         self.play_button.setIcon(self.style().standardIcon(icon))
 
     def set_markers(self, spans=(), accepted=(), pending=(), verified=()):
+        self._marker_spans = tuple(spans)
+        self._marker_accepted = tuple(accepted)
+        self._marker_pending = tuple(pending)
         self.slider.set_markers(
-            spans=tuple(self._pts_to_normalized_range(item) for item in spans),
-            accepted=tuple(self._pts_to_normalized(item) for item in accepted),
-            pending=tuple(self._pts_to_normalized(item) for item in pending),
+            spans=tuple(self._pts_to_normalized_range(item)
+                        for item in self._marker_spans),
+            accepted=tuple(self._pts_to_normalized(item)
+                           for item in self._marker_accepted),
+            pending=tuple(self._pts_to_normalized(item)
+                          for item in self._marker_pending),
             verified=tuple(self._pts_to_normalized(item) for item in verified))
+        if not self.progress_label.isVisible():
+            self._set_workflow_stage(self._stage_from_markers())
 
     def set_current_frame(self, frame_ref):
         if self._snapshot is None:
@@ -212,14 +252,64 @@ class VideoTimelineWidget(QWidget):
         seconds = (frame_ref.pts - start_pts) * \
             self._snapshot.time_base_num / self._snapshot.time_base_den
         self.time_edit.setText(format_timecode(seconds))
+        self.time_edit.setCursorPosition(0)
         rate_num = self._snapshot.average_rate_num
         rate_den = self._snapshot.average_rate_den
         approximate = (
             max(0, int(round(seconds * rate_num / rate_den)))
             if rate_num and rate_den else None)
         frame_text = '~%s' % approximate if approximate is not None else '~—'
-        self.position_label.setText(
-            'PTS %s · Frame %s' % (frame_ref.pts, frame_text))
+        duration_seconds = self._duration_pts() * \
+            self._snapshot.time_base_num / self._snapshot.time_base_den
+        self.position_label.setText('%s / %s' % (
+            format_timecode(seconds), format_timecode(duration_seconds)))
+        self.position_label.setToolTip(
+            'Exact PTS %s · Approximate frame %s' %
+            (frame_ref.pts, frame_text))
+
+    def _stage_from_markers(self):
+        if self._marker_pending:
+            return 2
+        if any(int(end) > int(start) for start, end in self._marker_spans):
+            return 3
+        if self._marker_accepted:
+            return 1
+        return 0
+
+    def _set_workflow_stage(self, active):
+        active = max(0, min(len(self.workflow_stages) - 1, int(active)))
+        for index, label in enumerate(self.workflow_stages):
+            name = ('Anchor', 'Propagate', 'Review', 'Export')[index]
+            label.setProperty('active', index == active)
+            label.setProperty('done', index < active)
+            label.setText(
+                ('✓ ' if index < active else '● ' if index == active else '')
+                + name)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+    def workflow_stage(self):
+        for index, label in enumerate(self.workflow_stages):
+            if bool(label.property('active')):
+                return ('anchor', 'propagate', 'review', 'export')[index]
+        return 'anchor'
+
+    def resizeEvent(self, event):
+        # At inspector-open laptop widths the timeline column is much narrower
+        # than the window. The command bar already owns elapsed/current time,
+        # so keep exact seek plus only the active workflow stage rather than
+        # squeezing every label until all of them become unreadable.
+        self._update_responsive_chrome(event.size().width())
+        super().resizeEvent(event)
+
+    def _update_responsive_chrome(self, width):
+        compact = int(width) < 850
+        self.position_label.setVisible(not compact)
+        for arrow in self.workflow_arrows:
+            arrow.setVisible(not compact)
+        for label in self.workflow_stages:
+            label.setVisible(
+                not compact or bool(label.property('active')))
 
     def _duration_pts(self):
         return max(0, int(self._snapshot.duration_pts or 0))

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from PyQt5.QtCore import QThread, Qt
 from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_decoder import VideoDependencyError
@@ -31,7 +32,7 @@ def _image(path):
 
 def test_synchronous_open_creates_sidecar_after_first_frame(
         tmp_path, make_video):
-    _app, window = get_main_app()
+    app, window = get_main_app()
     video = make_video(tmp_path / 'clip.mp4')
     project = default_project_path(video)
     try:
@@ -44,7 +45,15 @@ def test_synchronous_open_creates_sidecar_after_first_frame(
         assert not window.image.isNull()
         assert window.workspace_inspector.tabs.indexOf(
             window.file_controls) == 1
+        assert not window.workspace_inspector.tabs.isTabVisible(1)
         assert window.frame_cache.max_images == 12
+        app.processEvents()
+        assert window.zoom_mode == window.FIT_WINDOW
+        assert window.actions.fitWindow.isChecked()
+        assert all(
+            bar.maximum() == bar.minimum()
+            and bar.value() == bar.minimum()
+            for bar in window.scroll_bars.values())
     finally:
         window.dirty = False
         window.close()
@@ -297,6 +306,182 @@ def test_failed_v1_migration_surfaces_warning_and_preserves_pending_rows(
         assert loaded.quality == .75
         assert 'reopened read-only' in window.statusBar().currentMessage()
         assert not window.actions.save.isEnabled()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_video_primary_action_opens_browse_and_routes_pending_to_review(
+        tmp_path, make_video):
+    _app, window = get_main_app()
+    video = make_video(tmp_path / 'primary.mp4')
+    try:
+        assert window.open_video(video)
+        assert window.actions.primary.text() == 'Browse video'
+
+        window.trigger_primary_action()
+        assert window.workspace_pages.current_page() == 'overview'
+
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        pending = ObservationRecord(
+            track.track_id, window.current_video_frame_ref.pts,
+            [2, 3, 22, 23], source='tracker', review_state='pending',
+            anchor=False, quality=.75)
+        window.video_model.upsert_tracker(pending)
+        window._selected_video_track_id = track.track_id
+        window._on_video_model_mutation()
+        window._materialize_video_frame(pending.pts)
+
+        assert window.actions.primary.text() == 'Review queue'
+        card = window.inspector_context_card
+        assert card.eyebrow.text() == 'REVIEW SUGGESTION'
+        assert card.title.text() == 'car'
+        assert card.visible_actions() == (
+            window.actions.videoAcceptSuggestion,
+            window.actions.videoRejectSuggestion,
+        )
+        window.trigger_primary_action()
+        assert window.workspace_pages.current_page() == 'canvas'
+        assert not window.gallery_mode_enabled
+        assert window._selected_video_track_id == track.track_id
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.actions.editMode.isChecked()
+        assert window.canvas.hasFocus()
+        assert 'Review 1 of 1' in window.statusBar().currentMessage()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_review_entry_neutralizes_drawing_and_canvas_click_is_safe(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'review-click.mp4')
+    try:
+        assert window.open_video(video)
+        pts = window.current_video_frame_ref.pts
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_tracker(ObservationRecord(
+            track.track_id, pts, [2, 3, 22, 23], source='tracker',
+            review_state='pending', anchor=False, quality=.75))
+        window._on_video_model_mutation()
+        window.activate_box_tool()
+        assert window.canvas.mode == window.canvas.CREATE
+
+        window._activate_pending_review((track.track_id, pts))
+        app.processEvents()
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.actions.editMode.isChecked()
+        assert window.canvas.hasFocus()
+        shape_count = len(window.canvas.shapes)
+
+        QTest.mouseClick(window.canvas, Qt.LeftButton,
+                         pos=window.canvas.rect().center())
+        app.processEvents()
+        assert len(window.canvas.shapes) == shape_count
+        assert window.canvas.current is None
+        assert window.canvas.provisional_shape is None
+
+        # A deliberate tool choice remains authoritative, while entering the
+        # review item again restores the safe neutral default.
+        window.activate_box_tool()
+        assert window.canvas.mode == window.canvas.CREATE
+        window._activate_pending_review((track.track_id, pts))
+        assert window.canvas.mode == window.canvas.EDIT
+
+        assert window.accept_current_suggestion()
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.actions.editMode.isChecked()
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_single_item_review_decisions_advance_through_pending_queue(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'review-queue.mp4', frames=12)
+    try:
+        assert window.open_video(video)
+        first_pts = window.current_video_frame_ref.pts
+        next_pts = first_pts + window._video_step_pts()
+        first_track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        next_track = window.video_model.create_track(
+            'person', 'rectangle', (255, 150, 0, 255),
+            track_id='track-2')
+        for track, pts in ((first_track, first_pts),
+                           (next_track, next_pts)):
+            window.video_model.upsert_tracker(ObservationRecord(
+                track.track_id, pts, [2, 3, 22, 23], source='tracker',
+                review_state='pending', anchor=False, quality=.75))
+        window._selected_video_track_id = first_track.track_id
+        window._on_video_model_mutation()
+        window._materialize_video_frame(first_pts)
+
+        assert 'Issue 1 of 2' in window.inspector_context_card.detail.text()
+        assert window.inspector_context_card.visible_actions() == (
+            window.actions.videoAcceptSuggestion,
+            window.actions.videoRejectSuggestion,
+            window.actions.videoPreviousIssue,
+        )
+        assert window.accept_current_suggestion()
+        assert window.video_model.observations[
+            (first_track.track_id, first_pts)].review_state == 'accepted'
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == next_pts)
+        app.processEvents()
+        assert window._selected_video_track_id == next_track.track_id
+        assert window.canvas.selected_shape.video_track_id == \
+            next_track.track_id
+        assert 'Issue 1 of 1' in window.inspector_context_card.detail.text()
+
+        assert window.reject_current_suggestion()
+        assert window.video_model.observations[
+            (next_track.track_id, next_pts)].review_state == 'rejected'
+        assert window._pending_video_observation_count() == 0
+        assert window.actions.primary.text() == 'Browse video'
+        assert 'Review complete' in window.statusBar().currentMessage()
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_previous_issue_wraps_over_the_live_pending_queue(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'previous-issue.mp4', frames=12)
+    try:
+        assert window.open_video(video)
+        first_pts = window.current_video_frame_ref.pts
+        step = window._video_step_pts()
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        keys = []
+        for offset in range(3):
+            pts = first_pts + offset * step
+            key = (track.track_id, pts)
+            keys.append(key)
+            window.video_model.upsert_tracker(ObservationRecord(
+                track.track_id, pts, [2 + offset, 3, 22 + offset, 23],
+                source='tracker', review_state='pending', anchor=False,
+                quality=.75))
+        window._on_video_model_mutation()
+
+        window._activate_pending_review(keys[1])
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == keys[1][1])
+        window.previous_review_issue()
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == keys[0][1])
+        window.previous_review_issue()
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == keys[2][1])
+        assert window.actions.videoPreviousIssue.isEnabled()
     finally:
         window.dirty = False
         window.close()
