@@ -6,12 +6,9 @@ actually carry new information". They are the same question asked along the two
 axes of the same data, so they must never disagree, and this container is where
 that agreement is enforced:
 
-* One distinct-frames answer. The container -- not the grid -- calls
-  ``geometry_distinct_pts``, so the grid can never be handed a set computed
-  from a different state than the lanes were built from. ``distinct_pts`` then
-  reports back exactly what the grid was given, refinement included: it is the
-  seam an exporter reads, and the whole design rests on the exported frames
-  being the frames the user was shown.
+* One distinct-frames answer. The container -- not the grid -- builds the
+  ``DistinctnessPlan``, so the grid and bounded pixel pass can never receive
+  answers computed from different state.
 * One selection. Picking a lane narrows the grid to that track, so switching
   view keeps the subject rather than resetting it.
 * One seek. Either child asking to seek reaches the host as this widget's own
@@ -32,7 +29,9 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
     QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
-from libs.core.video_distinctness import geometry_distinct_pts
+from libs.core.video_distinctness import (
+    DistinctnessPlan, build_distinctness_plan,
+)
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors
 from libs.widgets.videoFramesView import VideoFramesView
@@ -70,8 +69,10 @@ class VideoOverview(QWidget):
         self.setObjectName('videoOverview')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._state = None
+        self._plan = DistinctnessPlan((), (), ())
         self._geometry_pts = ()
         self._distinct_pts = ()
+        self._refining = False
         self._setup_ui()
         self._connect()
         self._set_count(0, 0)
@@ -115,6 +116,11 @@ class VideoOverview(QWidget):
             header.addWidget(button)
             self._buttons[name] = button
         header.addStretch(1)
+
+        self.refining_label = QLabel('Refining…', self)
+        self.refining_label.setObjectName('videoOverviewRefining')
+        self.refining_label.hide()
+        header.addWidget(self.refining_label)
 
         self.count_label = QLabel(self)
         self.count_label.setObjectName('videoOverviewCount')
@@ -163,18 +169,24 @@ class VideoOverview(QWidget):
 
     # -- model ----------------------------------------------------------
 
-    def set_state(self, state, duration_pts):
+    def set_state(self, state, duration_pts, start_pts=0,
+                  time_base_num=1, time_base_den=1):
         """Rebuild both views from *state*, discarding any refinement.
 
         The refinement was computed against the previous state's frames, so
         carrying it over would show frames this state may not even annotate.
         """
         self._state = state
-        self._geometry_pts = geometry_distinct_pts(state)
+        self._plan = build_distinctness_plan(
+            state, start_pts=start_pts, time_base_num=time_base_num,
+            time_base_den=time_base_den)
+        self._geometry_pts = self._plan.selected_pts
         self._distinct_pts = self._geometry_pts
+        self.set_refining(False)
         self.lanes.set_state(state, duration_pts)
         self.frames.set_state(state, self._geometry_pts)
         self._set_readiness(state)
+        return self._plan
 
     def _set_readiness(self, state):
         observations = tuple(getattr(state, 'observations', ()) or ())
@@ -219,18 +231,30 @@ class VideoOverview(QWidget):
         """
         if self._state is None:
             return
-        refined = set(self._geometry_pts) | {int(value) for value in pts or ()}
+        sampled = set(self._plan.sample_pts)
+        refined = set(self._geometry_pts) | {
+            int(value) for value in pts or () if int(value) in sampled}
         self._distinct_pts = tuple(sorted(refined))
         self.frames.set_state(self._state, self._distinct_pts)
+
+    def distinctness_plan(self):
+        """The immutable plan shared with the current pixel pass."""
+        return self._plan
 
     def distinct_pts(self):
         """The distinct frames as the grid is currently showing them.
 
-        The union of the geometry answer and any refinement, not the geometry
-        answer alone: this is the seam an exporter reads, and the promise the
-        overview makes is that exporting gives what the grid displays.
+        The union of the geometry answer and the current bounded refinement.
         """
         return self._distinct_pts
+
+    def set_refining(self, refining):
+        """Show a quiet progress hint without replacing the frame count."""
+        self._refining = bool(refining)
+        self.refining_label.setVisible(self._refining)
+
+    def is_refining(self):
+        return self._refining
 
     # -- the view toggle ------------------------------------------------
 
@@ -273,7 +297,7 @@ class VideoOverview(QWidget):
                 background-color: {surface};
                 border: none;
             }}
-            #videoOverviewCount {{
+            #videoOverviewCount, #videoOverviewRefining {{
                 background-color: transparent;
                 color: {text_secondary};
             }}

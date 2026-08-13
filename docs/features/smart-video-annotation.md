@@ -40,20 +40,30 @@ variable-frame-rate media has no reliable integer frame index.
 - Drawing or editing pauses playback automatically.
 
 Blue spans show track coverage, green markers show accepted manual anchors,
-amber markers show legacy pending suggestions, red spans show propagation
+amber markers show pending tracker suggestions, red spans show propagation
 gaps, and purple markers show verified frames.
 
 ## Browse the video overview
 
 Press `Ctrl+G` while a video is open to switch the browse slot between track
-lanes and annotated frames. **Distinct** shows frames where stored track
-geometry changes. A bounded background decoder may add frames with material
-pixel changes, but decode failure or cancellation leaves the immediate
-geometry result unchanged.
+lanes and annotated frames. **Distinct** is an adaptive global summary: it
+always retains first/last usable track observations, accepted manual anchors,
+verified annotated frames, and the frames around coverage, provenance, review,
+presence, and gap transitions. Between those events it keeps at most one
+ordinary frame per 0.5-second presentation-time window, so the normal density
+is no more than two ordinary frames per second. Explicit events can be denser.
+
+Geometry appears immediately. A quiet **Refining…** hint means an independent
+decoder is checking only the bounded sample plan for material pixel changes;
+the result may add a frame but never removes the geometry answer or adds a
+second ordinary frame in a window. Decode failure or cancellation leaves the
+immediate result unchanged.
 
 **Annotated** still shows every frame carrying a stored observation, including
 rejected or absent records. **Pending** shows every suggestion awaiting review;
-selecting a lane narrows the frame answer to that track.
+pending frames are not hidden merely because the Distinct summary collapses a
+dense run to its boundaries. Selecting a lane only narrows the global frame
+answer to that track and never recomputes a wider per-track selection.
 
 The readiness row makes the export boundary explicit before a dialog opens.
 It reports the live pending-suggestion count and the number of PTS values
@@ -99,8 +109,10 @@ rectangles, polygons, and associated keypoints together, and uses bounded
 Lucas–Kanade flow with affine estimation. Results stream to a preview overlay;
 the canonical project, save state, export data, and undo history remain
 unchanged until the complete result passes document, media, generation, and
-per-track revision checks. The accepted tracker observations and inclusive gap
-records then commit atomically as one undo step.
+per-track revision checks. The tracker observations then commit as pending
+suggestions, together with inclusive gap records, atomically as one undo step.
+Use the current, visible-range, or full-run review actions to accept or reject
+them; pending suggestions are not exported until accepted.
 
 Manual anchors are never overwritten. Reaching another present anchor reseeds
 that track; an absence anchor or failed track produces a stable ``occluded``,

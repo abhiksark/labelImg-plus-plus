@@ -34,7 +34,8 @@ def _state():
                           shape_type='rectangle', color=(0, 255, 0)))
     observations = tuple(
         ObservationRecord(track_id=track, pts=pts,
-                          geometry=[pts, 0, pts + 10, 10])
+                          geometry=[pts, 0, pts + 10, 10],
+                          source='tracker', anchor=False)
         for track in ('t1', 't2') for pts in (0, 10, 20))
     return VideoModelState(tracks, observations, (), ('car', 'person'))
 
@@ -52,7 +53,8 @@ def _redundant_state(moved_at=30):
     observations = tuple(
         ObservationRecord(track_id='t1', pts=pts,
                           geometry=[0, 0, 10, 10] if pts < moved_at
-                          else [100, 0, 110, 10])
+                          else [100, 0, 110, 10],
+                          source='tracker', anchor=False)
         for pts in (0, 10, 20, 30))
     return VideoModelState(tracks, observations, (), ('car',))
 
@@ -65,10 +67,12 @@ def _split_state():
                           shape_type='rectangle', color=(0, 255, 0)))
     observations = tuple(
         ObservationRecord(track_id='t1', pts=pts,
-                          geometry=[pts, 0, pts + 10, 10])
+                          geometry=[pts, 0, pts + 10, 10],
+                          source='tracker', anchor=False)
         for pts in (0, 10, 20)) + tuple(
         ObservationRecord(track_id='t2', pts=pts,
-                          geometry=[pts, 20, pts + 10, 30])
+                          geometry=[pts, 20, pts + 10, 30],
+                          source='tracker', anchor=False)
         for pts in (20, 30))
     return VideoModelState(tracks, observations, (), ('car', 'person'))
 
@@ -81,7 +85,8 @@ def _many_track_state(count):
         for index in range(count))
     observations = tuple(
         ObservationRecord(track_id=track.track_id, pts=0,
-                          geometry=[0, 0, 10, 10])
+                          geometry=[0, 0, 10, 10],
+                          source='tracker', anchor=False)
         for track in tracks)
     return VideoModelState(
         tracks, observations, (), tuple(track.label for track in tracks))
@@ -250,17 +255,12 @@ class TestVideoOverview(unittest.TestCase):
         self.overview.set_refined_pts((0, 10, 20, 30))
         state = _redundant_state(moved_at=20)
         self.overview.set_state(state, duration_pts=100)
-        self.assertEqual(self.overview.frames.visible_pts(), [0, 20])
+        self.assertEqual(self.overview.frames.visible_pts(), [0, 20, 30])
         self.assertEqual(self.overview.frames.visible_pts(),
                          list(geometry_distinct_pts(state)))
 
     def test_distinct_pts_agrees_with_the_grid_after_a_refinement(self):
-        """The export seam and the grid must name the same frames.
-
-        ``distinct_pts`` is what an exporter reads; the grid is what the user
-        approved.  Reporting only the geometry answer exported fewer frames
-        than were on screen.
-        """
+        """The container and grid must name the same refined frames."""
         self.overview.set_state(_redundant_state(), duration_pts=100)
         self.overview.set_refined_pts((0, 10, 30))
         self.assertEqual(list(self.overview.distinct_pts()),
@@ -315,6 +315,21 @@ class TestVideoOverview(unittest.TestCase):
         self.assertIs(self.overview.review_button.defaultAction(), review)
         self.assertIs(self.overview.export_button.defaultAction(), export)
 
+    # -- the pixel pass indicator ----------------------------------------
+
+    def test_refining_indicator_is_quiet_and_explicit(self):
+        self.assertFalse(self.overview.is_refining())
+        self.overview.set_refining(True)
+        self.assertTrue(self.overview.is_refining())
+        self.assertEqual(self.overview.refining_label.text(), 'Refining…')
+        self.overview.set_refining(False)
+        self.assertFalse(self.overview.is_refining())
+
+    def test_new_state_clears_refining_indicator(self):
+        self.overview.set_refining(True)
+        self.overview.set_state(_redundant_state(), duration_pts=100)
+        self.assertFalse(self.overview.is_refining())
+
     # -- the live count --------------------------------------------------
 
     def test_the_count_reports_shown_and_total(self):
@@ -331,6 +346,31 @@ class TestVideoOverview(unittest.TestCase):
         self.overview.set_refined_pts((0, 10, 30))
         self.assertEqual(self.overview.count_text(), '3 of 4 frames')
 
+    def test_all_filter_counts_stay_synchronized_after_refinement(self):
+        state = _redundant_state()
+        state = VideoModelState(
+            state.tracks,
+            tuple(replace(item, review_state='pending')
+                  for item in state.observations),
+            state.frame_states, state.classes, state.gaps)
+        self.overview.set_state(state, duration_pts=100)
+        self.assertEqual(self.overview.frames.visible_pts(), [0, 30])
+
+        self.overview.frames.set_filter('annotated')
+        annotated = self.overview.frames.visible_pts()
+        self.assertEqual(self.overview.count_text(), '4 of 4 frames')
+        self.overview.frames.set_filter('pending')
+        pending = self.overview.frames.visible_pts()
+        self.assertEqual(self.overview.count_text(), '4 of 4 frames')
+
+        self.overview.set_refined_pts((0, 10, 30))
+        self.assertEqual(self.overview.frames.visible_pts(), pending)
+        self.overview.frames.set_filter('annotated')
+        self.assertEqual(self.overview.frames.visible_pts(), annotated)
+        self.overview.frames.set_filter('distinct')
+        self.assertEqual(self.overview.frames.visible_pts(), [0, 10, 30])
+        self.assertEqual(self.overview.count_text(), '3 of 4 frames')
+
     # -- theming ---------------------------------------------------------
 
     def test_the_theme_reaches_both_children(self):
@@ -338,6 +378,8 @@ class TestVideoOverview(unittest.TestCase):
         surface = get_theme_colors(Theme.DARK)['surface']
         self.assertIn(surface, self.overview.lanes.styleSheet())
         self.assertIn(surface, self.overview.frames.styleSheet())
+        self.assertIn('background-color: transparent',
+                      self.overview.styleSheet())
 
     def test_the_toggle_metrics_follow_the_display_scale(self):
         with patch.object(dpi, 'get_dpi_scale_factor', return_value=1.0):
