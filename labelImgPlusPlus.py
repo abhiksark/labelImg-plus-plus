@@ -8275,15 +8275,15 @@ def get_main_app(argv=None):
         except AttributeError:
             pass  # Qt4 doesn't have these attributes
         app = QApplication(argv)
-    # Replacing a live style deletes the old QStyle while existing windows may
-    # still reference it, which can crash repeated test/application setup.
-    style_property = 'labelimgppFusionStyleConfigured'
-    if not app.property(style_property):
+    # Replacing live application styling can delete QStyle objects while
+    # existing windows still reference them, crashing repeated setup.
+    setup_property = 'labelimgppApplicationConfigured'
+    if not app.property(setup_property):
         app.setStyle('Fusion')
-        app.setProperty(style_property, True)
-    app.setStyleSheet(get_combined_style())  # Apply global stylesheet
-    app.setApplicationName(__appname__)
-    app.setWindowIcon(new_icon("app"))
+        app.setStyleSheet(get_combined_style())
+        app.setApplicationName(__appname__)
+        app.setWindowIcon(new_icon("app"))
+        app.setProperty(setup_property, True)
     # Tzutalin 201705+: Accept extra agruments to change predefined class file.
     # Prefer the copy packaged inside the libs package (shipped in the wheel);
     # fall back to the top-level data/ dir for source checkouts.

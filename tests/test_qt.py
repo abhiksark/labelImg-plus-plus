@@ -28,12 +28,14 @@ class TestApplicationLifecycle(unittest.TestCase):
 
     def test_get_main_app_reuses_qapplication(self):
         first_app, first_win = get_main_app()
-        with patch.object(first_app, 'setStyle') as set_style:
+        with patch.object(first_app, 'setStyle') as set_style, \
+                patch.object(first_app, 'setStyleSheet') as set_style_sheet:
             second_app, second_win = get_main_app()
         try:
             self.assertIs(first_app, second_app)
             self.assertIs(first_app, QApplication.instance())
             set_style.assert_not_called()
+            set_style_sheet.assert_not_called()
         finally:
             first_win.close()
             second_win.close()
