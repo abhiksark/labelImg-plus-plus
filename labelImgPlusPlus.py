@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# labelImgPlusPlus.py
 import argparse
 import codecs
 from dataclasses import dataclass, replace
@@ -8274,7 +8275,12 @@ def get_main_app(argv=None):
         except AttributeError:
             pass  # Qt4 doesn't have these attributes
         app = QApplication(argv)
-    app.setStyle('Fusion')  # Use Fusion style for consistent cross-platform styling
+    # Replacing a live style deletes the old QStyle while existing windows may
+    # still reference it, which can crash repeated test/application setup.
+    style_property = 'labelimgppFusionStyleConfigured'
+    if not app.property(style_property):
+        app.setStyle('Fusion')
+        app.setProperty(style_property, True)
     app.setStyleSheet(get_combined_style())  # Apply global stylesheet
     app.setApplicationName(__appname__)
     app.setWindowIcon(new_icon("app"))

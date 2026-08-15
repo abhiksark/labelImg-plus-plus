@@ -1,3 +1,4 @@
+# tests/test_qt.py
 """Qt smoke tests for labelImg++ application.
 
 These tests verify that the application boots and basic operations don't crash.
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import shutil
 import unittest
+from unittest.mock import patch
 
 # Set offscreen platform for headless testing if not already set
 if 'QT_QPA_PLATFORM' not in os.environ:
@@ -26,10 +28,12 @@ class TestApplicationLifecycle(unittest.TestCase):
 
     def test_get_main_app_reuses_qapplication(self):
         first_app, first_win = get_main_app()
-        second_app, second_win = get_main_app()
+        with patch.object(first_app, 'setStyle') as set_style:
+            second_app, second_win = get_main_app()
         try:
             self.assertIs(first_app, second_app)
             self.assertIs(first_app, QApplication.instance())
+            set_style.assert_not_called()
         finally:
             first_win.close()
             second_win.close()
