@@ -124,7 +124,7 @@ DARK_COLORS = {
     'warning_surface': '#3b2a1a',
     'status_error': '#f44336',
     'status_info': '#4da6ff',
-    'verified_bg': '#4caf50',  # Slightly muted green for dark theme
+    'verified_bg': '#295131',  # Quiet green wash for verified canvases
     'canvas_bg': '#2d2d2d',    # Canvas viewport background
     'placeholder': '#3d3d3d',  # Dark gray for placeholders
     'item_bg': '#2d2d2d',      # Darker gray for item backgrounds
