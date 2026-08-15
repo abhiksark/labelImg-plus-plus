@@ -196,9 +196,9 @@ Workflow and Interface
     Open local MP4, MOV, MKV, and AVI video, annotate on exact presentation
     timestamps, interpolate keyframes, and propagate rectangles, polygons, and
     associated keypoints across the video. Propagation streams preview-only
-    results and commits accepted observations and gaps atomically; the legacy
-    optical-flow suggestion workflow remains available separately. Video work
-    is stored in a sibling
+    results and commits pending suggestions and gaps atomically for review; the
+    legacy optical-flow suggestion workflow remains available separately.
+    Video work is stored in a sibling
     ``<video>.labelimgpp.sqlite`` project; existing image annotations and
     formats are unchanged.
 
@@ -285,10 +285,10 @@ Quick Start
 6. **Review**: Press **Ctrl+G** for gallery mode to review all annotations
 
 For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
-    frame, then use the contextual **Objects** inspector to propagate the selected
-    anchor. **Review queue** advances through pending suggestions, **Browse video**
-    shows lanes/frames plus export readiness, and the integrated timeline
-    keeps the four-stage workflow visible.
+frame, then use the contextual **Objects** inspector to propagate the selected
+anchor. **Review queue** advances through pending suggestions, **Browse video**
+shows lanes/frames plus export readiness, and the integrated timeline keeps the
+four-stage workflow visible.
 
 Supported Annotation Formats
 ----------------------------
