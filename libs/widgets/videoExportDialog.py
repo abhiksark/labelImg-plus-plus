@@ -90,6 +90,17 @@ class VideoExportDialog(QDialog):
         if path:
             self.destination.setText(path)
 
+    def set_frame_counts(self, annotated, verified):
+        """State the exact default-selection counts before export starts."""
+        annotated_index = self.selection.findData('annotated')
+        verified_index = self.selection.findData('verified')
+        self.selection.setItemText(
+            annotated_index, 'Annotated frames (%d accepted)' %
+            max(0, int(annotated)))
+        self.selection.setItemText(
+            verified_index, 'Verified frames (%d)' %
+            max(0, int(verified)))
+
     def _update_enabled(self, _value=None):
         ranged = self.selection.currentData() == 'range'
         self.start_time.setEnabled(ranged)

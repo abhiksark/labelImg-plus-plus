@@ -10,6 +10,8 @@ from libs.core.video_types import DocumentKind
 
 def _prepare_image(window, tmp_path):
     window.reset_state()
+    window.single_class_mode.setChecked(False)
+    window.use_default_label_checkbox.setChecked(False)
     image_path = str(tmp_path / 'picker.png')
     image = QImage(160, 120, QImage.Format_RGB32)
     image.fill(Qt.white)
@@ -53,6 +55,14 @@ def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         assert not window.dirty
         assert not window.undo_stack.can_undo()
         assert window.class_picker.isVisible()
+        hint = window.workspace_pages.canvas_chrome.annotation_session_hint
+        assert hint.text() == 'Name this box'
+        assert 'Enter confirms' in hint.toolTip()
+        assert window.actions.primary.text() == 'Name object first'
+        assert not window.actions.primary.isEnabled()
+        assert window.inspector_context_card.eyebrow.text() == \
+            'CLASSIFY OBJECT'
+        assert window.inspector_context_card.title.text() == 'Name this box'
 
         _enter_class(window, 'delivery van')
         app.processEvents()
@@ -62,15 +72,33 @@ def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         assert window.annotation_model.rowCount() == 1
         assert window.dirty
         assert window.undo_stack.can_undo()
-        # Creation is transient: confirming a box hands the user back to
-        # Select with the new shape selected.
-        assert window.actions.editMode.isChecked()
+        # Annotation is a sustained session: confirming one box keeps Box
+        # armed so the next gesture can create another object immediately.
+        assert window.actions.create.isChecked()
+        assert window.canvas.mode == window.canvas.CREATE
         assert window.canvas.selected_shape is shape
         assert window.canvas.hasFocus()
+        assert hint.text() == 'Box stays active'
+        assert window.actions.primary.isEnabled()
+        assert window.inspector_context_card.eyebrow.text() == \
+            'ANNOTATION SESSION'
+        assert window.inspector_context_card.title.text() == \
+            'Continuous boxes'
+        assert not window.use_default_label_container.isHidden()
+
+        second = _finalise_rectangle(window, 55, 10)
+        app.processEvents()
+        assert window.canvas.provisional_shape is second
+        assert window.class_picker.isVisible()
+        _enter_class(window, 'forklift')
+        app.processEvents()
+        assert [item.label for item in window.canvas.shapes] == [
+            'delivery van', 'forklift']
+        assert window.actions.create.isChecked()
 
         window.undo_action()
-        assert window.canvas.shapes == []
-        assert window.annotation_model.rowCount() == 0
+        assert window.canvas.shapes == [shape]
+        assert window.annotation_model.rowCount() == 1
     finally:
         window.dirty = False
         window.close()
@@ -123,7 +151,7 @@ def test_default_and_single_class_modes_bypass_after_required_confirmation(
         assert [shape.label for shape in window.canvas.shapes] == [
             'dog', 'car', 'car']
         assert not window.class_picker.isVisible()
-        assert window.actions.editMode.isChecked()
+        assert window.actions.create.isChecked()
     finally:
         window.dirty = False
         window.close()

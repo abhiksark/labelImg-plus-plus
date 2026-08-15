@@ -33,8 +33,20 @@ def test_video_confirmation_creates_manual_anchor_and_undo_removes_track(
         observation = next(iter(window.video_model.observations.values()))
         assert observation.source == 'manual'
         assert observation.review_state == 'accepted'
-        # Confirming a box returns to Select, on video as on images.
-        assert window.actions.editMode.isChecked()
+        # Video anchors use the same sustained annotation session as images.
+        assert window.actions.create.isChecked()
+        assert window.canvas.mode == window.canvas.CREATE
+        card = window.inspector_context_card
+        assert card.eyebrow.text() == 'SELECTED TRACK'
+        assert card.title.text() == 'car'
+        assert window.actions.videoPropagateSelected in \
+            card.visible_actions()
+        more = set(card.more_menu.actions())
+        assert {window.actions.videoEditSpan,
+                window.actions.videoTrackForward,
+                window.actions.videoTrackBackward,
+                window.actions.videoDeleteTrack} <= more
+        assert not window.workspace_inspector.tabs.isTabVisible(1)
 
         window.undo_action()
         assert window.video_model.tracks == {}

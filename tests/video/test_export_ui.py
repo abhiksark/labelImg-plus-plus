@@ -46,6 +46,20 @@ def test_export_dialog_defaults_to_annotated_jpeg_95():
         dialog.close()
 
 
+def test_export_dialog_states_the_accepted_and_verified_frame_counts():
+    dialog = VideoExportDialog(LabelFileFormat.COCO)
+    try:
+        dialog.set_frame_counts(7, 3)
+        assert dialog.selection.itemText(
+            dialog.selection.findData('annotated')) == \
+            'Annotated frames (7 accepted)'
+        assert dialog.selection.itemText(
+            dialog.selection.findData('verified')) == 'Verified frames (3)'
+        assert dialog.values()['selection'] == 'annotated'
+    finally:
+        dialog.close()
+
+
 def test_main_window_selection_builders_use_exact_pts(tmp_path, make_video):
     _app, window = get_main_app()
     video = make_video(tmp_path / 'clip.mp4')

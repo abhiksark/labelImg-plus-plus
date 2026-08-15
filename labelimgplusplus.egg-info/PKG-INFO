@@ -130,14 +130,29 @@ Workflow and Interface
     Search and edit rectangles, polygons, keypoints, and video tracks in one
     Objects view. The Files view keeps the compact file list, thumbnails, and
     annotation-status filter close at hand, and the inspector can be collapsed
-    when maximum canvas space is needed.
+    when maximum canvas space is needed. Its top card follows the active tool
+    or selected object, keeping image edit commands, selected-track
+    propagation, and pending-review decisions in context.
 
 **Faster Class Confirmation**
     New boxes, polygons, Smart Select results, and video geometry remain
     provisional while a non-modal class picker opens beside the annotation.
     Filter or enter a class, press **Enter** to commit one undoable annotation,
     or press **Escape** to discard it without changing the document. Default
-    labels and established single-class sessions bypass the picker.
+    labels and established single-class sessions bypass the picker. Box,
+    Polygon, and Smart Select stay active after confirmation so repeated
+    annotation does not require re-arming the tool; choose Select or press
+    **Escape** while idle to end the session. The canvas chrome and status strip
+    always state what the next gesture will do.
+
+**One Completion Action**
+    The command bar derives one primary action from the current document:
+    **Done & Next** saves, marks an image verified, and only then advances;
+    **Browse video** opens the track/frame overview; and **Review queue** opens
+    the next pending suggestion directly on the canvas. Press **E** to complete
+    an image. A failed or superseded save never navigates away, and explicit
+    Save and Verify
+    commands remain available from the application menu.
 
 **Smart Select Output Modes**
     While Smart Select is active, choose **Box** or **Polygon** from the compact
@@ -145,13 +160,34 @@ Workflow and Interface
     follows the same provisional class-confirmation and undo workflow.
 
 **Portable Whole-Video Propagation**
-    From the integrated timeline, propagate every accepted manual anchor on
-    the current frame or only the selected object. The portable OpenCV backend
+    Select a manual anchor to propagate that object from its contextual card;
+    the card's **More** menu also exposes whole-frame scope. The integrated
+    timeline shows elapsed time, the Anchor → Propagate → Review → Export
+    stage, and cancellable progress. The portable OpenCV backend
     processes rectangles, polygons, and associated keypoints together, shows
-    preview-only progress, protects later manual anchors, and commits accepted
-    observations and explicit gap records atomically in one undo step. Editing
-    generated geometry creates a manual correction first, then regenerates only
-    the bounded neighboring segments as a separate undoable change.
+    preview-only progress, protects later manual anchors, and commits generated
+    observations as pending tracker suggestions with explicit gap records in
+    one atomic undo step. Suggestions must be accepted before export.
+    Editing generated geometry creates a manual correction first, then
+    regenerates only the bounded neighboring segments as a separate undoable
+    change.
+
+**Video Overview**
+    Gallery Mode becomes a lane/frame overview for video. Its Distinct filter
+    shows frames whose stored geometry changes, and a bounded background pixel
+    pass may add material visual changes. Annotated and Pending continue to
+    expose every stored or awaiting-review frame, and selecting a lane narrows
+    the answer to that track.
+    The overview states how many suggestions still need review and how many
+    accepted frames the default annotated export currently includes.
+
+**Continuous Video Review**
+    **Review queue** keeps the affected frame and track selected. **Accept &
+    Next** and **Reject** update one observation in one undo step and advance
+    to the next live pending issue; **Previous** wraps through the same queue.
+    ``Shift+Enter`` accepts, ``Backspace`` rejects, and the canvas keeps focus.
+    Full-run review remains available from **More**. Pending and rejected
+    suggestions are never included in accepted-frame export.
 
 **Optional SAM 2 Video Backend**
     Whole-video propagation can use an official, source-installed SAM 2 on
@@ -212,9 +248,9 @@ Workflow and Interface
     Open local MP4, MOV, MKV, and AVI video, annotate on exact presentation
     timestamps, interpolate keyframes, and propagate rectangles, polygons, and
     associated keypoints across the video. Propagation streams preview-only
-    results and commits accepted observations and gaps atomically; the legacy
-    optical-flow suggestion workflow remains available separately. Video work
-    is stored in a sibling
+    results and commits pending suggestions and gaps atomically for review; the
+    legacy optical-flow suggestion workflow remains available separately.
+    Video work is stored in a sibling
     ``<video>.labelimgpp.sqlite`` project; existing image annotations and
     formats are unchanged.
 
@@ -294,16 +330,17 @@ Quick Start
 -----------
 
 1. **Open images**: Click the file dropdown button or press **Ctrl+U** to load a directory
-2. **Create annotations**: Press **W** or click **Create RectBox**, then drag to draw
-3. **Label objects**: Select a class from the popup dialog
-4. **Save**: Press **Ctrl+S** to save annotations
-5. **Navigate**: Use **D** (next) and **A** (previous) to move between images
+2. **Create annotations**: Press **W** or click **Create RectBox**, then draw a box
+3. **Label objects**: Confirm a class beside the box, then continue drawing; Box stays active
+4. **Complete**: Press **E** for **Done & Next** to save, verify, and advance
+5. **Navigate manually**: Use **D** (next) and **A** (previous) when needed
 6. **Review**: Press **Ctrl+G** for gallery mode to review all annotations
 
 For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
-frame, then use the unified **Objects** inspector, integrated timeline, and
-**Tools** menu to add keyframes, propagate objects, review legacy suggestions,
-and export accepted frames.
+frame, then use the contextual **Objects** inspector to propagate the selected
+anchor. **Review queue** advances through pending suggestions, **Browse video**
+shows lanes/frames plus export readiness, and the integrated timeline keeps the
+four-stage workflow visible.
 
 Supported Annotation Formats
 ----------------------------

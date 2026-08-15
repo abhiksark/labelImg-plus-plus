@@ -2,6 +2,8 @@ import threading
 import time
 from unittest.mock import patch
 
+from PyQt5.QtCore import Qt
+
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_types import VideoFrameRef
 
@@ -38,6 +40,38 @@ def test_frame_step_and_previous_use_pts_not_frame_index(
         window.request_previous_video_frame()
         assert _wait(
             app, lambda: window.current_video_frame_ref.pts == first_pts)
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_frame_navigation_preserves_manual_zoom_and_pan(tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(
+        tmp_path / 'manual-pan.mp4', width=320, height=240)
+    window.resize(720, 520)
+    try:
+        assert window.open_video(video)
+        app.processEvents()
+        window.set_zoom(400)
+        app.processEvents()
+        expected = {}
+        for orientation in (Qt.Horizontal, Qt.Vertical):
+            bar = window.scroll_bars[orientation]
+            assert bar.maximum() > bar.minimum()
+            bar.setValue(bar.maximum() // 2)
+            expected[orientation] = bar.value()
+
+        first_pts = window.current_video_frame_ref.pts
+        window.request_next_video_frame()
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts > first_pts)
+        app.processEvents()
+
+        assert window.zoom_mode == window.MANUAL_ZOOM
+        assert window.zoom_widget.value() == 400
+        for orientation, value in expected.items():
+            assert window.scroll_bars[orientation].value() == value
     finally:
         window.dirty = False
         window.close()
@@ -103,12 +137,14 @@ def test_image_video_mode_transitions_reconfigure_timeline_and_cache(
             window.workspace_pages.canvas_page
         assert window.workspace_inspector.tabs.indexOf(
             window.file_controls) == 1
+        assert not window.workspace_inspector.tabs.isTabVisible(1)
         assert window.frame_cache.max_images == 12
         window.request_open_file(image_path, skip_prompt=True)
         assert _wait(app, lambda: window.document_kind == DocumentKind.IMAGE)
         assert window.video_timeline.isHidden()
         assert window.workspace_inspector.tabs.indexOf(
             window.file_controls) == 1
+        assert window.workspace_inspector.tabs.isTabVisible(1)
         assert window.frame_cache.max_images == 5
     finally:
         window.dirty = False

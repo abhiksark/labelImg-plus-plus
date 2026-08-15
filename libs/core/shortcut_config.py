@@ -14,6 +14,7 @@ DEFAULT_SHORTCUTS = {
     'copy_prev_bounding': 'Ctrl+Shift+V',
     'open_next_image': 'D',
     'open_prev_image': 'A',
+    'complete_item': 'E',
     'verify': 'Space',
     'video_play_pause': 'Ctrl+Space',
     'save': 'Ctrl+S',

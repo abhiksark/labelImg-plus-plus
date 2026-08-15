@@ -3,19 +3,122 @@
 try:
     from PyQt5.QtCore import Qt, pyqtSignal
     from PyQt5.QtWidgets import (
-        QHBoxLayout, QSizePolicy, QSplitter, QTabWidget, QToolButton,
-        QVBoxLayout, QWidget,
+        QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter, QTabWidget,
+        QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:
     from PyQt4.QtCore import Qt, pyqtSignal
     from PyQt4.QtGui import (
-        QHBoxLayout, QSizePolicy, QSplitter, QTabWidget, QToolButton,
-        QVBoxLayout, QWidget,
+        QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter, QTabWidget,
+        QToolButton, QVBoxLayout, QWidget,
     )
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_workspace_inspector_style
 from libs.utils.utils import themed_icon
+
+
+class InspectorContextCard(QWidget):
+    """A calm projection of the next actions for the current object state."""
+
+    MAX_ACTIONS = 3
+    COMPACT_ACTION_TEXT = {
+        'Propagate selected object': 'Propagate…',
+        'Add Track Keyframe': 'Add keyframe',
+        'Accept Next': 'Accept + Next',
+        'Reject Next': 'Reject',
+        'Previous issue': 'Previous',
+    }
+
+    def __init__(self, parent=None):
+        super(InspectorContextCard, self).__init__(parent)
+        self.setObjectName('inspectorContextCard')
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        self.eyebrow = QLabel(self)
+        self.eyebrow.setObjectName('inspectorContextEyebrow')
+        self.title = QLabel(self)
+        self.title.setObjectName('inspectorContextTitle')
+        self.title.setWordWrap(True)
+        self.detail = QLabel(self)
+        self.detail.setObjectName('inspectorContextDetail')
+        self.detail.setWordWrap(True)
+
+        self.action_buttons = []
+        primary_row = QHBoxLayout()
+        primary_row.setContentsMargins(0, 0, 0, 0)
+        primary_row.setSpacing(scale_px(4))
+        secondary_row = QHBoxLayout()
+        secondary_row.setContentsMargins(0, 0, 0, 0)
+        secondary_row.setSpacing(scale_px(4))
+        for index in range(self.MAX_ACTIONS):
+            button = QToolButton(self)
+            button.setObjectName('inspectorContextAction')
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setSizePolicy(
+                QSizePolicy.Expanding, QSizePolicy.Preferred)
+            button.setProperty('primary', index == 0)
+            button.hide()
+            (primary_row if index == 0 else secondary_row).addWidget(button)
+            self.action_buttons.append(button)
+
+        self.more_menu = QMenu(self)
+        self.more_button = QToolButton(self)
+        self.more_button.setObjectName('inspectorContextMore')
+        self.more_button.setText('More')
+        self.more_button.setPopupMode(QToolButton.InstantPopup)
+        self.more_button.setMenu(self.more_menu)
+        self.more_button.hide()
+        secondary_row.addStretch(1)
+        secondary_row.addWidget(self.more_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(
+            scale_px(10), scale_px(8), scale_px(10), scale_px(9))
+        layout.setSpacing(scale_px(3))
+        layout.addWidget(self.eyebrow)
+        layout.addWidget(self.title)
+        layout.addWidget(self.detail)
+        layout.addSpacing(scale_px(3))
+        layout.addLayout(primary_row)
+        layout.addLayout(secondary_row)
+
+    def set_context(self, eyebrow, title, detail='', actions=(), more=()):
+        self.eyebrow.setText(str(eyebrow or '').upper())
+        self.title.setText(str(title or ''))
+        self.detail.setText(str(detail or ''))
+        self.detail.setVisible(bool(detail))
+
+        visible_actions = tuple(action for action in actions
+                                if action is not None and action.isEnabled())
+        for index, button in enumerate(self.action_buttons):
+            action = (visible_actions[index]
+                      if index < len(visible_actions) else None)
+            if action is None:
+                button.hide()
+            else:
+                button.setDefaultAction(action)
+                action_text = ' '.join(
+                    action.text().replace('&', '').split())
+                button.setText(self.COMPACT_ACTION_TEXT.get(
+                    action_text, action_text))
+                button.setAccessibleName(action_text)
+                button.setVisible(True)
+
+        self.more_menu.clear()
+        for action in more:
+            if action is None:
+                if self.more_menu.actions():
+                    self.more_menu.addSeparator()
+            elif action.isEnabled():
+                self.more_menu.addAction(action)
+        has_more = any(not action.isSeparator()
+                       for action in self.more_menu.actions())
+        self.more_button.setVisible(has_more)
+
+    def visible_actions(self):
+        return tuple(button.defaultAction() for button in self.action_buttons
+                     if not button.isHidden())
 
 
 class WorkspaceInspector(QWidget):
@@ -36,6 +139,8 @@ class WorkspaceInspector(QWidget):
         self.tabs.setObjectName('inspectorTabs')
         self.tabs.addTab(objects_widget, 'Objects')
         self.tabs.addTab(files_widget, 'Files')
+        self._files_widget = files_widget
+        self._tab_before_files_hidden = 'objects'
         self.tabs.currentChanged.connect(self._tab_changed)
 
         self.collapse_button = QToolButton(self)
@@ -56,6 +161,32 @@ class WorkspaceInspector(QWidget):
 
     def set_selected_tab(self, name):
         self.tabs.setCurrentIndex(1 if name == 'files' else 0)
+
+    def set_files_visible(self, visible):
+        """Remove image-only browsing chrome while retaining its live widget."""
+        visible = bool(visible)
+        if hasattr(self.tabs, 'isTabVisible') \
+                and self.tabs.isTabVisible(1) == visible:
+            return
+        if not visible:
+            self._tab_before_files_hidden = self.selected_tab()
+            blocked = self.tabs.blockSignals(True)
+            if self.tabs.currentIndex() == 1:
+                self.tabs.setCurrentIndex(0)
+            if hasattr(self.tabs, 'setTabVisible'):
+                self.tabs.setTabVisible(1, False)
+            else:
+                self.tabs.setTabEnabled(1, False)
+            self.tabs.blockSignals(blocked)
+            return
+        blocked = self.tabs.blockSignals(True)
+        if hasattr(self.tabs, 'setTabVisible'):
+            self.tabs.setTabVisible(1, True)
+        else:
+            self.tabs.setTabEnabled(1, True)
+        if self._tab_before_files_hidden == 'files':
+            self.tabs.setCurrentIndex(1)
+        self.tabs.blockSignals(blocked)
 
     def _tab_changed(self, _index):
         self.tabChanged.emit(self.selected_tab())

@@ -63,6 +63,11 @@ def test_splitter_reparents_existing_controls_without_backing_duplicates(
         assert window.label_list is window.track_list_widget
         assert not hasattr(window, 'label_tab_widget')
         assert window.file_list_widget.parent() is not None
+        assert window.combo_box.isHidden()
+        assert window.use_default_label_container.isHidden()
+        assert window.diffc_button.isHidden()
+        assert window.inspector_context_card.title.text() == \
+            'Open an image, folder, or video'
 
         assert window.findChildren(QToolBar) == []
         assert window.findChildren(QDockWidget) == []

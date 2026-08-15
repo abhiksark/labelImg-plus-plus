@@ -120,6 +120,23 @@ class VideoOverview(QWidget):
         self.count_label.setObjectName('videoOverviewCount')
         header.addWidget(self.count_label)
 
+        self.readiness_label = QLabel(self)
+        self.readiness_label.setObjectName('videoOverviewReadiness')
+        self.readiness_label.setWordWrap(True)
+        self.review_button = QToolButton(self)
+        self.review_button.setObjectName('videoOverviewReview')
+        self.review_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.export_button = QToolButton(self)
+        self.export_button.setObjectName('videoOverviewExport')
+        self.export_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        readiness = QHBoxLayout()
+        readiness.setContentsMargins(
+            scale_px(9), scale_px(6), scale_px(7), scale_px(6))
+        readiness.setSpacing(scale_px(6))
+        readiness.addWidget(self.readiness_label, 1)
+        readiness.addWidget(self.review_button)
+        readiness.addWidget(self.export_button)
+
         self.stack = QStackedWidget(self)
         self.stack.setObjectName('videoOverviewStack')
         self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -130,6 +147,7 @@ class VideoOverview(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(scale_px(self.HEADER_SPACING))
         layout.addLayout(header)
+        layout.addLayout(readiness)
         layout.addWidget(self.stack)
 
     def _connect(self):
@@ -137,6 +155,11 @@ class VideoOverview(QWidget):
         self.lanes.seekRequested.connect(self.seekRequested)
         self.frames.frameActivated.connect(self.seekRequested)
         self.frames.countChanged.connect(self._set_count)
+
+    def set_workflow_actions(self, review_action, export_action):
+        """Project the host's authoritative review and export commands."""
+        self.review_button.setDefaultAction(review_action)
+        self.export_button.setDefaultAction(export_action)
 
     # -- model ----------------------------------------------------------
 
@@ -151,6 +174,35 @@ class VideoOverview(QWidget):
         self._distinct_pts = self._geometry_pts
         self.lanes.set_state(state, duration_pts)
         self.frames.set_state(state, self._geometry_pts)
+        self._set_readiness(state)
+
+    def _set_readiness(self, state):
+        observations = tuple(getattr(state, 'observations', ()) or ())
+        pending = sum(1 for item in observations
+                      if item.review_state == 'pending')
+        accepted_pts = {
+            int(item.pts) for item in observations
+            if item.present and item.review_state == 'accepted'}
+        accepted = len(accepted_pts)
+        if pending:
+            self.readiness_label.setText(
+                '%d suggestion%s %s review · annotated export currently '
+                'includes %d accepted frame%s' % (
+                    pending, '' if pending == 1 else 's',
+                    'needs' if pending == 1 else 'need', accepted,
+                    '' if accepted == 1 else 's'))
+        elif accepted:
+            self.readiness_label.setText(
+                'Review complete · ready to export %d accepted frame%s' % (
+                    accepted, '' if accepted == 1 else 's'))
+        else:
+            self.readiness_label.setText(
+                'Add and accept annotations before exporting annotated frames')
+        self.review_button.setVisible(bool(pending))
+        self.export_button.setVisible(bool(accepted))
+
+    def readiness_text(self):
+        return self.readiness_label.text()
 
     def set_refined_pts(self, pts):
         """Add the pixel pass's frames to the geometry answer.
@@ -221,7 +273,29 @@ class VideoOverview(QWidget):
                 background-color: {surface};
                 border: none;
             }}
-            #videoOverviewCount {{ color: {text_secondary}; }}
+            #videoOverviewCount {{
+                background-color: transparent;
+                color: {text_secondary};
+            }}
+            #videoOverviewReadiness {{
+                background-color: {surface_subtle};
+                border: 1px solid {border};
+                border-radius: {radius}px;
+                color: {text_secondary};
+                padding: {pad_v}px {pad_h}px;
+            }}
+            #videoOverviewReview, #videoOverviewExport {{
+                background-color: {surface};
+                border: 1px solid {border};
+                border-radius: {radius}px;
+                color: {accent_text};
+                padding: {pad_v}px {pad_h}px;
+            }}
+            #videoOverviewExport {{
+                background-color: {accent};
+                border-color: {accent};
+                color: white;
+            }}
             #videoOverviewToggle {{
                 background-color: {surface_subtle};
                 border: 1px solid {border};

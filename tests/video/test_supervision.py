@@ -121,6 +121,38 @@ def test_export_is_silent_when_nothing_awaits_review(tmp_path, make_video):
         _close_window(app, window)
 
 
+def test_full_run_review_confirms_multi_item_scope_and_stays_one_undo_step(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    window.open_video(str(make_video(tmp_path / 'bulk-review.mp4', frames=12)))
+    try:
+        track = _seed(window)
+        keys = ((track.track_id, 4096), (track.track_id, 8192))
+        for track_id, pts in keys:
+            window.video_model.upsert_tracker(ObservationRecord(
+                track_id, pts, [20, 20, 60, 60], source='tracker',
+                review_state='pending', anchor=False))
+        window._tracking_run_keys = set(keys)
+        window._on_video_model_mutation()
+        baseline_undo = len(window.undo_stack)
+
+        with patch.object(QMessageBox, 'question',
+                          return_value=QMessageBox.Cancel) as ask:
+            assert not window.review_full_propagation('accepted')
+        assert ask.called
+        assert all(window.video_model.observations[key].review_state ==
+                   'pending' for key in keys)
+
+        with patch.object(QMessageBox, 'question',
+                          return_value=QMessageBox.Yes):
+            assert window.review_full_propagation('accepted')
+        assert all(window.video_model.observations[key].review_state ==
+                   'accepted' for key in keys)
+        assert len(window.undo_stack) == baseline_undo + 1
+    finally:
+        _close_window(app, window)
+
+
 def test_the_status_strip_shows_a_frame_position_for_video(
         tmp_path, make_video):
     """"Image: 0 / 0" is meaningless for a clip."""
@@ -130,7 +162,8 @@ def test_the_status_strip_shows_a_frame_position_for_video(
         window.update_image_count()
         text = window.label_image_count.text()
         assert 'Image:' not in text
-        assert 'Frame' in text or 'PTS' in text
+        assert text.count(':') >= 4
+        assert 'PTS' in window.label_image_count.toolTip()
     finally:
         _close_window(app, window)
 

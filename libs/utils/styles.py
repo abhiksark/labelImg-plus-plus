@@ -65,6 +65,7 @@ LIGHT_COLORS = {
     'info': '#2563eb',
     'status_success': '#16803c',
     'status_warning': '#b45309',
+    'warning_surface': '#fff7ed',
     'status_error': '#c73737',
     'status_info': '#2563eb',
     'verified_bg': '#b8ef26',  # Bright green overlay for verified images
@@ -120,9 +121,10 @@ DARK_COLORS = {
     'info': '#4da6ff',
     'status_success': '#4caf50',
     'status_warning': '#ff9800',
+    'warning_surface': '#3b2a1a',
     'status_error': '#f44336',
     'status_info': '#4da6ff',
-    'verified_bg': '#4caf50',  # Slightly muted green for dark theme
+    'verified_bg': '#295131',  # Quiet green wash for verified canvases
     'canvas_bg': '#2d2d2d',    # Canvas viewport background
     'placeholder': '#3d3d3d',  # Dark gray for placeholders
     'item_bg': '#2d2d2d',      # Darker gray for item backgrounds
@@ -225,6 +227,30 @@ QWidget#workspaceCommandBar QToolButton:disabled {{
     border-color: transparent;
 }}
 
+QWidget#workspaceCommandBar QToolButton#primaryActionButton {{
+    min-width: {scale_px(104)}px;
+    background: {c['accent']};
+    border-color: {c['accent']};
+    color: {c['on_accent']};
+    font-weight: {type_tokens['weight_semibold']};
+}}
+
+QWidget#workspaceCommandBar QToolButton#primaryActionButton:hover {{
+    background: {c['accent_hover']};
+    border-color: {c['accent_hover']};
+}}
+
+QWidget#workspaceCommandBar QToolButton#primaryActionButton:pressed {{
+    background: {c['accent_pressed']};
+    border-color: {c['accent_pressed']};
+}}
+
+QWidget#workspaceCommandBar QToolButton#primaryActionButton:disabled {{
+    background: {c['surface_subtle']};
+    border-color: {c['border']};
+    color: {c['text_disabled']};
+}}
+
 QToolButton#applicationMenuButton {{
     font-weight: {type_tokens['weight_semibold']};
 }}
@@ -242,6 +268,13 @@ QLabel#documentLabel {{
     font-size: {scale_px(type_tokens['body'])}px;
     font-weight: {type_tokens['weight_medium']};
     background: transparent;
+}}
+
+QLabel#documentSaveState {{
+    color: {c['text_secondary']};
+    font-size: {scale_px(type_tokens['caption'])}px;
+    background: transparent;
+    padding: 0 {scale_px(space['xs'])}px;
 }}
 
 QLabel#documentDirtyIndicator {{
@@ -363,6 +396,59 @@ QWidget#workspaceInspector QToolButton#collapseInspectorButton {{
     border: none;
     padding: {scale_px(6)}px;
 }}
+
+QWidget#inspectorContextCard {{
+    background: {c['surface_subtle']};
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(7)}px;
+    margin: {scale_px(8)}px;
+}}
+
+QLabel#inspectorContextEyebrow {{
+    color: {c['text_secondary']};
+    font-size: {scale_px(10)}px;
+    font-weight: 600;
+    background: transparent;
+}}
+
+QLabel#inspectorContextTitle {{
+    color: {c['text']};
+    font-size: {scale_px(13)}px;
+    font-weight: 600;
+    background: transparent;
+}}
+
+QLabel#inspectorContextDetail {{
+    color: {c['text_secondary']};
+    font-size: {scale_px(11)}px;
+    background: transparent;
+}}
+
+QWidget#inspectorContextCard QToolButton {{
+    min-height: {scale_px(28)}px;
+    padding: 0 {scale_px(7)}px;
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(5)}px;
+    background: {c['surface']};
+    color: {c['text']};
+}}
+
+QWidget#inspectorContextCard QToolButton:hover {{
+    background: {c['hover']};
+    border-color: {c['border_strong']};
+}}
+
+QWidget#inspectorContextCard QToolButton[primary="true"] {{
+    background: {c['accent']};
+    border-color: {c['accent']};
+    color: {c['on_accent']};
+    font-weight: 600;
+}}
+
+QWidget#inspectorContextCard QToolButton[primary="true"]:hover {{
+    background: {c['accent_hover']};
+    border-color: {c['accent_hover']};
+}}
 """
 
 
@@ -406,6 +492,26 @@ QListWidget::item:selected, QListView::item:selected {{
 
 QListWidget::item:hover, QListView::item:hover {{
     background: {c['hover']};
+}}
+
+QLabel#videoElapsedPosition {{
+    color: {c['text']};
+    font-weight: 600;
+}}
+
+QLabel#videoWorkflowStage, QLabel#videoWorkflowArrow {{
+    color: {c['text_secondary']};
+    background: transparent;
+    font-size: {scale_px(11)}px;
+}}
+
+QLabel#videoWorkflowStage[done="true"] {{
+    color: {c['status_saved']};
+}}
+
+QLabel#videoWorkflowStage[active="true"] {{
+    color: {c['accent_text']};
+    font-weight: 600;
 }}
 
 QScrollBar:vertical {{
@@ -687,6 +793,31 @@ QWidget#canvasChrome, QWidget#workspaceStatusStrip {{
 }}
 QWidget#canvasChrome {{
     border-bottom: {scale_px(1)}px solid {c['border']};
+}}
+QWidget#saveErrorNotice {{
+    background: {c['warning_surface']};
+    border-bottom: {scale_px(1)}px solid {c['status_warning']};
+}}
+QLabel#saveErrorTitle {{
+    color: {c['text']};
+    font-weight: 600;
+}}
+QLabel#saveErrorDetail {{
+    color: {c['text_secondary']};
+    font-size: {scale_px(11)}px;
+}}
+QWidget#saveErrorNotice QPushButton {{
+    min-height: {scale_px(26)}px;
+    padding: 0 {scale_px(8)}px;
+}}
+QLabel#annotationSessionHint {{
+    color: {c['accent_text']};
+    background: {c['accent_light']};
+    border: {scale_px(1)}px solid {c['border']};
+    border-radius: {scale_px(4)}px;
+    padding: {scale_px(3)}px {scale_px(8)}px;
+    font-size: {scale_px(11)}px;
+    font-weight: 600;
 }}
 QWidget#workspaceStatusStrip {{
     border-top: {scale_px(1)}px solid {c['border']};

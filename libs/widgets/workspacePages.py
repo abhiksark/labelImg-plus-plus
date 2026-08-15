@@ -158,6 +158,19 @@ class CanvasChrome(QWidget):
             layout.addWidget(_action_button(action, self))
         self.sam_output_toggle = SamOutputModeToggle(parent=self)
         layout.addWidget(self.sam_output_toggle)
+        layout.addSpacing(scale_px(8))
+        self.annotation_session_hint = QLabel(self)
+        self.annotation_session_hint.setObjectName('annotationSessionHint')
+        # The hint is more important than leftover blank chrome. A zero
+        # minimum let the trailing stretch collapse it completely at laptop
+        # and split-inspector widths, leaving only the old status strip as an
+        # explanation of the armed tool.
+        self.annotation_session_hint.setMinimumWidth(scale_px(96))
+        self.annotation_session_hint.setMaximumWidth(scale_px(520))
+        self.annotation_session_hint.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.annotation_session_hint.hide()
+        layout.addWidget(self.annotation_session_hint)
         layout.addStretch(1)
         visibility = QToolButton(self)
         visibility.setObjectName('annotationVisibilityButton')
@@ -170,6 +183,76 @@ class CanvasChrome(QWidget):
         menu.addAction(hide_all)
         visibility.setMenu(menu)
         layout.addWidget(visibility)
+
+    def set_annotation_session(self, text):
+        """Show the next annotation gesture beside the active tool chrome."""
+        value = str(text or '')
+        # The durable state remains legible when the canvas column is narrow;
+        # the complete next-gesture instruction stays in the tooltip and the
+        # status projection.
+        display = value.split(' · ', 1)[0]
+        self.annotation_session_hint.setText(display)
+        self.annotation_session_hint.setToolTip(value)
+        self.annotation_session_hint.setVisible(bool(value))
+
+
+class SaveErrorNotice(QWidget):
+    """Persistent recovery surface for a failed annotation write."""
+
+    retryRequested = pyqtSignal()
+    saveAsRequested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super(SaveErrorNotice, self).__init__(parent)
+        self.setObjectName('saveErrorNotice')
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        self.title = QLabel('Annotations remain intact', self)
+        self.title.setObjectName('saveErrorTitle')
+        self.detail = QLabel(self)
+        self.detail.setObjectName('saveErrorDetail')
+        self.detail.setWordWrap(True)
+
+        copy = QWidget(self)
+        copy_layout = QVBoxLayout(copy)
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(scale_px(1))
+        copy_layout.addWidget(self.title)
+        copy_layout.addWidget(self.detail)
+
+        self.retry_button = QPushButton('Retry save', self)
+        self.retry_button.setObjectName('retrySaveButton')
+        self.retry_button.clicked.connect(self.retryRequested.emit)
+        self.save_as_button = QPushButton('Save as…', self)
+        self.save_as_button.setObjectName('saveErrorSaveAsButton')
+        self.save_as_button.clicked.connect(self.saveAsRequested.emit)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(
+            scale_px(10), scale_px(6), scale_px(10), scale_px(6))
+        layout.setSpacing(scale_px(8))
+        layout.addWidget(copy, 1)
+        layout.addWidget(self.retry_button)
+        layout.addWidget(self.save_as_button)
+        self.hide()
+
+    def show_error(self, message):
+        detail = 'Save failed: %s' % str(message or 'unknown error')
+        self.detail.setText(detail)
+        self.detail.setToolTip(detail)
+        self.set_busy(False)
+        self.show()
+
+    def set_busy(self, busy):
+        enabled = not bool(busy)
+        self.retry_button.setEnabled(enabled)
+        self.save_as_button.setEnabled(enabled)
+
+    def clear(self):
+        self.detail.clear()
+        self.detail.setToolTip('')
+        self.set_busy(False)
+        self.hide()
 
 
 class WorkspacePages(QWidget):
@@ -208,7 +291,9 @@ class WorkspacePages(QWidget):
             actions.fitWindow, actions.fitWidth, actions.zoomOrg,
             actions.hideAll, actions.showAll, self.canvas_page)
         self.sam_output_toggle = self.canvas_chrome.sam_output_toggle
+        self.save_error_notice = SaveErrorNotice(self.canvas_page)
         canvas_layout.addWidget(self.canvas_chrome)
+        canvas_layout.addWidget(self.save_error_notice)
         canvas_layout.addWidget(scroll_area, 1)
         canvas_layout.addWidget(timeline)
         self.stack.addWidget(self.canvas_page)
