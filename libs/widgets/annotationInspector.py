@@ -1,3 +1,4 @@
+# libs/widgets/annotationInspector.py
 """Unified, geometry-free projection for image shapes and video tracks."""
 
 try:
@@ -41,6 +42,9 @@ class AnnotationListModel(QAbstractListModel):
         self._rows = []
         self._video_model = None
         self._pts = None
+        self._start_pts = 0
+        self._time_base_num = 1
+        self._time_base_den = 1
         self._selected_identity = None
         self._visibility = {}
 
@@ -70,6 +74,9 @@ class AnnotationListModel(QAbstractListModel):
         self._kind = 'image'
         self._video_model = None
         self._pts = None
+        self._start_pts = 0
+        self._time_base_num = 1
+        self._time_base_den = 1
         self._rows = list(shapes)
         live = set(self.identity_for_shape(shape) for shape in self._rows)
         self._visibility = {
@@ -77,17 +84,31 @@ class AnnotationListModel(QAbstractListModel):
             if key in live}
         self.endResetModel()
 
-    def set_video_context(self, model, pts):
+    def set_video_context(self, model, pts, start_pts=0, time_base_num=1,
+                          time_base_den=1):
         self.beginResetModel()
         self._kind = 'video'
         self._video_model = model
         self._pts = None if pts is None else int(pts)
+        self._start_pts = int(start_pts or 0)
+        self._time_base_num = int(time_base_num)
+        self._time_base_den = max(1, int(time_base_den))
         self._rows = ([] if model is None else list(model.tracks))
         live = set(self._rows)
         self._visibility = {
             key: value for key, value in self._visibility.items()
             if key in live}
         self.endResetModel()
+
+    def _elapsed(self, pts):
+        milliseconds = max(0, int(round(
+            (int(pts) - self._start_pts) * self._time_base_num * 1000 /
+            self._time_base_den)))
+        seconds, milliseconds = divmod(milliseconds, 1000)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        return '%02d:%02d:%02d.%03d' % (
+            hours, minutes, seconds, milliseconds)
 
     def clear(self):
         self.set_image_shapes(())
@@ -168,8 +189,12 @@ class AnnotationListModel(QAbstractListModel):
             difficult = track.difficult
             if span is None:
                 span_text = 'empty'
+                tooltip = 'Track %s' % identity
             else:
-                span_text = '%s-%s' % span
+                span_text = '%s–%s' % (
+                    self._elapsed(span[0]), self._elapsed(span[1]))
+                tooltip = 'Track %s · exact PTS %s–%s' % (
+                    identity, span[0], span[1])
             display = '%s  · %s  · %s' % (
                 class_name, shape_type, span_text)
             object_value = None
@@ -185,9 +210,11 @@ class AnnotationListModel(QAbstractListModel):
             pending = False
             keyframe = False
             display = '%s  · %s' % (class_name, shape_type)
+            tooltip = None
             object_value = shape
         values = {
             Qt.DisplayRole: display,
+            Qt.ToolTipRole: tooltip,
             Qt.EditRole: class_name,
             Qt.CheckStateRole: (Qt.Checked if self._visibility.get(
                 identity, True) else Qt.Unchecked),

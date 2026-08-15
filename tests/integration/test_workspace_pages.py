@@ -1,3 +1,4 @@
+# tests/integration/test_workspace_pages.py
 """Structural and routing coverage for Empty, Canvas, and Gallery pages."""
 
 import os
@@ -71,6 +72,7 @@ def test_gallery_is_embedded_and_keeps_workspace_chrome(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
     try:
+        window.resize(1100, 700)
         window.show()
         QApplication.processEvents()
         original_central = window.centralWidget()

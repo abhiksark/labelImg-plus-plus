@@ -1,3 +1,4 @@
+# libs/widgets/commandBar.py
 """Compact application command bar for the annotation workspace."""
 
 try:
@@ -169,7 +170,8 @@ class CommandBar(QWidget):
         button.setAccessibleName(accessible_name)
         return button
 
-    def set_document(self, name, dirty=False, full_path=None, read_only=False):
+    def set_document(self, name, dirty=False, full_path=None, read_only=False,
+                     provisional=False):
         display = name or 'No document'
         if read_only:
             display += ' · Read only'
@@ -178,6 +180,10 @@ class CommandBar(QWidget):
         self.dirty_indicator.setVisible(bool(dirty))
         if read_only:
             state = 'Read only'
+        elif provisional and dirty:
+            state = 'Unsaved changes · provisional object'
+        elif provisional:
+            state = 'Provisional object · not saved'
         elif dirty:
             state = 'Unsaved changes'
         else:

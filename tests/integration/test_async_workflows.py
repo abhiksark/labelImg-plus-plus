@@ -1,3 +1,4 @@
+# tests/integration/test_async_workflows.py
 import os
 import json
 import threading
@@ -32,6 +33,16 @@ def _image(path, color):
     assert image.save(path)
 
 
+def _stage_provisional_box(window):
+    window.activate_box_tool()
+    shape = Shape()
+    for point in ((2, 3), (22, 3), (22, 23), (2, 23)):
+        shape.add_point(QPointF(*point))
+    window.canvas.current = shape
+    window.canvas.finalise()
+    return shape
+
+
 def test_rapid_load_requests_commit_only_latest(tmp_path):
     app, window = get_main_app()
     first = str(tmp_path / 'first.png')
@@ -59,6 +70,44 @@ def test_rapid_load_requests_commit_only_latest(tmp_path):
                 lambda: not window.task_coordinator.queue_depths()['interactive'])
         assert window.file_path == third
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_delayed_image_commit_keeps_new_provisional_object(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / 'first.png')
+    second = str(tmp_path / 'second.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    assert window.load_file(first)
+    gate = threading.Event()
+    started = threading.Event()
+    original = load_image_result
+
+    def delayed(path, *args, **kwargs):
+        started.set()
+        gate.wait(1)
+        return original(path, *args, **kwargs)
+
+    try:
+        with patch('labelImgPlusPlus.load_image_result', side_effect=delayed):
+            window.request_open_file(second, skip_prompt=True)
+            assert started.wait(1)
+            shape = _stage_provisional_box(window)
+            gate.set()
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()[
+                    'interactive'])
+            app.processEvents()
+
+        assert window.file_path == first
+        assert window.canvas.provisional_shape is shape
+        assert window.class_picker.isVisible()
+    finally:
+        gate.set()
+        window._cancel_provisional_shape()
         window.dirty = False
         window.close()
 
@@ -578,6 +627,47 @@ def test_directory_scan_is_transactional_and_latest_request_wins(tmp_path):
             str(latest_dir))
     finally:
         gate.set()
+        window.dirty = False
+        window.close()
+
+
+def test_delayed_directory_commit_keeps_document_and_provisional_object(
+        tmp_path):
+    app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    target_dir = tmp_path / 'target'
+    target_dir.mkdir()
+    _image(str(current), 0xFFFFFFFF)
+    _image(str(target_dir / 'target.png'), 0xFF000000)
+    assert window.load_file(str(current))
+    old_snapshot = window.dataset_snapshot
+    gate = threading.Event()
+    started = threading.Event()
+    original_scan = window.dataset_snapshot.scan
+
+    def delayed_scan(root, *args, **kwargs):
+        started.set()
+        gate.wait(1)
+        return original_scan(root, *args, **kwargs)
+
+    try:
+        with patch('labelImgPlusPlus.DatasetSnapshot.scan', delayed_scan):
+            window.request_import_dir_images(str(target_dir), skip_prompt=True)
+            assert started.wait(1)
+            shape = _stage_provisional_box(window)
+            gate.set()
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()[
+                    'background'])
+            app.processEvents()
+
+        assert window.file_path == str(current)
+        assert window.dataset_snapshot is old_snapshot
+        assert window.canvas.provisional_shape is shape
+    finally:
+        gate.set()
+        window._cancel_provisional_shape()
         window.dirty = False
         window.close()
 

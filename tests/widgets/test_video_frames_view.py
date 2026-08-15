@@ -1,3 +1,4 @@
+# tests/widgets/test_video_frames_view.py
 """The frames grid shows exactly the frames the engine selected."""
 import os
 import sys
@@ -10,6 +11,7 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
+from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtWidgets import QApplication
 
 from libs.core.video_model import VideoModelState
@@ -280,9 +282,44 @@ class TestGridRendering(unittest.TestCase):
         self.assertEqual(self.view.tile_count(), 2)
 
     def test_tiles_are_captioned_with_their_pts(self):
+        self.view.set_media_context('clip', 0, 1, 10, 96, 64)
         self.view.set_filter('annotated')
         self.assertEqual(self.view.tile_captions(),
-                         ['0', '10', '20', '30'])
+                         ['00:00.000', '00:01.000',
+                          '00:02.000', '00:03.000'])
+        self.assertIn(
+            'Exact PTS 30', self.view.list_widget.item(3).toolTip())
+
+    def test_thumbnail_cache_is_bounded_and_pending_overlay_is_painted(self):
+        self.view.set_media_context('clip', 0, 1, 10, 96, 64)
+        image = QImage(96, 64, QImage.Format_RGB32)
+        image.fill(QColor('#123456'))
+        for pts in range(self.view.THUMBNAIL_CACHE_LIMIT + 1):
+            self.view.set_thumbnail(pts, image)
+        self.assertEqual(
+            self.view.thumbnail_cache_size(),
+            self.view.THUMBNAIL_CACHE_LIMIT)
+
+        self.view.set_thumbnail(30, image)
+        self.view.set_filter('pending')
+        tile = self.view.list_widget.item(0).icon().pixmap(
+            self.view.list_widget.iconSize()).toImage()
+        self.assertTrue(any(
+            tile.pixelColor(x, y) == QColor(self.view._colors['warning'])
+            for y in range(tile.height()) for x in range(tile.width())))
+
+    def test_only_visible_uncached_tiles_are_requested(self):
+        requested = []
+        self.view.thumbnailsRequested.connect(
+            lambda pts, size: requested.append((pts, size)))
+        self.view.resize(230, 180)
+        self.view.show()
+        app.processEvents()
+        self.view.request_visible_thumbnails()
+
+        self.assertTrue(requested)
+        self.assertTrue(set(requested[-1][0]) <= set(self.view.visible_pts()))
+        self.assertGreater(requested[-1][1], 0)
 
     def test_clicking_a_tile_emits_its_pts(self):
         received = []

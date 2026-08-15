@@ -1,3 +1,4 @@
+# tests/widgets/test_annotation_inspector.py
 """Roles, identity, filtering, and mutation requests for the unified model."""
 
 import os
@@ -89,7 +90,8 @@ def test_video_rows_include_absent_tracks_span_and_pending_state():
         review_state='pending', quality=.8))
 
     inspector = AnnotationListModel()
-    inspector.set_video_context(model, 20)
+    inspector.set_video_context(
+        model, 20, start_pts=0, time_base_num=1, time_base_den=10)
     car = inspector.index_for_identity('track-car')
     person = inspector.index_for_identity('track-person')
 
@@ -98,6 +100,10 @@ def test_video_rows_include_absent_tracks_span_and_pending_state():
     assert inspector.data(car, AnnotationRoles.PendingReview) is True
     assert inspector.data(car, AnnotationRoles.Provenance) == 'pending'
     assert inspector.data(car, AnnotationRoles.CurrentRenderState) == 'pending'
+    assert '10-30' not in inspector.data(car, Qt.DisplayRole)
+    assert '00:00:01.000–00:00:03.000' in \
+        inspector.data(car, Qt.DisplayRole)
+    assert 'exact PTS 10–30' in inspector.data(car, Qt.ToolTipRole)
     assert inspector.data(person, AnnotationRoles.VideoSpan) is None
     assert inspector.data(person, AnnotationRoles.CurrentRenderState) == 'absent'
     assert inspector.data(person, AnnotationRoles.Identity) == second.track_id

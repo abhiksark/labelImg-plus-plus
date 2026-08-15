@@ -1,3 +1,4 @@
+# tests/video/test_timeline.py
 from dataclasses import replace
 
 import pytest
@@ -8,6 +9,7 @@ from libs.core.video_decoder import VideoDecoderSession
 from libs.widgets.videoTimelineWidget import (
     TIMELINE_MAX, VideoTimelineWidget, format_timecode, parse_timecode,
 )
+from libs.utils.styles import Theme, get_theme_colors
 
 
 _APP = QApplication.instance() or QApplication([])
@@ -71,6 +73,21 @@ def test_invalid_timecode_does_not_emit():
     widget._emit_time_seek()
     assert len(spy) == 0
     widget.close()
+
+
+def test_timeline_controls_have_names_and_semantic_focus_style():
+    widget = VideoTimelineWidget()
+    try:
+        widget.apply_theme(Theme.DARK)
+        assert widget.play_button.accessibleName() == 'Play or pause video'
+        assert widget.previous_button.accessibleName() == 'Previous frame'
+        assert widget.next_button.accessibleName() == 'Next frame'
+        assert widget.time_edit.accessibleName() == 'Presentation time'
+        assert widget.slider.accessibleName() == 'Video timeline'
+        assert 'QSlider:focus' in widget.styleSheet()
+        assert get_theme_colors(Theme.DARK)['focus'] in widget.styleSheet()
+    finally:
+        widget.close()
 
 
 def test_propagation_actions_and_progress_replace_each_other():

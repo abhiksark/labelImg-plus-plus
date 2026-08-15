@@ -1,3 +1,4 @@
+# libs/widgets/toolRail.py
 """Fixed annotation-tool rail for the modern workspace."""
 
 try:
@@ -48,6 +49,7 @@ class AnnotationToolRail(QWidget):
             button.setObjectName('%sToolButton' % key)
             button.setDefaultAction(action)
             button.setAutoRaise(True)
+            button.setFocusPolicy(Qt.StrongFocus)
             button.setToolButtonStyle(Qt.ToolButtonIconOnly)
             button.setIconSize(QSize(
                 scale_px(self.ICON_SIZE), scale_px(self.ICON_SIZE)))

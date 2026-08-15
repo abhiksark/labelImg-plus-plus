@@ -1,5 +1,7 @@
+# tests/video/test_inline_class_picker.py
 from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QPushButton
 
 from labelImgPlusPlus import get_main_app
 from libs.core.sam_types import SamResult
@@ -64,6 +66,7 @@ def test_video_sam_box_is_provisional_then_commits_as_manual_anchor(
     video = make_video(tmp_path / 'sam-box.mp4')
     try:
         assert window.open_video(video)
+        window.canvas.set_sam_mode(True)
         window.sam_output_mode = 'box'
         result = SamResult(
             polygon=((10.0, 10.0), (40.0, 10.0), (40.0, 30.0)),
@@ -74,6 +77,13 @@ def test_video_sam_box_is_provisional_then_commits_as_manual_anchor(
         assert provisional is not None
         assert provisional.shape_type == ShapeType.RECTANGLE
         assert window.video_model.tracks == {}
+        assert window.class_picker.prompt.text() == 'Use this outline?'
+
+        use_outline = window.class_picker.findChild(
+            QPushButton, 'useOutlineButton')
+        QTest.keyClick(use_outline, Qt.Key_Return)
+        app.processEvents()
+        assert window.class_picker.prompt.text() == 'Choose a class'
 
         window.class_picker.edit.setText('vehicle')
         QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
@@ -88,6 +98,39 @@ def test_video_sam_box_is_provisional_then_commits_as_manual_anchor(
         window.undo_action()
         assert window.video_model.tracks == {}
         assert window.video_model.observations == {}
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_video_smart_select_rejection_leaves_project_and_undo_unchanged(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'sam-reject.mp4')
+    try:
+        assert window.open_video(video)
+        window.canvas.set_sam_mode(True)
+        window.sam_output_mode = 'box'
+        result = SamResult(
+            polygon=((10.0, 10.0), (40.0, 10.0), (40.0, 30.0)),
+            bounds=(10.0, 10.0, 41.0, 31.0))
+        window.sam_controller._on_finished(
+            window.sam_controller._gen, result, None)
+        assert window.canvas.provisional_shape is not None
+        assert window.class_picker.prompt.text() == 'Use this outline?'
+
+        QTest.keyClick(window.class_picker, Qt.Key_Escape)
+        app.processEvents()
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.shapes == []
+        assert window.video_model.tracks == {}
+        assert window.video_model.observations == {}
+        assert not window.video_model.dirty
+        assert not window.undo_stack.can_undo()
+        assert window.canvas.mode == window.canvas.CREATE_SAM
+        assert window.canvas.hasFocus()
     finally:
         window.dirty = False
         window.close()

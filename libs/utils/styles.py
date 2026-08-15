@@ -362,6 +362,10 @@ QWidget#annotationToolRail QToolButton:hover {{
     color: {c['text']};
 }}
 
+QWidget#annotationToolRail QToolButton:focus {{
+    border: {scale_px(2)}px solid {c['focus']};
+}}
+
 QWidget#annotationToolRail QToolButton:checked {{
     background: {c['accent_light']};
     color: {c['accent_text']};
@@ -395,6 +399,10 @@ QWidget#workspaceInspector QTabBar::tab {{
 QWidget#workspaceInspector QToolButton#collapseInspectorButton {{
     border: none;
     padding: {scale_px(6)}px;
+}}
+
+QWidget#workspaceInspector QToolButton:focus {{
+    border: {scale_px(2)}px solid {c['focus']};
 }}
 
 QWidget#inspectorContextCard {{

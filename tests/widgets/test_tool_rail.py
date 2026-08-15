@@ -1,15 +1,16 @@
+# tests/widgets/test_tool_rail.py
 """Structural coverage for the modern annotation tool rail."""
 
 import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QAction, QApplication, QWidget
 
 from libs.widgets.toolRail import AnnotationToolRail
 from libs.widgets.workspaceInspector import (
-    WorkspaceInspector, WorkspaceSplitterShell,
+    InspectorContextCard, WorkspaceInspector, WorkspaceSplitterShell,
 )
 from libs.utils.dpi import scale_px
 
@@ -39,6 +40,8 @@ def test_rail_has_fixed_logical_geometry_and_exclusive_actions():
         assert button.minimumSize() == QSize(scale_px(40), scale_px(40))
         assert button.maximumSize() == QSize(scale_px(40), scale_px(40))
         assert button.iconSize() == QSize(scale_px(20), scale_px(20))
+        assert button.focusPolicy() == Qt.StrongFocus
+    assert 'QToolButton:focus' in rail.styleSheet()
 
 
 def test_rail_tooltip_tracks_live_user_shortcut():
@@ -69,3 +72,21 @@ def test_workspace_shell_keeps_rail_beside_canvas_column():
     assert shell.splitter.widget(0) is canvas_column
     assert shell.splitter.widget(1) is inspector
     assert shell.layout().contentsMargins().left() == 0
+
+
+def test_inspector_actions_have_names_and_keyboard_focus_treatment():
+    card = InspectorContextCard()
+    action = QAction('Accept & Next', card)
+    card.set_context('Review', 'car', actions=(action,))
+    button = card.action_buttons[0]
+    inspector = WorkspaceInspector(QWidget(), QWidget())
+    try:
+        assert button.accessibleName() == 'Accept Next'
+        assert button.focusPolicy() == Qt.StrongFocus
+        assert inspector.collapse_button.focusPolicy() == Qt.StrongFocus
+        assert inspector.collapse_button.accessibleName() == \
+            'Collapse inspector'
+        assert 'QToolButton:focus' in inspector.styleSheet()
+    finally:
+        card.close()
+        inspector.close()

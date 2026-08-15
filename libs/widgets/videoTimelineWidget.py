@@ -1,3 +1,4 @@
+# libs/widgets/videoTimelineWidget.py
 """PTS-based controls and marker strip for smart-video documents."""
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -8,6 +9,8 @@ from PyQt5.QtWidgets import (
 )
 
 from libs.core.video_types import VideoFrameRef
+from libs.utils.dpi import scale_px
+from libs.utils.styles import Theme, get_theme_colors
 
 
 TIMELINE_MAX = 1_000_000
@@ -84,6 +87,7 @@ class VideoTimelineWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName('videoTimeline')
         self._snapshot = None
         self._dragging = False
         self._playing = False
@@ -94,20 +98,25 @@ class VideoTimelineWidget(QWidget):
 
         style = self.style()
         self.play_button = QPushButton()
+        self.play_button.setAccessibleName('Play or pause video')
         self.play_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setToolTip('Play/Pause (Ctrl+Space)')
         self.previous_button = QPushButton()
+        self.previous_button.setAccessibleName('Previous frame')
         self.previous_button.setIcon(
             style.standardIcon(QStyle.SP_MediaSkipBackward))
         self.previous_button.setToolTip('Previous frame (A)')
         self.next_button = QPushButton()
+        self.next_button.setAccessibleName('Next frame')
         self.next_button.setIcon(
             style.standardIcon(QStyle.SP_MediaSkipForward))
         self.next_button.setToolTip('Next frame (D)')
         self.time_edit = QLineEdit('00:00:00.000')
+        self.time_edit.setAccessibleName('Presentation time')
         self.time_edit.setFixedWidth(138)
         self.time_edit.setToolTip('Exact presentation time (HH:MM:SS.mmm)')
         self.speed_combo = QComboBox()
+        self.speed_combo.setAccessibleName('Playback speed')
         for speed in (0.25, 0.5, 1.0, 2.0):
             self.speed_combo.addItem('%gx' % speed, speed)
         self.speed_combo.setCurrentIndex(2)
@@ -145,6 +154,7 @@ class VideoTimelineWidget(QWidget):
         self.progress_label.hide()
         self.cancel_propagation_button.hide()
         self.slider = _MarkerSlider()
+        self.slider.setAccessibleName('Video timeline')
         self.slider.setRange(0, TIMELINE_MAX)
 
         top = QHBoxLayout()
@@ -178,6 +188,22 @@ class VideoTimelineWidget(QWidget):
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
         self.slider.valueChanged.connect(self._slider_changed)
+        self.apply_theme(Theme.LIGHT)
+
+    def apply_theme(self, theme):
+        colors = get_theme_colors(theme)
+        self.setStyleSheet("""
+            #videoTimeline QPushButton:focus,
+            #videoTimeline QToolButton:focus,
+            #videoTimeline QLineEdit:focus,
+            #videoTimeline QComboBox:focus,
+            #videoTimeline QSlider:focus {{
+                border: {width}px solid {focus};
+                border-radius: {radius}px;
+            }}
+        """.format(
+            width=scale_px(2), radius=scale_px(4),
+            focus=colors['focus']))
 
     def set_propagation_actions(self, all_action, selected_action,
                                 cancel_action):

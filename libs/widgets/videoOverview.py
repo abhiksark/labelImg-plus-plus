@@ -294,7 +294,7 @@ class VideoOverview(QWidget):
             #videoOverviewExport {{
                 background-color: {accent};
                 border-color: {accent};
-                color: white;
+                color: {on_accent};
             }}
             #videoOverviewToggle {{
                 background-color: {surface_subtle};
@@ -315,4 +315,5 @@ class VideoOverview(QWidget):
             pad_h=scale_px(self.BUTTON_PADDING_H),
             **{key: colors[key] for key in (
                 'surface', 'surface_subtle', 'border', 'text_secondary',
-                'accent', 'accent_light', 'accent_text', 'hover')}))
+                'accent', 'accent_light', 'accent_text', 'on_accent',
+                'hover')}))

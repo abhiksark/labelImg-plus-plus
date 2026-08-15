@@ -1,17 +1,23 @@
+# tests/video/test_opening.py
 import os
 import sqlite3
+import threading
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import QThread, Qt
+from PyQt5.QtCore import QPointF, QThread, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import DocumentKind, get_main_app
+from libs.core.shape import Shape
 from libs.core.video_decoder import VideoDependencyError
+from libs.core.video_session import prepare_video_open
 from libs.core.video_project import default_project_path
 from libs.core.video_project import read_project_source
-from libs.core.video_types import ObservationRecord
+from libs.core.video_types import (
+    ObservationRecord, VideoThumbnailRequest, VideoThumbnailResult,
+)
 
 
 def _wait(app, predicate, timeout=5):
@@ -28,6 +34,16 @@ def _image(path):
     image = QImage(64, 48, QImage.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(str(path))
+
+
+def _stage_provisional_box(window):
+    window.activate_box_tool()
+    shape = Shape()
+    for point in ((2, 3), (22, 3), (22, 23), (2, 23)):
+        shape.add_point(QPointF(*point))
+    window.canvas.current = shape
+    window.canvas.finalise()
+    return shape
 
 
 def test_synchronous_open_creates_sidecar_after_first_frame(
@@ -105,6 +121,46 @@ def test_async_open_decodes_qimage_off_thread_and_builds_qpixmap_on_gui(
         assert decode_threads == [True]
         assert pixmap_threads == [True]
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_delayed_video_commit_keeps_provisional_object_and_closes_decoder(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    image = tmp_path / 'image.png'
+    _image(image)
+    video = make_video(tmp_path / 'clip.mp4')
+    assert window.load_file(str(image))
+    gate = threading.Event()
+    started = threading.Event()
+    prepared_values = []
+
+    def delayed(*args, **kwargs):
+        started.set()
+        gate.wait(1)
+        prepared = prepare_video_open(*args, **kwargs)
+        prepared_values.append(prepared)
+        return prepared
+
+    try:
+        with patch('labelImgPlusPlus.prepare_video_open', delayed):
+            window.request_open_video(video, skip_prompt=True)
+            assert started.wait(1)
+            shape = _stage_provisional_box(window)
+            gate.set()
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()['video'])
+            app.processEvents()
+
+        assert window.document_kind == DocumentKind.IMAGE
+        assert window.file_path == str(image)
+        assert window.canvas.provisional_shape is shape
+        assert prepared_values[0].decoder._closed
+    finally:
+        gate.set()
+        window._cancel_provisional_shape()
         window.dirty = False
         window.close()
 
@@ -311,7 +367,7 @@ def test_failed_v1_migration_surfaces_warning_and_preserves_pending_rows(
         window.close()
 
 
-def test_video_primary_action_opens_browse_and_routes_pending_to_review(
+def test_video_primary_action_accepts_current_pending_then_routes_remote_work(
         tmp_path, make_video):
     _app, window = get_main_app()
     video = make_video(tmp_path / 'primary.mp4')
@@ -333,14 +389,28 @@ def test_video_primary_action_opens_browse_and_routes_pending_to_review(
         window._on_video_model_mutation()
         window._materialize_video_frame(pending.pts)
 
-        assert window.actions.primary.text() == 'Review queue'
+        assert window.actions.primary.text() == 'Accept & Next'
         card = window.inspector_context_card
         assert card.eyebrow.text() == 'REVIEW SUGGESTION'
         assert card.title.text() == 'car'
+        assert '1 suggestion remaining' in card.detail.text()
         assert card.visible_actions() == (
             window.actions.videoAcceptSuggestion,
             window.actions.videoRejectSuggestion,
         )
+        window.trigger_primary_action()
+        assert window.video_model.observations[
+            (track.track_id, pending.pts)].review_state == 'accepted'
+        assert window.actions.primary.text() == 'Browse video'
+
+        remote = ObservationRecord(
+            track.track_id, pending.pts + window._video_step_pts(),
+            [3, 4, 23, 24], source='tracker', review_state='pending',
+            anchor=False, quality=.75)
+        window.video_model.upsert_tracker(remote)
+        window._on_video_model_mutation()
+        assert window.actions.primary.text() == 'Review queue'
+
         window.trigger_primary_action()
         assert window.workspace_pages.current_page() == 'canvas'
         assert not window.gallery_mode_enabled
@@ -348,7 +418,7 @@ def test_video_primary_action_opens_browse_and_routes_pending_to_review(
         assert window.canvas.mode == window.canvas.EDIT
         assert window.actions.editMode.isChecked()
         assert window.canvas.hasFocus()
-        assert 'Review 1 of 1' in window.statusBar().currentMessage()
+        assert '1 suggestion remaining' in window.statusBar().currentMessage()
     finally:
         window.dirty = False
         window.close()
@@ -422,7 +492,8 @@ def test_single_item_review_decisions_advance_through_pending_queue(
         window._on_video_model_mutation()
         window._materialize_video_frame(first_pts)
 
-        assert 'Issue 1 of 2' in window.inspector_context_card.detail.text()
+        assert '2 suggestions remaining' in \
+            window.inspector_context_card.detail.text()
         assert window.inspector_context_card.visible_actions() == (
             window.actions.videoAcceptSuggestion,
             window.actions.videoRejectSuggestion,
@@ -437,7 +508,8 @@ def test_single_item_review_decisions_advance_through_pending_queue(
         assert window._selected_video_track_id == next_track.track_id
         assert window.canvas.selected_shape.video_track_id == \
             next_track.track_id
-        assert 'Issue 1 of 1' in window.inspector_context_card.detail.text()
+        assert '1 suggestion remaining' in \
+            window.inspector_context_card.detail.text()
 
         assert window.reject_current_suggestion()
         assert window.video_model.observations[
@@ -446,6 +518,55 @@ def test_single_item_review_decisions_advance_through_pending_queue(
         assert window.actions.primary.text() == 'Browse video'
         assert 'Review complete' in window.statusBar().currentMessage()
         assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_review_shortcuts_wait_for_the_exact_target_frame(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'review-fence.mp4', frames=12)
+    try:
+        assert window.open_video(video)
+        first_pts = window.current_video_frame_ref.pts
+        next_pts = first_pts + window._video_step_pts()
+        first_track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        next_track = window.video_model.create_track(
+            'person', 'rectangle', (255, 150, 0, 255),
+            track_id='track-2')
+        keys = ((first_track.track_id, first_pts),
+                (next_track.track_id, next_pts))
+        for track_id, pts in keys:
+            window.video_model.upsert_tracker(ObservationRecord(
+                track_id, pts, [2, 3, 22, 23], source='tracker',
+                review_state='pending', anchor=False, quality=.75))
+        window._selected_video_track_id = first_track.track_id
+        window._on_video_model_mutation()
+        window._materialize_video_frame(first_pts)
+        window.frame_cache.clear()
+
+        handle = window._activate_pending_review(keys[1])
+        assert handle is not None
+        assert window.current_video_frame_ref.pts == first_pts
+        assert window.actions.primary.text() == 'Opening suggestion…'
+        assert not window.actions.primary.isEnabled()
+        assert not window.accept_current_suggestion()
+        assert not window.reject_current_suggestion()
+        assert all(
+            window.video_model.observations[key].review_state == 'pending'
+            for key in keys)
+
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == next_pts)
+        assert window._review_navigation_key is None
+        assert window._selected_video_track_id == next_track.track_id
+        assert window.accept_current_suggestion()
+        assert window.video_model.observations[keys[1]].review_state == \
+            'accepted'
+        assert window.video_model.observations[keys[0]].review_state == \
+            'pending'
     finally:
         window.dirty = False
         window.close()
@@ -614,5 +735,74 @@ def test_the_overview_shows_the_open_clip_and_seeks_back_to_the_canvas(
         assert not window.gallery_mode_enabled
         assert not window.actions.galleryMode.isChecked()
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_overview_thumbnails_decode_exact_pts_and_reject_stale_revision(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    try:
+        assert window.open_video(make_video(tmp_path / 'thumbnails.mp4'))
+        pts = window.current_video_frame_ref.pts
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_tracker(ObservationRecord(
+            track.track_id, pts, [8, 12, 32, 36], source='tracker',
+            review_state='pending', anchor=False))
+        window._on_video_model_mutation()
+        window.toggle_gallery_mode(True)
+        overview = window.workspace_pages.video_overview
+        overview.set_view('frames')
+        overview.frames.resize(320, 220)
+        overview.frames.request_visible_thumbnails()
+
+        assert _wait(app, lambda: pts in overview.frames._thumbnail_cache)
+        assert 'Exact PTS %d' % pts in \
+            overview.frames.list_widget.item(0).toolTip()
+
+        snapshot = window.video_snapshot
+        request = VideoThumbnailRequest(
+            request_id=window._video_overview_thumbnail_request_id,
+            generation=window._dataset_generation,
+            model_revision=window.video_model.revision - 1,
+            source_path=snapshot.source_path,
+            fingerprint=snapshot.fingerprint,
+            stream_index=snapshot.stream_index,
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den,
+            pts=(pts,), max_size=96)
+        overview.frames._thumbnail_cache.clear()
+        window._on_video_overview_thumbnails(VideoThumbnailResult(
+            request, ((window.current_video_frame_ref, window.image),)))
+        assert overview.frames.thumbnail_cache_size() == 0
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_new_overview_thumbnail_request_cancels_the_previous_one(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    started = threading.Event()
+
+    def slow_decode(request, cancelled):
+        if not started.is_set():
+            started.set()
+            while not cancelled():
+                time.sleep(.001)
+        return VideoThumbnailResult(request, ())
+
+    try:
+        assert window.open_video(make_video(tmp_path / 'cancel-thumbs.mp4'))
+        pts = window.current_video_frame_ref.pts
+        with patch('labelImgPlusPlus.decode_video_thumbnails', slow_decode):
+            first = window._request_video_overview_thumbnails((pts,), 96)
+            assert _wait(app, started.is_set)
+            second = window._request_video_overview_thumbnails((pts,), 96)
+            assert first.is_cancelled()
+            assert not second.is_cancelled()
+    finally:
+        window.task_coordinator.cancel_key('video-overview-thumbnails')
         window.dirty = False
         window.close()

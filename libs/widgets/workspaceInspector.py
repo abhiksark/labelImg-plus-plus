@@ -1,16 +1,17 @@
+# libs/widgets/workspaceInspector.py
 """Fixed inspector and splitter shell for the Balanced workspace."""
 
 try:
     from PyQt5.QtCore import Qt, pyqtSignal
     from PyQt5.QtWidgets import (
-        QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter, QTabWidget,
-        QToolButton, QVBoxLayout, QWidget,
+        QComboBox, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter,
+        QTabWidget, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:
     from PyQt4.QtCore import Qt, pyqtSignal
     from PyQt4.QtGui import (
-        QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter, QTabWidget,
-        QToolButton, QVBoxLayout, QWidget,
+        QComboBox, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter,
+        QTabWidget, QToolButton, QVBoxLayout, QWidget,
     )
 
 from libs.utils.dpi import scale_px
@@ -20,6 +21,9 @@ from libs.utils.utils import themed_icon
 
 class InspectorContextCard(QWidget):
     """A calm projection of the next actions for the current object state."""
+
+    classStrategyChanged = pyqtSignal(str)
+    fixedClassChanged = pyqtSignal(str)
 
     MAX_ACTIONS = 3
     COMPACT_ACTION_TEXT = {
@@ -44,6 +48,24 @@ class InspectorContextCard(QWidget):
         self.detail.setObjectName('inspectorContextDetail')
         self.detail.setWordWrap(True)
 
+        self.class_strategy_combo = QComboBox(self)
+        self.class_strategy_combo.setObjectName('classStrategyCombo')
+        self.class_strategy_combo.setAccessibleName('Class strategy')
+        for text, value in (
+                ('Confirm each', 'confirm'), ('Repeat last', 'repeat'),
+                ('Fixed class', 'fixed')):
+            self.class_strategy_combo.addItem(text, value)
+        self.class_strategy_combo.currentIndexChanged.connect(
+            self._emit_class_strategy)
+        self.class_strategy_combo.hide()
+
+        self.fixed_class_combo = QComboBox(self)
+        self.fixed_class_combo.setObjectName('fixedClassCombo')
+        self.fixed_class_combo.setAccessibleName('Fixed class')
+        self.fixed_class_combo.currentIndexChanged.connect(
+            self._emit_fixed_class)
+        self.fixed_class_combo.hide()
+
         self.action_buttons = []
         primary_row = QHBoxLayout()
         primary_row.setContentsMargins(0, 0, 0, 0)
@@ -55,6 +77,7 @@ class InspectorContextCard(QWidget):
             button = QToolButton(self)
             button.setObjectName('inspectorContextAction')
             button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setFocusPolicy(Qt.StrongFocus)
             button.setSizePolicy(
                 QSizePolicy.Expanding, QSizePolicy.Preferred)
             button.setProperty('primary', index == 0)
@@ -66,6 +89,8 @@ class InspectorContextCard(QWidget):
         self.more_button = QToolButton(self)
         self.more_button.setObjectName('inspectorContextMore')
         self.more_button.setText('More')
+        self.more_button.setAccessibleName('More object actions')
+        self.more_button.setFocusPolicy(Qt.StrongFocus)
         self.more_button.setPopupMode(QToolButton.InstantPopup)
         self.more_button.setMenu(self.more_menu)
         self.more_button.hide()
@@ -79,11 +104,15 @@ class InspectorContextCard(QWidget):
         layout.addWidget(self.eyebrow)
         layout.addWidget(self.title)
         layout.addWidget(self.detail)
+        layout.addWidget(self.class_strategy_combo)
+        layout.addWidget(self.fixed_class_combo)
         layout.addSpacing(scale_px(3))
         layout.addLayout(primary_row)
         layout.addLayout(secondary_row)
 
     def set_context(self, eyebrow, title, detail='', actions=(), more=()):
+        self.class_strategy_combo.hide()
+        self.fixed_class_combo.hide()
         self.eyebrow.setText(str(eyebrow or '').upper())
         self.title.setText(str(title or ''))
         self.detail.setText(str(detail or ''))
@@ -116,6 +145,34 @@ class InspectorContextCard(QWidget):
                        for action in self.more_menu.actions())
         self.more_button.setVisible(has_more)
 
+    def set_class_strategy(self, strategy, labels, fixed_label=''):
+        """Show the one visible projection over legacy class settings."""
+        strategy = strategy if strategy in ('confirm', 'repeat', 'fixed') \
+            else 'confirm'
+        blocked = self.class_strategy_combo.blockSignals(True)
+        self.class_strategy_combo.setCurrentIndex(
+            self.class_strategy_combo.findData(strategy))
+        self.class_strategy_combo.blockSignals(blocked)
+
+        values = tuple(dict.fromkeys(
+            str(label).strip() for label in labels if str(label).strip()))
+        blocked = self.fixed_class_combo.blockSignals(True)
+        self.fixed_class_combo.clear()
+        self.fixed_class_combo.addItems(values)
+        index = self.fixed_class_combo.findText(str(fixed_label or ''))
+        if index >= 0:
+            self.fixed_class_combo.setCurrentIndex(index)
+        self.fixed_class_combo.blockSignals(blocked)
+        self.class_strategy_combo.show()
+        self.fixed_class_combo.setVisible(strategy == 'fixed')
+
+    def _emit_class_strategy(self, _index):
+        self.classStrategyChanged.emit(
+            str(self.class_strategy_combo.currentData()))
+
+    def _emit_fixed_class(self, _index):
+        self.fixedClassChanged.emit(self.fixed_class_combo.currentText())
+
     def visible_actions(self):
         return tuple(button.defaultAction() for button in self.action_buttons
                      if not button.isHidden())
@@ -146,6 +203,7 @@ class WorkspaceInspector(QWidget):
         self.collapse_button = QToolButton(self)
         self.collapse_button.setObjectName('collapseInspectorButton')
         self.collapse_button.setAccessibleName('Collapse inspector')
+        self.collapse_button.setFocusPolicy(Qt.StrongFocus)
         self.collapse_button.setToolTip('Collapse inspector')
         self.collapse_button.clicked.connect(self.collapseRequested)
         self.tabs.setCornerWidget(self.collapse_button, Qt.TopRightCorner)
@@ -221,6 +279,7 @@ class WorkspaceSplitterShell(QWidget):
         self.reopen_button = QToolButton(self)
         self.reopen_button.setObjectName('reopenInspectorButton')
         self.reopen_button.setAccessibleName('Open inspector')
+        self.reopen_button.setFocusPolicy(Qt.StrongFocus)
         self.reopen_button.setToolTip('Open inspector')
         self.reopen_button.setIcon(themed_icon('chevron-left', Theme.LIGHT))
         self.reopen_button.setFixedWidth(scale_px(32))
@@ -269,14 +328,15 @@ class WorkspaceSplitterShell(QWidget):
         # width-persist timer reopen the panel 200ms after every drag.
         return self.inspector.isHidden() or self.inspector.width() == 0
 
-    def set_inspector_collapsed(self, collapsed, emit=True):
+    def set_inspector_collapsed(self, collapsed, emit=True,
+                                 remember_width=True):
         collapsed = bool(collapsed)
         if collapsed == self.is_inspector_collapsed():
             self.reopen_button.setVisible(collapsed)
             return
         if collapsed:
             sizes = self.splitter.sizes()
-            if len(sizes) > 1 and sizes[1] > 0:
+            if remember_width and len(sizes) > 1 and sizes[1] > 0:
                 self._inspector_width = sizes[1]
             self.inspector.hide()
         else:

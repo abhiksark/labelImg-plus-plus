@@ -1,3 +1,4 @@
+# libs/core/video_decoder.py
 """Lazy PyAV compatibility adapter and frame-accurate video decoder."""
 
 from dataclasses import dataclass
@@ -7,11 +8,13 @@ import math
 import os
 import struct
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 
 from libs.core.video_project import fingerprint_video
 from libs.core.video_types import (
     VideoFrameRef, VideoFrameResult, VideoSessionSnapshot,
+    VideoThumbnailResult,
 )
 
 
@@ -311,3 +314,32 @@ class VideoDecoderSession:
         self._lookahead = []
         if container is not None:
             container.close()
+
+
+def decode_video_thumbnails(request, cancelled=None):
+    """Decode detached, exact-PTS thumbnails in an independent session."""
+    if cancelled is not None and cancelled():
+        return VideoThumbnailResult(request, ())
+    decoder = VideoDecoderSession(
+        request.source_path, request.stream_index, cancelled=cancelled)
+    try:
+        if (decoder.fingerprint != request.fingerprint
+                or decoder.stream_index != request.stream_index
+                or decoder.time_base_num != request.time_base_num
+                or decoder.time_base_den != request.time_base_den):
+            raise VideoDecodeError('video thumbnail source fence changed')
+        frames = []
+        for pts in request.pts:
+            if cancelled is not None and cancelled():
+                break
+            frame = decoder.seek_pts(
+                pts, mode='nearest', cancelled=cancelled)
+            if frame is None or frame.frame_ref.pts != int(pts):
+                continue
+            image = frame.image.scaled(
+                request.max_size, request.max_size,
+                Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            frames.append((frame.frame_ref, image))
+        return VideoThumbnailResult(request, tuple(frames))
+    finally:
+        decoder.close()

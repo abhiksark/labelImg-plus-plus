@@ -1,10 +1,12 @@
+# tests/video/test_navigation.py
 import threading
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QPointF, Qt
 
 from labelImgPlusPlus import DocumentKind, get_main_app
+from libs.core.shape import Shape, ShapeType
 from libs.core.video_types import VideoFrameRef
 
 
@@ -23,6 +25,43 @@ def _ref(window, pts):
     return VideoFrameRef(
         snapshot.fingerprint, snapshot.stream_index, pts,
         snapshot.time_base_num, snapshot.time_base_den)
+
+
+def _stage_provisional_box(window):
+    window.activate_box_tool()
+    shape = Shape(shape_type=ShapeType.RECTANGLE)
+    for point in ((2, 3), (22, 3), (22, 23), (2, 23)):
+        shape.add_point(QPointF(*point))
+    window.canvas.current = shape
+    window.canvas.finalise()
+    return shape
+
+
+def test_provisional_box_blocks_video_seek_step_and_playback(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'provisional-navigation.mp4', frames=12)
+    try:
+        assert window.open_video(video)
+        shape = _stage_provisional_box(window)
+        app.processEvents()
+        original = window.current_video_frame_ref
+
+        assert window.request_video_frame(
+            _ref(window, original.pts + window._video_step_pts())) is None
+        assert window.request_next_video_frame() is None
+        assert window.request_previous_video_frame() is None
+        assert window.play_pause_video() is None
+        app.processEvents()
+
+        assert window.current_video_frame_ref == original
+        assert not window._video_playback_timer.isActive()
+        assert window.canvas.provisional_shape is shape
+        assert window.class_picker.edit.hasFocus()
+    finally:
+        window._cancel_provisional_shape()
+        window.dirty = False
+        window.close()
 
 
 def test_frame_step_and_previous_use_pts_not_frame_index(

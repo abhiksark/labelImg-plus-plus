@@ -7,9 +7,10 @@ indistinguishable from hand-drawn work on export. These tests pin the gates
 that stop that.
 """
 
-from unittest.mock import patch
+import time
+from unittest.mock import MagicMock, patch
 
-from PyQt5.QtWidgets import QDialog, QMessageBox
+from PyQt5.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_types import ObservationRecord
@@ -19,6 +20,16 @@ def _close_window(app, window):
     window.dirty = False
     window.close()
     app.processEvents()
+
+
+def _wait(app, predicate, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(.002)
+    return False
     app.processEvents()
 
 
@@ -84,8 +95,8 @@ def test_the_narrow_directional_path_does_not_double_prompt(
         _close_window(app, window)
 
 
-def test_export_warns_while_suggestions_await_review(tmp_path, make_video):
-    """Unreviewed work is omitted from export, so it must not be silent."""
+def test_export_prompt_names_review_export_scope_and_cancel(
+        tmp_path, make_video):
     app, window = get_main_app()
     window.open_video(str(make_video(tmp_path / 'export.mp4', frames=12)))
     try:
@@ -93,17 +104,20 @@ def test_export_warns_while_suggestions_await_review(tmp_path, make_video):
         window.video_model.upsert_tracker(ObservationRecord(
             track.track_id, 4096, [20, 20, 60, 60], source='tracker',
             review_state='pending', anchor=False))
-        # Stub the export dialog itself: without the warning the flow would
-        # reach a real modal and hang the suite instead of failing.
-        with patch('labelImgPlusPlus.VideoExportDialog') as dialog_cls:
-            dialog_cls.return_value.exec_.return_value = QDialog.Rejected
-            with patch.object(QMessageBox, 'question',
-                              return_value=QMessageBox.Cancel) as ask:
-                assert window.open_video_export_dialog() is None
-            assert ask.called, 'export must warn about unreviewed suggestions'
-            assert 'review' in ask.call_args[0][2].lower()
-            assert not dialog_cls.called, \
-                'cancelling the warning must abort before the export dialog'
+        message = MagicMock()
+        buttons = {}
+
+        def add_button(text, _role):
+            button = object()
+            buttons[text] = button
+            return button
+
+        message.addButton.side_effect = add_button
+        message.clickedButton.side_effect = lambda: buttons['Cancel']
+        with patch('labelImgPlusPlus.QMessageBox', return_value=message):
+            assert window._confirm_unreviewed_before_export() == 'cancel'
+        assert set(buttons) == {
+            'Review suggestions', 'Export accepted-only', 'Cancel'}
     finally:
         _close_window(app, window)
 
@@ -115,8 +129,42 @@ def test_export_is_silent_when_nothing_awaits_review(tmp_path, make_video):
     try:
         _seed(window)
         with patch.object(QMessageBox, 'question') as ask:
-            assert window._confirm_unreviewed_before_export() is True
+            assert window._confirm_unreviewed_before_export() == 'export'
         assert not ask.called
+    finally:
+        _close_window(app, window)
+
+
+def test_reopened_pending_export_review_choice_enters_live_queue(
+        tmp_path, make_video):
+    app, window = get_main_app()
+    video = str(make_video(tmp_path / 'reopen-review.mp4', frames=12))
+    try:
+        assert window.open_video(video)
+        track = _seed(window)
+        pts = window.current_video_frame_ref.pts + window._video_step_pts()
+        window.video_model.upsert_tracker(ObservationRecord(
+            track.track_id, pts, [20, 20, 60, 60], source='tracker',
+            review_state='pending', anchor=False))
+        window._on_video_model_mutation()
+        window.request_save_video_project()
+        assert _wait(app, lambda: not window.dirty)
+        project = window.video_snapshot.project_path
+        assert window.open_video(project)
+        assert window._pending_review_keys() == ((track.track_id, pts),)
+
+        with patch.object(
+                window, '_confirm_unreviewed_before_export',
+                return_value='review'), patch(
+                'labelImgPlusPlus.VideoExportDialog') as dialog_cls:
+            assert window.open_video_export_dialog() is None
+
+        assert not dialog_cls.called
+        assert _wait(
+            app, lambda: window.current_video_frame_ref.pts == pts)
+        assert window._selected_video_track_id == track.track_id
+        assert window.actions.primary.text() == 'Accept & Next'
+        assert '1 suggestion remaining' in window.statusBar().currentMessage()
     finally:
         _close_window(app, window)
 

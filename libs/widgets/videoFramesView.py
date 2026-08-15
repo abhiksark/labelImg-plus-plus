@@ -31,19 +31,21 @@ that one track is represented; it never widens it.  The total reported by
 this view exists to say, and re-basing the total onto the current filter would
 delete it.
 
-This widget owns no media.  Thumbnails are a follow-up: decoding them needs
-task_coordinator plumbing, so every tile is a placeholder captioned with its
-pts, and the tile count and captions are the contract the tests hold.
+This widget owns only a bounded QImage cache. The host decodes requested,
+visible PTS through its task coordinator and returns detached images here.
 """
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from collections import OrderedDict
+
+from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QButtonGroup, QHBoxLayout, QListView, QListWidget, QListWidgetItem,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors
+from libs.core.video_types import geometry_bounds
 
 
 #: The filter chips, in display order.  A closed set: an unknown name is a
@@ -74,10 +76,11 @@ def _index_observations(state):
 
 
 class VideoFramesView(QWidget):
-    """A grid of the frames a filter selected, one placeholder tile each."""
+    """A grid of exact-PTS thumbnails selected by the active filter."""
 
     frameActivated = pyqtSignal(int)
     countChanged = pyqtSignal(int, int)
+    thumbnailsRequested = pyqtSignal(tuple, int)
 
     # Base pixel values; every use goes through scale_px at call time so a
     # display scale change is picked up without rebuilding the widget.
@@ -85,6 +88,7 @@ class VideoFramesView(QWidget):
     TILE_CAPTION_HEIGHT = 22
     TILE_SPACING = 5
     CHIP_SPACING = 4
+    THUMBNAIL_CACHE_LIMIT = 48
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -97,6 +101,15 @@ class VideoFramesView(QWidget):
         self._filter = 'distinct'
         self._track_filter = None
         self._visible_pts = []
+        self._observations = {}
+        self._track_colors = {}
+        self._thumbnail_cache = OrderedDict()
+        self._source_key = None
+        self._start_pts = 0
+        self._time_base_num = 1
+        self._time_base_den = 1
+        self._media_width = 1
+        self._media_height = 1
         self._colors = get_theme_colors(Theme.LIGHT)
         self._setup_ui()
         self.apply_theme(Theme.LIGHT)
@@ -137,6 +150,8 @@ class VideoFramesView(QWidget):
         self.list_widget.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
+        self.list_widget.verticalScrollBar().valueChanged.connect(
+            self._schedule_thumbnail_request)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -157,9 +172,29 @@ class VideoFramesView(QWidget):
             sorted({int(pts) for pts in distinct_pts or ()}))
         self._track_ids = {
             track.track_id for track in getattr(state, 'tracks', ()) or ()}
+        self._track_colors = {
+            track.track_id: track.color
+            for track in getattr(state, 'tracks', ()) or ()}
+        self._observations = {}
+        for observation in getattr(state, 'observations', ()) or ():
+            self._observations.setdefault(int(observation.pts), []).append(
+                observation)
         if self._track_filter not in self._track_ids:
             self._track_filter = None
         self._refresh()
+
+    def set_media_context(self, source_key, start_pts, time_base_num,
+                          time_base_den, width, height):
+        """Set source timing and clear images only when the media changes."""
+        if source_key != self._source_key:
+            self._thumbnail_cache.clear()
+            self._source_key = source_key
+        self._start_pts = int(start_pts or 0)
+        self._time_base_num = int(time_base_num)
+        self._time_base_den = max(1, int(time_base_den))
+        self._media_width = max(1, int(width))
+        self._media_height = max(1, int(height))
+        self._render()
 
     def set_filter(self, name):
         """Select one of ``FILTERS`` and re-populate the grid."""
@@ -202,6 +237,24 @@ class VideoFramesView(QWidget):
     def tile_captions(self):
         return [self.list_widget.item(row).text()
                 for row in range(self.list_widget.count())]
+
+    def thumbnail_cache_size(self):
+        return len(self._thumbnail_cache)
+
+    def set_thumbnail(self, pts, image):
+        """Publish one detached image on the GUI thread."""
+        pts = int(pts)
+        self._thumbnail_cache[pts] = image.copy()
+        self._thumbnail_cache.move_to_end(pts)
+        while len(self._thumbnail_cache) > self.THUMBNAIL_CACHE_LIMIT:
+            evicted, _image = self._thumbnail_cache.popitem(last=False)
+            if evicted in self._visible_pts:
+                row = self._visible_pts.index(evicted)
+                self.list_widget.item(row).setIcon(
+                    self._placeholder_icon(scale_px(self.TILE_SIZE)))
+        if pts in self._visible_pts:
+            row = self._visible_pts.index(pts)
+            self.list_widget.item(row).setIcon(self._thumbnail_icon(pts))
 
     def chip_for(self, name):
         """The chip button for a filter, so callers can drive it as a user."""
@@ -255,6 +308,65 @@ class VideoFramesView(QWidget):
         painter.end()
         return QIcon(pixmap)
 
+    def _elapsed(self, pts):
+        milliseconds = max(0, int(round(
+            (int(pts) - self._start_pts) * self._time_base_num * 1000 /
+            self._time_base_den)))
+        seconds, milliseconds = divmod(milliseconds, 1000)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return '%d:%02d:%02d.%03d' % (
+                hours, minutes, seconds, milliseconds)
+        return '%02d:%02d.%03d' % (minutes, seconds, milliseconds)
+
+    def _thumbnail_icon(self, pts):
+        tile = scale_px(self.TILE_SIZE)
+        image = self._thumbnail_cache.get(int(pts))
+        if image is None:
+            return self._placeholder_icon(tile)
+        pixmap = QPixmap(tile, tile)
+        pixmap.fill(QColor(self._colors['placeholder']))
+        frame = QPixmap.fromImage(image).scaled(
+            tile, tile, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        left = (tile - frame.width()) // 2
+        top = (tile - frame.height()) // 2
+        painter = QPainter(pixmap)
+        painter.drawPixmap(left, top, frame)
+        scale_x = frame.width() / self._media_width
+        scale_y = frame.height() / self._media_height
+        for observation in self._observations.get(int(pts), ()):
+            bounds = geometry_bounds(observation.geometry)
+            if not observation.present or bounds is None:
+                continue
+            state_color = {
+                'pending': self._colors['warning'],
+                'rejected': self._colors['error'],
+            }.get(observation.review_state)
+            color = QColor(state_color) if state_color else QColor(
+                *self._track_colors.get(observation.track_id, (37, 99, 235)))
+            pen = QPen(color, max(2, scale_px(2)))
+            if observation.review_state == 'pending':
+                pen.setStyle(Qt.DashLine)
+            painter.setPen(pen)
+            rect = QRectF(
+                left + bounds[0] * scale_x,
+                top + bounds[1] * scale_y,
+                max(1.0, (bounds[2] - bounds[0]) * scale_x),
+                max(1.0, (bounds[3] - bounds[1]) * scale_y))
+            painter.drawRect(rect)
+            painter.fillRect(QRectF(
+                rect.left(), rect.top(), scale_px(6), scale_px(6)), color)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _tooltip(self, pts):
+        states = sorted({
+            item.review_state
+            for item in self._observations.get(int(pts), ())})
+        suffix = '' if not states else ' · ' + ', '.join(states)
+        return 'Exact PTS %d%s' % (pts, suffix)
+
     def _render(self):
         tile = scale_px(self.TILE_SIZE)
         spacing = scale_px(self.TILE_SPACING)
@@ -263,14 +375,43 @@ class VideoFramesView(QWidget):
         self.list_widget.setGridSize(QSize(
             tile + 2 * spacing,
             tile + scale_px(self.TILE_CAPTION_HEIGHT) + 2 * spacing))
-        icon = self._placeholder_icon(tile)
         self.list_widget.clear()
         for pts in self._visible_pts:
-            item = QListWidgetItem(icon, str(pts))
+            item = QListWidgetItem(self._thumbnail_icon(pts), self._elapsed(pts))
             item.setData(Qt.UserRole, pts)
-            item.setToolTip('PTS %d' % pts)
+            item.setToolTip(self._tooltip(pts))
             item.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
             self.list_widget.addItem(item)
+        self._schedule_thumbnail_request()
+
+    def _schedule_thumbnail_request(self, _value=None):
+        QTimer.singleShot(0, self.request_visible_thumbnails)
+
+    def request_visible_thumbnails(self):
+        """Request only uncached tiles intersecting the viewport."""
+        if not self.isVisible():
+            return
+        viewport = self.list_widget.viewport().rect()
+        missing = []
+        # ponytail: O(n) visibility scan; use index ranges if grids grow past
+        # the current few-thousand-frame project ceiling.
+        for row, pts in enumerate(self._visible_pts):
+            item = self.list_widget.item(row)
+            if (pts not in self._thumbnail_cache
+                    and self.list_widget.visualItemRect(item).intersects(
+                        viewport)):
+                missing.append(pts)
+        if missing:
+            self.thumbnailsRequested.emit(
+                tuple(missing), scale_px(self.TILE_SIZE))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._schedule_thumbnail_request()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_thumbnail_request()
 
     def _on_item_clicked(self, item):
         if item is None:
