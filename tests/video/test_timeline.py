@@ -2,6 +2,8 @@
 from dataclasses import replace
 
 import pytest
+from PyQt5.QtCore import QSize
+from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QAction, QApplication
 
@@ -13,6 +15,20 @@ from libs.utils.styles import Theme, get_theme_colors
 
 
 _APP = QApplication.instance() or QApplication([])
+
+
+def _median_icon_lightness(icon):
+    """Return the median lightness of visible icon pixels."""
+    image = icon.pixmap(QSize(24, 24)).toImage().convertToFormat(
+        QImage.Format_ARGB32)
+    values = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() >= 128:
+                values.append((color.red() + color.green() + color.blue()) / 3)
+    assert values
+    return sorted(values)[len(values) // 2]
 
 
 @pytest.mark.parametrize('seconds, expected', [
@@ -86,6 +102,21 @@ def test_timeline_controls_have_names_and_semantic_focus_style():
         assert widget.slider.accessibleName() == 'Video timeline'
         assert 'QSlider:focus' in widget.styleSheet()
         assert get_theme_colors(Theme.DARK)['focus'] in widget.styleSheet()
+    finally:
+        widget.close()
+
+
+def test_dark_timeline_transport_icons_are_light_and_refresh_for_pause():
+    widget = VideoTimelineWidget()
+    try:
+        widget.apply_theme(Theme.DARK)
+        for button in (
+                widget.previous_button, widget.play_button,
+                widget.next_button):
+            assert _median_icon_lightness(button.icon()) >= 180
+
+        widget.set_playing(True)
+        assert _median_icon_lightness(widget.play_button.icon()) >= 180
     finally:
         widget.close()
 

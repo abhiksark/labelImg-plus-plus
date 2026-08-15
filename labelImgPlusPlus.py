@@ -852,7 +852,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Statistics panel moved to gallery mode (Issue #19)
 
         # Label list context menu.
-        label_menu = QMenu()
+        label_menu = QMenu(self)
         add_actions(label_menu, (
             edit, delete, shape_line_color, shape_fill_color, None,
             video_add_keyframe, video_edit_span, video_accept_suggestion,
@@ -1022,7 +1022,7 @@ class MainWindow(QMainWindow, WindowMixin):
             tools=self.menu('&Tools'),
             plugins=self.menu('&Plugins'),
             help=self.menu(get_str('menu_help')),
-            recentFiles=QMenu(get_str('menu_openRecent')),
+            recentFiles=QMenu(get_str('menu_openRecent'), self),
             labelList=label_menu)
 
         # Auto saving : Enable auto saving if pressing next
@@ -1536,7 +1536,7 @@ class MainWindow(QMainWindow, WindowMixin):
         new_format, warning = format_metadata.next_in_cycle(self.label_file_format)
 
         # Show confirmation dialog
-        msg = QMessageBox()
+        msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Warning)
         msg.setWindowTitle("Change Annotation Format")
         msg.setText(warning)

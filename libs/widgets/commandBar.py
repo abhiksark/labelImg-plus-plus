@@ -208,7 +208,8 @@ class CommandBar(QWidget):
         for button in self.findChildren(QToolButton):
             icon_name = button.property('iconName')
             if icon_name:
-                button.setIcon(themed_icon(icon_name, theme))
+                button.setIcon(new_icon(icon_name) if icon_name == 'app'
+                               else themed_icon(icon_name, theme))
 
     def resizeEvent(self, event):
         """Move lower-priority labels into the always-present overflow menu."""

@@ -1,3 +1,4 @@
+# libs/utils/utils.py
 from math import hypot, sqrt
 from libs.utils.ustr import ustr
 import hashlib
@@ -32,7 +33,7 @@ def themed_icon(icon_name, theme):
     with the theme's text color while preserving alpha transparency.
 
     Args:
-        icon_name: Icon resource name (e.g., 'format_yolo').
+        icon_name: Icon resource name (e.g., 'format_yolo') or ``QIcon``.
         theme: Theme enum value from libs.utils.styles.
 
     Returns:
@@ -40,7 +41,8 @@ def themed_icon(icon_name, theme):
     """
     from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
 
-    base_icon = QIcon(':/' + icon_name)
+    base_icon = (icon_name if isinstance(icon_name, QIcon)
+                 else QIcon(':/' + icon_name))
     if theme == Theme.LIGHT:
         return base_icon
 

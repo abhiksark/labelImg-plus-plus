@@ -192,7 +192,7 @@ class Canvas(QWidget):
         self._painter = QPainter()
         self._cursor = CURSOR_DEFAULT
         # Menus:
-        self.menus = (QMenu(), QMenu())
+        self.menus = (QMenu(self), QMenu(self))
         # Set widget options.
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
@@ -997,7 +997,7 @@ class Canvas(QWidget):
                 pos = self.transform_pos(ev.pos())
                 idx = self.selected_shape.nearest_vertex(pos, self.epsilon)
                 if idx is not None:
-                    vertex_menu = QMenu()
+                    vertex_menu = QMenu(self)
                     delete_action = vertex_menu.addAction("Delete Vertex")
                     if len(self.selected_shape.points) <= 3:
                         delete_action.setEnabled(False)

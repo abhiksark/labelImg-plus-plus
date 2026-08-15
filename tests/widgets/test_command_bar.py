@@ -1,3 +1,4 @@
+# tests/widgets/test_command_bar.py
 """Structural tests for the fixed workspace command bar."""
 
 import os
@@ -5,10 +6,11 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QAction, QApplication, QMenu
 
 from libs.widgets.commandBar import CommandBar
+from libs.utils.styles import Theme
 
 
 def _action(text, parent, checkable=False):
@@ -161,3 +163,16 @@ def test_primary_text_renders_literal_ampersand_without_mutating_action():
     assert actions['complete'].text() == 'Done & Next'
     assert bar.primary_button.text() == 'Retry save && next'
     assert bar.primary_button.accessibleName() == 'Retry save & next'
+
+
+def test_dark_theme_preserves_full_color_application_icon():
+    owner, bar, _actions = _bar()
+    assert owner is not None
+    light_image = bar.application_button.icon().pixmap(
+        QSize(18, 18)).toImage()
+
+    bar.apply_theme(Theme.DARK)
+
+    dark_image = bar.application_button.icon().pixmap(
+        QSize(18, 18)).toImage()
+    assert dark_image == light_image

@@ -13,6 +13,7 @@ from libs.widgets.workspaceInspector import (
     InspectorContextCard, WorkspaceInspector, WorkspaceSplitterShell,
 )
 from libs.utils.dpi import scale_px
+from libs.utils.styles import Theme
 
 
 def _actions(parent):
@@ -90,3 +91,19 @@ def test_inspector_actions_have_names_and_keyboard_focus_treatment():
     finally:
         card.close()
         inspector.close()
+
+
+def test_inspector_collapse_icons_exist_in_both_themes():
+    inspector = WorkspaceInspector(QWidget(), QWidget())
+    shell = WorkspaceSplitterShell(
+        QWidget(), QWidget(), inspector, scale_px(304))
+    try:
+        for theme in (Theme.LIGHT, Theme.DARK):
+            inspector.apply_theme(theme)
+            shell.apply_theme(theme)
+            assert not inspector.collapse_button.icon().pixmap(
+                QSize(16, 16)).isNull()
+            assert not shell.reopen_button.icon().pixmap(
+                QSize(16, 16)).isNull()
+    finally:
+        shell.close()

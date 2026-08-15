@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 from libs.core.video_types import VideoFrameRef
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors
+from libs.utils.utils import themed_icon
 
 
 TIMELINE_MAX = 1_000_000
@@ -91,6 +92,7 @@ class VideoTimelineWidget(QWidget):
         self._snapshot = None
         self._dragging = False
         self._playing = False
+        self._theme = Theme.LIGHT
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(50)
@@ -191,6 +193,7 @@ class VideoTimelineWidget(QWidget):
         self.apply_theme(Theme.LIGHT)
 
     def apply_theme(self, theme):
+        self._theme = theme
         colors = get_theme_colors(theme)
         self.setStyleSheet("""
             #videoTimeline QPushButton:focus,
@@ -204,6 +207,15 @@ class VideoTimelineWidget(QWidget):
         """.format(
             width=scale_px(2), radius=scale_px(4),
             focus=colors['focus']))
+        style = self.style()
+        play_icon = (QStyle.SP_MediaPause if self._playing
+                     else QStyle.SP_MediaPlay)
+        self.play_button.setIcon(themed_icon(
+            style.standardIcon(play_icon), theme))
+        self.previous_button.setIcon(themed_icon(
+            style.standardIcon(QStyle.SP_MediaSkipBackward), theme))
+        self.next_button.setIcon(themed_icon(
+            style.standardIcon(QStyle.SP_MediaSkipForward), theme))
 
     def set_propagation_actions(self, all_action, selected_action,
                                 cancel_action):
@@ -250,7 +262,8 @@ class VideoTimelineWidget(QWidget):
         self._playing = bool(playing)
         icon = (QStyle.SP_MediaPause if self._playing
                 else QStyle.SP_MediaPlay)
-        self.play_button.setIcon(self.style().standardIcon(icon))
+        self.play_button.setIcon(themed_icon(
+            self.style().standardIcon(icon), self._theme))
 
     def set_markers(self, spans=(), accepted=(), pending=(), verified=()):
         self._marker_spans = tuple(spans)
