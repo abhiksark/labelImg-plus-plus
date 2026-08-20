@@ -120,12 +120,13 @@ Workflow and Interface
     regenerates only the bounded neighboring segments as a separate undoable
     change.
 
-**Video Overview**
+**Adaptive Video Overview**
     Gallery Mode becomes a lane/frame overview for video. Its Distinct filter
-    shows frames whose stored geometry changes, and a bounded background pixel
-    pass may add material visual changes. Annotated and Pending continue to
-    expose every stored or awaiting-review frame, and selecting a lane narrows
-    the answer to that track.
+    retains manual, verified, boundary, and transition events, then allows at
+    most one ordinary representative per 0.5-second presentation-time window
+    (two per second). A bounded background pixel pass may add material visual
+    changes; Annotated and Pending continue to expose every stored or awaiting-
+    review frame, and selecting a lane only narrows the global answer.
     The overview states how many suggestions still need review and how many
     accepted frames the default annotated export currently includes.
 
@@ -287,8 +288,8 @@ Quick Start
 For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
 frame, then use the contextual **Objects** inspector to propagate the selected
 anchor. **Review queue** advances through pending suggestions, **Browse video**
-shows lanes/frames plus export readiness, and the integrated timeline keeps the
-four-stage workflow visible.
+shows the adaptive lane/frame overview plus export readiness, and the
+integrated timeline keeps the four-stage workflow visible.
 
 Supported Annotation Formats
 ----------------------------

@@ -1,14 +1,33 @@
 # libs/core/video_distinctness.py
-"""Decide which video frames carry new information.
+"""Plan the annotated frames that carry new video information.
 
-Propagation writes an observation on every frame, so "annotated" silently
-becomes "all of them" as soon as tracking succeeds. This module is the single
-answer to "which of those frames actually differ", and it feeds the overview's
-frame grid, its count, and later the export default.
+Whole-video propagation deliberately writes dense observations.  The overview
+must therefore preserve review and tracking events without allowing object size
+or frame rate to turn a small, steady movement back into every decoded frame.
 
-The geometry pass here is pure arithmetic over records already in memory: no
-decoding, no optional dependency, fast enough to run on the GUI thread.
+The planner is dependency-free and runs over an immutable ``VideoModelState``.
+It keeps explicit events, then considers at most one ordinary observation per
+half-second presentation-time window.  ``sample_pts`` is the bounded input to
+the optional pixel pass; it contains the events and the same single ordinary
+representative, never the whole clip.
 """
+
+from bisect import bisect_left, bisect_right
+from dataclasses import dataclass
+
+
+WINDOW_SECONDS = 0.5
+DEFAULT_IOU_THRESHOLD = 0.85
+DISTINCTNESS_POLICY = 'adaptive-global-v1'
+
+
+@dataclass(frozen=True)
+class DistinctnessPlan:
+    """Immutable immediate answer and bounded work for pixel refinement."""
+
+    forced_pts: tuple
+    selected_pts: tuple
+    sample_pts: tuple
 
 
 def _bounds(geometry):
@@ -40,40 +59,202 @@ def iou(first, second):
     return intersection / union if union > 0 else 0.0
 
 
-def _frames_by_pts(state):
-    """Group present observations into {pts: {track_id: bounds}}."""
+def pts_window(pts, start_pts, time_base_num, time_base_den):
+    """Return the exact half-second bucket for one presentation timestamp."""
+    numerator = 2 * (int(pts) - int(start_pts)) * int(time_base_num)
+    denominator = int(time_base_den)
+    if int(time_base_num) <= 0 or denominator <= 0:
+        raise ValueError('video time base must be positive')
+    return numerator // denominator
+
+
+def _eligible_bounds(observation):
+    """Bounds contributed by a usable distinctness observation, if any."""
+    if observation.review_state == 'rejected' or not observation.present:
+        return None
+    return _bounds(observation.geometry)
+
+
+def _indexed_observations(state):
+    """Return frame geometry plus full and eligible per-track histories."""
     frames = {}
-    for item in state.observations:
-        if not item.present or item.geometry is None:
-            continue
-        bounds = _bounds(item.geometry)
+    all_by_track = {}
+    valid_by_track = {}
+    for item in getattr(state, 'observations', ()) or ():
+        all_by_track.setdefault(item.track_id, []).append(item)
+        bounds = _eligible_bounds(item)
         if bounds is None:
             continue
-        frames.setdefault(int(item.pts), {})[item.track_id] = bounds
-    return frames
+        pts = int(item.pts)
+        frames.setdefault(pts, {})[item.track_id] = bounds
+        valid_by_track.setdefault(item.track_id, []).append(item)
+    for values in all_by_track.values():
+        values.sort(key=lambda item: int(item.pts))
+    for values in valid_by_track.values():
+        values.sort(key=lambda item: int(item.pts))
+    return frames, all_by_track, valid_by_track
 
 
-def geometry_distinct_pts(state, iou_threshold=0.85):
-    """Sorted PTS values whose annotated geometry differs from the last kept.
+def _forced_event_pts(state, frames, all_by_track, valid_by_track):
+    """Find important event frames without admitting rejected/absent data."""
+    forced = set()
 
-    A frame is kept when the set of present tracks changes, or when any track
-    has moved far enough that its IoU against its own last kept position falls
-    below ``iou_threshold``. The first annotated frame is always kept.
-    """
-    frames = _frames_by_pts(state)
-    kept = []
-    last = None
+    # A track must remain findable even when its geometry never changes.
+    for values in valid_by_track.values():
+        if values:
+            forced.add(int(values[0].pts))
+            forced.add(int(values[-1].pts))
+
+    # Manual decisions and verified annotated frames are explicit user intent.
+    for values in valid_by_track.values():
+        for item in values:
+            if (item.source == 'manual'
+                    and item.review_state == 'accepted' and item.anchor):
+                forced.add(int(item.pts))
+    for frame_state in getattr(state, 'frame_states', ()) or ():
+        pts = int(frame_state.pts)
+        if frame_state.verified and pts in frames:
+            forced.add(pts)
+
+    # Appearance/disappearance is a frame-wide transition.  Both neighboring
+    # annotated frames matter: one says what was there and one what changed.
+    previous_pts = None
+    previous_membership = None
     for pts in sorted(frames):
-        current = frames[pts]
-        if last is None or set(current) != set(last):
-            kept.append(pts)
-            last = current
+        membership = frozenset(frames[pts])
+        if (previous_membership is not None
+                and membership != previous_membership):
+            forced.add(previous_pts)
+            forced.add(pts)
+        previous_pts = pts
+        previous_membership = membership
+
+    # Per-track provenance/review/presence changes are likewise two-sided.
+    # An excluded side is deliberately not added; the nearest later/earlier
+    # valid observation is forced by the next transition or run boundary.
+    for values in all_by_track.values():
+        previous = None
+        previous_valid = False
+        pending_start = None
+        pending_last = None
+        for item in values:
+            valid = _eligible_bounds(item) is not None
+            if previous is not None and (
+                    item.source != previous.source
+                    or item.review_state != previous.review_state
+                    or bool(item.present) != bool(previous.present)):
+                if previous_valid:
+                    forced.add(int(previous.pts))
+                if valid:
+                    forced.add(int(item.pts))
+
+            is_pending = valid and item.review_state == 'pending'
+            if is_pending:
+                if pending_start is None:
+                    pending_start = int(item.pts)
+                pending_last = int(item.pts)
+            elif pending_start is not None:
+                forced.add(pending_start)
+                forced.add(pending_last)
+                pending_start = pending_last = None
+
+            previous = item
+            previous_valid = valid
+        if pending_start is not None:
+            forced.add(pending_start)
+            forced.add(pending_last)
+
+    # Gaps usually contain no observations.  Preserve the nearest usable
+    # observation on each side rather than inventing a tile at a bare gap PTS.
+    for gap in getattr(state, 'gaps', ()) or ():
+        values = valid_by_track.get(gap.track_id, ())
+        if not values:
             continue
-        if any(iou(current[track_id], last[track_id]) < iou_threshold
-               for track_id in current):
-            kept.append(pts)
-            last = current
-    return tuple(kept)
+        pts_values = [int(item.pts) for item in values]
+        left = bisect_right(pts_values, int(gap.start_pts)) - 1
+        right = bisect_left(pts_values, int(gap.end_pts))
+        if left >= 0:
+            forced.add(pts_values[left])
+        if right < len(pts_values):
+            forced.add(pts_values[right])
+
+    # Every distinct tile must still name a frame with a usable observation.
+    return forced.intersection(frames)
+
+
+def _minimum_track_iou(current, previous):
+    """Return the least per-track IoU, with membership changes maximally new."""
+    if previous is None or set(current) != set(previous):
+        return 0.0
+    if not current:
+        return 1.0
+    return min(iou(current[track_id], previous[track_id])
+               for track_id in current)
+
+
+def build_distinctness_plan(state, start_pts=0, time_base_num=1,
+                            time_base_den=1,
+                            iou_threshold=DEFAULT_IOU_THRESHOLD):
+    """Build the adaptive global distinctness plan for immutable video state.
+
+    Event-containing windows keep all of their events and need no additional
+    ordinary representative.  Every other populated window contributes its
+    most geometrically novel frame to ``sample_pts``; that frame joins the
+    immediate answer only when its minimum track IoU is below the threshold.
+    Equal novelty is resolved toward the latest PTS.
+    """
+    if not 0.0 <= float(iou_threshold) <= 1.0:
+        raise ValueError('IoU threshold must be between zero and one')
+    # Validate even an empty state so callers never cache a plan under a bogus
+    # time base that a later populated state would reject.
+    pts_window(start_pts, start_pts, time_base_num, time_base_den)
+
+    frames, all_by_track, valid_by_track = _indexed_observations(state)
+    if not frames:
+        return DistinctnessPlan((), (), ())
+    forced = _forced_event_pts(
+        state, frames, all_by_track, valid_by_track)
+    buckets = {}
+    for pts in frames:
+        bucket = pts_window(
+            pts, start_pts, time_base_num, time_base_den)
+        buckets.setdefault(bucket, []).append(pts)
+
+    selected = set(forced)
+    samples = set(forced)
+    last_retained = None
+    for bucket in sorted(buckets):
+        values = sorted(buckets[bucket])
+        events = [pts for pts in values if pts in forced]
+        if events:
+            # Explicit events may exceed the ordinary density cap.  The last
+            # one is the state subsequent ordinary windows compare against.
+            last_retained = frames[events[-1]]
+            continue
+
+        candidate = min(
+            values,
+            key=lambda pts: (
+                _minimum_track_iou(frames[pts], last_retained), -pts))
+        samples.add(candidate)
+        novelty_iou = _minimum_track_iou(
+            frames[candidate], last_retained)
+        if last_retained is None or novelty_iou < float(iou_threshold):
+            selected.add(candidate)
+            last_retained = frames[candidate]
+
+    return DistinctnessPlan(
+        tuple(sorted(forced)), tuple(sorted(selected)),
+        tuple(sorted(samples)))
+
+
+def geometry_distinct_pts(state, iou_threshold=DEFAULT_IOU_THRESHOLD,
+                          start_pts=0, time_base_num=1, time_base_den=1):
+    """Compatibility seam returning the immediate geometry selection."""
+    return build_distinctness_plan(
+        state, start_pts=start_pts, time_base_num=time_base_num,
+        time_base_den=time_base_den,
+        iou_threshold=iou_threshold).selected_pts
 
 
 # dHash: downscale to 9x8 greyscale, compare each pixel with its right

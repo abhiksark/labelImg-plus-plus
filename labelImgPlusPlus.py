@@ -108,6 +108,10 @@ from libs.core.video_project import (
     save_project_delta,
 )
 from libs.core.video_model import MaterializedTrack, VideoProjectModel
+from libs.core.video_distinctness import DISTINCTNESS_POLICY
+from libs.core.video_distinctness_worker import (
+    DistinctnessRefinementRequest, refine_distinctness,
+)
 from libs.core.video_export import export_video_frames
 from libs.core.video_tracking import (  # noqa: F401 - compatibility patch seam
     OpenCVPropagationBackend, track_optical_flow,
@@ -312,6 +316,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_before_state = None
         self._regeneration_runs = {}
         self._video_export_handle = None
+        self._video_distinctness_request_id = 0
+        self._video_distinctness_handle = None
+        self._video_distinctness_active_request = None
+        self._video_distinctness_pending = None
+        self._video_distinctness_cache = {}
+        self._video_distinctness_debounce = QTimer(self)
+        self._video_distinctness_debounce.setSingleShot(True)
+        self._video_distinctness_debounce.setInterval(200)
+        self._video_distinctness_debounce.timeout.connect(
+            self._start_video_distinctness_refinement)
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -1609,6 +1623,7 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.gallery_mode_enabled:
                 self._show_browse_page()
             else:
+                self._cancel_video_distinctness_refinement()
                 page = ('empty' if self.document_kind == DocumentKind.NONE
                         else 'canvas')
                 self.workspace_pages.set_page(page)
@@ -1623,16 +1638,17 @@ class MainWindow(QMainWindow, WindowMixin):
         The document decides, so there is no second toggle to keep in step.
         """
         if self.document_kind == DocumentKind.VIDEO:
-            self._refresh_video_overview()
             self.workspace_pages.set_page('overview')
+            self._refresh_video_overview()
             return
+        self._cancel_video_distinctness_refinement()
         self.workspace_pages.set_page('gallery')
         QTimer.singleShot(0, self._refresh_full_gallery_statuses)
         QTimer.singleShot(100, self._refresh_all_statistics)
         if self.file_path:
             self.full_gallery.select_image(self.file_path)
 
-    def _refresh_video_overview(self):
+    def _refresh_video_overview(self, debounce=False):
         """Rebuild the overview from the live video model.
 
         Guarded rather than assumed: the document kind flips to VIDEO before
@@ -1644,14 +1660,154 @@ class MainWindow(QMainWindow, WindowMixin):
         snapshot = getattr(self, 'video_snapshot', None)
         duration = 0 if snapshot is None else int(snapshot.duration_pts or 0)
         overview = self.workspace_pages.video_overview
-        if snapshot is not None:
-            overview.frames.set_media_context(
-                (snapshot.source_path, snapshot.fingerprint,
-                 snapshot.stream_index, snapshot.time_base_num,
-                 snapshot.time_base_den),
-                snapshot.start_pts, snapshot.time_base_num,
-                snapshot.time_base_den, snapshot.width, snapshot.height)
-        overview.set_state(model.snapshot_state(), duration)
+        state = model.snapshot_state()
+        if snapshot is None:
+            overview.set_state(state, duration)
+            return
+        overview.frames.set_media_context(
+            (snapshot.source_path, snapshot.fingerprint,
+             snapshot.stream_index, snapshot.time_base_num,
+             snapshot.time_base_den),
+            snapshot.start_pts, snapshot.time_base_num,
+            snapshot.time_base_den, snapshot.width, snapshot.height)
+        plan = overview.set_state(
+            state, duration, start_pts=int(snapshot.start_pts or 0),
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den)
+        self._schedule_video_distinctness_refinement(plan, debounce=debounce)
+
+    @staticmethod
+    def _video_distinctness_cache_key(request):
+        return (
+            request.fingerprint, request.stream_index,
+            request.time_base_num, request.time_base_den,
+            request.start_pts, request.model_revision, request.policy,
+        )
+
+    def _cancel_video_distinctness_refinement(self, clear_cache=False):
+        """Invalidate pending/running pixel work while preserving geometry."""
+        timer = getattr(self, '_video_distinctness_debounce', None)
+        if timer is not None:
+            timer.stop()
+        self._video_distinctness_request_id = getattr(
+            self, '_video_distinctness_request_id', 0) + 1
+        handle = getattr(self, '_video_distinctness_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._video_distinctness_handle = None
+        self._video_distinctness_active_request = None
+        self._video_distinctness_pending = None
+        if clear_cache:
+            self._video_distinctness_cache = {}
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.video_overview.set_refining(False)
+
+    def _video_distinctness_is_current(self, request):
+        snapshot = getattr(self, 'video_snapshot', None)
+        model = getattr(self, 'video_model', None)
+        overview = getattr(
+            getattr(self, 'workspace_pages', None), 'video_overview', None)
+        return (
+            snapshot is not None and model is not None and overview is not None
+            and self.workspace_pages.current_page() == 'overview'
+            and request.request_id == self._video_distinctness_request_id
+            and request.generation == self._dataset_generation
+            and request.model_revision == model.revision
+            and request.source_path == snapshot.source_path
+            and request.fingerprint == snapshot.fingerprint
+            and request.stream_index == snapshot.stream_index
+            and request.time_base_num == snapshot.time_base_num
+            and request.time_base_den == snapshot.time_base_den
+            and request.start_pts == int(snapshot.start_pts or 0)
+            and request.policy == DISTINCTNESS_POLICY
+            and request.plan == overview.distinctness_plan())
+
+    def _schedule_video_distinctness_refinement(self, plan, debounce=False):
+        """Use cache or queue an independently decoded additive pixel pass."""
+        snapshot = self.video_snapshot
+        model = self.video_model
+        self._cancel_video_distinctness_refinement()
+        if (snapshot is None or model is None
+                or self.workspace_pages.current_page() != 'overview'):
+            return
+        request = DistinctnessRefinementRequest(
+            request_id=self._video_distinctness_request_id,
+            generation=self._dataset_generation,
+            model_revision=model.revision,
+            source_path=snapshot.source_path,
+            fingerprint=snapshot.fingerprint,
+            stream_index=snapshot.stream_index,
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den,
+            start_pts=int(snapshot.start_pts or 0),
+            plan=plan)
+        key = self._video_distinctness_cache_key(request)
+        cached = self._video_distinctness_cache.get(key)
+        if cached is not None:
+            self.workspace_pages.video_overview.set_refined_pts(cached)
+            return
+        # With no skipped sample, pixels cannot add anything to the answer.
+        if not set(plan.sample_pts).difference(plan.selected_pts):
+            return
+        self._video_distinctness_pending = request
+        if debounce:
+            self._video_distinctness_debounce.start()
+        else:
+            self._start_video_distinctness_refinement()
+
+    def _start_video_distinctness_refinement(self):
+        request = self._video_distinctness_pending
+        self._video_distinctness_pending = None
+        if request is None or not self._video_distinctness_is_current(request):
+            return
+
+        def refine(handle):
+            return refine_distinctness(
+                request, cancelled=handle.is_cancelled)
+
+        try:
+            handle = self.task_coordinator.submit(
+                'background', refine, priority=JobPriority.STATISTICS,
+                key='video-distinctness', latest=True,
+                generation=request.generation)
+        except RuntimeError:
+            return
+        self._video_distinctness_handle = handle
+        self._video_distinctness_active_request = request
+        self.workspace_pages.video_overview.set_refining(True)
+        handle.result.connect(
+            lambda result, expected=request:
+            self._on_video_distinctness_result(result, expected))
+        handle.finished.connect(
+            lambda current=handle:
+            self._on_video_distinctness_finished(current))
+
+    def _on_video_distinctness_result(self, result, request):
+        if (not self._video_distinctness_is_current(request)
+                or result.request_id != request.request_id
+                or result.generation != request.generation
+                or result.model_revision != request.model_revision
+                or result.source_path != request.source_path
+                or result.fingerprint != request.fingerprint
+                or result.stream_index != request.stream_index
+                or result.time_base_num != request.time_base_num
+                or result.time_base_den != request.time_base_den
+                or result.start_pts != request.start_pts
+                or result.policy != request.policy):
+            return
+        if not result.completed:
+            return
+        self.workspace_pages.video_overview.set_refined_pts(
+            result.refined_pts)
+        key = self._video_distinctness_cache_key(request)
+        self._video_distinctness_cache = {key: result.refined_pts}
+
+    def _on_video_distinctness_finished(self, handle):
+        if self._video_distinctness_handle is not handle:
+            return
+        self._video_distinctness_handle = None
+        self._video_distinctness_active_request = None
+        self.workspace_pages.video_overview.set_refining(False)
 
     def _request_video_overview_thumbnails(self, pts, max_size):
         snapshot = self.video_snapshot
@@ -2234,6 +2390,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def _set_document_kind(self, kind):
         """Switch cache policy and document-only UI without touching content."""
         previous = getattr(self, 'document_kind', DocumentKind.NONE)
+        if previous == DocumentKind.VIDEO and kind != DocumentKind.VIDEO:
+            self._cancel_video_distinctness_refinement(clear_cache=True)
         if previous != kind and hasattr(self, 'frame_cache'):
             self.frame_cache.clear()
         self.document_kind = kind
@@ -2291,6 +2449,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._sync_inspector_context()
 
     def _close_video_decoder(self, close_decoder=True):
+        self._cancel_video_distinctness_refinement(clear_cache=True)
         if hasattr(self, '_video_playback_timer'):
             self.pause_video()
         if hasattr(self, '_propagation_handle'):
@@ -4093,6 +4252,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=True)
+        # The current overview remains visible while the replacement prepares,
+        # but its independent decoder must not keep working for a document the
+        # user has already asked to replace.
+        self._cancel_video_distinctness_refinement(clear_cache=True)
         self._dataset_generation = self.task_coordinator.next_generation()
         generation = self._dataset_generation
         self._video_open_request_id += 1
@@ -4337,6 +4500,7 @@ class MainWindow(QMainWindow, WindowMixin):
         path = os.path.abspath(ustr(path))
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=False)
+        self._cancel_video_distinctness_refinement(clear_cache=True)
         try:
             prepared = prepare_video_open(
                 path, project_path=target, read_only=read_only)
@@ -4506,7 +4670,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Only while it is on screen: rebuilding it recomputes distinctness
         # over every observation, and nothing would see the result.
         if self.workspace_pages.current_page() == 'overview':
-            self._refresh_video_overview()
+            self._refresh_video_overview(debounce=True)
         self.update_box_count()
         self._sync_command_bar()
         self._publish_plugin_document()
@@ -4898,6 +5062,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 request, directions, len(track_ids)):
             self._active_propagation_request = None
             return None
+        self._cancel_video_distinctness_refinement()
         self._active_propagation_request = request
         # A previous run's keys must not survive into this one, or "Accept
         # Full Propagation" would silently act on stale suggestions.

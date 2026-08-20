@@ -16,10 +16,16 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
 from labelImgPlusPlus import MainWindow
-from libs.core.video_types import DocumentKind
+from libs.core.video_distinctness_worker import DistinctnessRefinementResult
+from libs.core.video_model import VideoProjectModel
+from libs.core.video_types import (
+    DocumentKind, ObservationRecord, TrackRecord, VideoFingerprint,
+    VideoSessionSnapshot,
+)
 from libs.utils.styles import Theme, get_theme_colors
 
 
@@ -32,6 +38,77 @@ def _close(window):
     window.dirty = False
     window.close()
     QApplication.processEvents()
+
+
+class _RefinementHandle(QObject):
+    result = pyqtSignal(object)
+    finished = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def _attach_refinable_video(window):
+    """Install dependency-free immutable video state with one pixel sample."""
+    fingerprint = VideoFingerprint(100, 200, 'overview-test')
+    snapshot = VideoSessionSnapshot(
+        source_path='/tmp/overview-test.mp4', project_path=None,
+        fingerprint=fingerprint, stream_index=0,
+        time_base_num=1, time_base_den=30, width=64, height=48,
+        rotation=0, codec='test', duration_pts=30, start_pts=0,
+        average_rate_num=30, average_rate_den=1, revision=4,
+        initial_frame=None, read_only=False)
+    track = TrackRecord(
+        'track-1', 'car', 'rectangle', (255, 0, 0), revision=4)
+    observations = tuple(
+        ObservationRecord(
+            'track-1', pts, [0, 0, 20, 20], source='tracker',
+            review_state='accepted', anchor=False, revision=4)
+        for pts in (0, 15, 30))
+    window.document_kind = DocumentKind.VIDEO
+    window.video_snapshot = snapshot
+    window.video_model = VideoProjectModel(
+        revision=4, tracks=(track,), observations=observations,
+        classes=('car',))
+    window._dataset_generation = 9
+    window.gallery_mode_enabled = True
+    window.workspace_pages.set_page('overview')
+    return snapshot
+
+
+def _fake_submissions(monkeypatch, window):
+    handles = []
+
+    def submit(*_args, **_kwargs):
+        handle = _RefinementHandle()
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(window.task_coordinator, 'submit', submit)
+    return handles
+
+
+def _result(request, pts=(0, 15, 30), completed=True, **changes):
+    values = {
+        'request_id': request.request_id,
+        'generation': request.generation,
+        'model_revision': request.model_revision,
+        'source_path': request.source_path,
+        'fingerprint': request.fingerprint,
+        'stream_index': request.stream_index,
+        'time_base_num': request.time_base_num,
+        'time_base_den': request.time_base_den,
+        'start_pts': request.start_pts,
+        'policy': request.policy,
+        'refined_pts': tuple(pts),
+        'completed': completed,
+    }
+    values.update(changes)
+    return DistinctnessRefinementResult(**values)
 
 
 def test_browse_slot_shows_the_overview_for_video(monkeypatch, tmp_path):
@@ -143,5 +220,123 @@ def test_dark_theme_reaches_both_overview_children(monkeypatch, tmp_path):
         window._apply_theme(Theme.LIGHT)
         assert light in overview.lanes.styleSheet()
         assert light in overview.frames.styleSheet()
+    finally:
+        _close(window)
+
+
+def test_geometry_is_immediate_and_mutation_refinement_is_debounced(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        _attach_refinable_video(window)
+        window._refresh_video_overview(debounce=True)
+        overview = window.workspace_pages.video_overview
+        assert overview.distinct_pts() == (0, 30)
+        assert window._video_distinctness_debounce.interval() == 200
+        assert window._video_distinctness_debounce.isActive()
+        assert not overview.is_refining()
+
+        first_request = window._video_distinctness_pending
+        window.video_model.upsert_tracker(ObservationRecord(
+            'track-1', 20, [0, 0, 20, 20], source='tracker',
+            review_state='accepted', anchor=False))
+        window._on_video_model_mutation()
+        assert window._video_distinctness_debounce.isActive()
+        assert window._video_distinctness_pending.request_id \
+            != first_request.request_id
+        assert window._video_distinctness_pending.model_revision \
+            == window.video_model.revision
+    finally:
+        _close(window)
+
+
+def test_leaving_overview_cancels_running_refinement(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        _attach_refinable_video(window)
+        handles = _fake_submissions(monkeypatch, window)
+        window._refresh_video_overview()
+        assert len(handles) == 1
+        assert window.workspace_pages.video_overview.is_refining()
+
+        window.toggle_gallery_mode(False)
+        assert handles[0].cancelled
+        assert window.workspace_pages.current_page() == 'canvas'
+        assert not window.workspace_pages.video_overview.is_refining()
+    finally:
+        _close(window)
+
+
+def test_document_switch_cancels_running_refinement(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        _attach_refinable_video(window)
+        handles = _fake_submissions(monkeypatch, window)
+        window._refresh_video_overview()
+        window._set_document_kind(DocumentKind.IMAGE)
+        assert handles[0].cancelled
+        assert window._video_distinctness_active_request is None
+        assert not window.workspace_pages.video_overview.is_refining()
+    finally:
+        _close(window)
+
+
+def test_completed_refinement_is_cached_for_same_media_revision_and_policy(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        _attach_refinable_video(window)
+        handles = _fake_submissions(monkeypatch, window)
+        window._refresh_video_overview()
+        request = window._video_distinctness_active_request
+        handles[0].result.emit(_result(request))
+        handles[0].finished.emit()
+        assert window.workspace_pages.video_overview.distinct_pts() \
+            == (0, 15, 30)
+        assert not window.workspace_pages.video_overview.is_refining()
+
+        window._refresh_video_overview()
+        assert len(handles) == 1
+        assert window.workspace_pages.video_overview.distinct_pts() \
+            == (0, 15, 30)
+    finally:
+        _close(window)
+
+
+def test_failed_refinement_preserves_geometry_and_is_not_cached(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        _attach_refinable_video(window)
+        handles = _fake_submissions(monkeypatch, window)
+        window._refresh_video_overview()
+        request = window._video_distinctness_active_request
+        handles[0].result.emit(_result(
+            request, pts=request.plan.selected_pts, completed=False))
+        handles[0].finished.emit()
+        assert window.workspace_pages.video_overview.distinct_pts() == (0, 30)
+        assert window._video_distinctness_cache == {}
+    finally:
+        _close(window)
+
+
+def test_stale_refinement_result_is_rejected_by_all_request_fences(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        _attach_refinable_video(window)
+        handles = _fake_submissions(monkeypatch, window)
+        window._refresh_video_overview()
+        request = window._video_distinctness_active_request
+        handles[0].result.emit(_result(
+            request, generation=request.generation + 1))
+        assert window.workspace_pages.video_overview.distinct_pts() == (0, 30)
+
+        window.video_model.revision += 1
+        handles[0].result.emit(_result(request))
+        assert window.workspace_pages.video_overview.distinct_pts() == (0, 30)
+        assert window._video_distinctness_cache == {}
     finally:
         _close(window)
