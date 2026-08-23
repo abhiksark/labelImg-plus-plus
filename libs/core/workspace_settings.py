@@ -11,6 +11,7 @@ from libs.utils.constants import (
 DEFAULT_INSPECTOR_WIDTH = 304
 MIN_INSPECTOR_WIDTH = 260
 MAX_INSPECTOR_WIDTH = 420
+INSPECTOR_DRAWER_BREAKPOINT = 960
 INSPECTOR_TABS = ('objects', 'files')
 PROMPT_POLICIES = ('reuse_active', 'confirm_each')
 

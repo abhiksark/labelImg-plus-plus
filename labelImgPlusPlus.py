@@ -1204,6 +1204,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self._inspector_collapsed_changed)
         self.workspace_shell.inspectorCollapsedChanged.connect(
             lambda *_args: self._schedule_view_projection())
+        self.workspace_shell.layoutModeChanged.connect(
+            lambda *_args: self._schedule_view_projection())
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
@@ -1775,6 +1777,8 @@ class MainWindow(QMainWindow, WindowMixin):
         """Update annotation count in status bar."""
         count = len(self.canvas.shapes) if self.canvas else 0
         self.label_box_count.setText(f'Objects: {count}')
+        if hasattr(self, 'workspace_shell'):
+            self.workspace_shell.set_object_count(count)
 
     def update_zoom_display(self):
         """Update zoom level in status bar."""
@@ -1830,6 +1834,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.undo_stack.clear()
         # Reset status bar widgets
         self.label_box_count.setText('Objects: 0')
+        self.workspace_shell.set_object_count(0)
         self.update_save_status(saved=True)
         self._sync_command_bar()
         self._publish_plugin_document(new_generation=True, force=True)
@@ -5742,6 +5747,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def resizeEvent(self, event):
         super(MainWindow, self).resizeEvent(event)
+        if hasattr(self, 'workspace_shell'):
+            self.workspace_shell.set_available_width(event.size().width())
         self._schedule_view_projection()
         if self._loading_veil is not None and self._loading_veil.isVisible():
             self._loading_veil.setGeometry(self.centralWidget().rect())

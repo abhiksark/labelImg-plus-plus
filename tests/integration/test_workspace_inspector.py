@@ -4,8 +4,9 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QByteArray
+from PyQt5.QtCore import QByteArray, Qt
 from PyQt5.QtWidgets import QApplication, QDockWidget, QToolBar
+from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import MainWindow
 from libs.core.settings import Settings
@@ -162,3 +163,76 @@ def test_legacy_layout_and_toolbar_values_round_trip_without_exposure(
     assert loaded.get(SETTING_ICON_SIZE) == 36
     assert loaded.get(SETTING_TOOLBAR_EXPANDED) is True
     assert loaded.get(SETTING_WIN_STATE) == legacy_state
+
+
+def test_inspector_becomes_dismissible_drawer_below_960(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.resize(800, 600)
+        window.show()
+        QApplication.processEvents()
+        assert window.workspace_shell.layout_mode == 'drawer'
+        assert window.workspace_inspector.isHidden()
+
+        window.workspace_shell.reopen_button.click()
+        QApplication.processEvents()
+        assert window.workspace_inspector.isVisible()
+        assert window.workspace_inspector.tabs.hasFocus()
+        QTest.keyClick(window.workspace_inspector, Qt.Key_Escape)
+        QApplication.processEvents()
+        assert window.workspace_inspector.isHidden()
+        assert window.workspace_shell.reopen_button.hasFocus()
+    finally:
+        _close(window)
+
+
+def test_crossing_breakpoint_does_not_overwrite_wide_preference(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.workspace_shell.set_inspector_collapsed(False)
+        window.resize(800, 600)
+        window.show()
+        QApplication.processEvents()
+        window.resize(1200, 700)
+        QApplication.processEvents()
+        assert window.workspace_shell.layout_mode == 'docked'
+        assert not window.workspace_shell.is_inspector_collapsed()
+    finally:
+        _close(window)
+
+
+def test_inspector_breakpoint_uses_logical_pixels_without_scaling(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.resize(959, 600)
+        window.show()
+        QApplication.processEvents()
+        assert window.workspace_shell.layout_mode == 'drawer'
+
+        window.resize(960, 600)
+        QApplication.processEvents()
+        assert window.workspace_shell.layout_mode == 'docked'
+    finally:
+        _close(window)
+
+
+def test_layout_mode_change_schedules_view_reprojection(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.resize(1200, 700)
+        window.show()
+        QApplication.processEvents()
+        scheduled = []
+        monkeypatch.setattr(
+            window, '_schedule_view_projection',
+            lambda: scheduled.append('projection'))
+
+        window.workspace_shell.set_available_width(800)
+
+        assert scheduled == ['projection']
+    finally:
+        _close(window)
