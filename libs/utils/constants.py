@@ -14,6 +14,7 @@ SETTING_AUTO_SAVE = 'autosave'
 SETTING_AUTO_SAVE_ENABLED = 'autoSaveEnabled'  # Timer-based auto-save toggle
 SETTING_AUTO_SAVE_INTERVAL = 'autoSaveInterval'  # Interval in seconds
 SETTING_SINGLE_CLASS = 'singleclass'
+SETTING_PROMPT_POLICY = 'workflow/promptPolicy'
 FORMAT_PASCALVOC='PascalVOC'
 FORMAT_YOLO='YOLO'
 FORMAT_CREATEML='CreateML'

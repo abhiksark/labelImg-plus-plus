@@ -47,7 +47,7 @@ except ImportError:
 
 # Widgets
 from libs.widgets.combobox import ComboBox
-from libs.widgets.default_label_combobox import DefaultLabelComboBox
+from libs.widgets.activeClassControl import ActiveClassControl
 from libs.widgets.canvas import Canvas
 from libs.widgets.zoomWidget import ZoomWidget
 from libs.widgets.lightWidget import LightWidget
@@ -354,20 +354,8 @@ class MainWindow(QMainWindow, WindowMixin):
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create a widget for using default label
-        self.use_default_label_checkbox = QCheckBox(get_str('useDefaultLabel'))
-        self.use_default_label_checkbox.setChecked(False)
-        self.default_label_combo_box = DefaultLabelComboBox(self,items=self.label_hist)
-
-        # Stacked, not side by side: together the checkbox label and the class
-        # combo needed more width than the inspector can ever give them, and a
-        # QCheckBox clips its text instead of eliding it.
-        use_default_label_layout = QVBoxLayout()
-        use_default_label_layout.setContentsMargins(0, 0, 0, 0)
-        use_default_label_layout.addWidget(self.use_default_label_checkbox)
-        use_default_label_layout.addWidget(self.default_label_combo_box)
-        use_default_label_container = QWidget()
-        use_default_label_container.setLayout(use_default_label_layout)
+        self.active_class_control = ActiveClassControl(self)
+        self.active_class_control.set_choices(self.label_hist)
 
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
@@ -379,7 +367,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add some of widgets to list_layout
         list_layout.addWidget(self.edit_button)
         list_layout.addWidget(self.diffc_button)
-        list_layout.addWidget(use_default_label_container)
+        list_layout.addWidget(self.active_class_control)
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)

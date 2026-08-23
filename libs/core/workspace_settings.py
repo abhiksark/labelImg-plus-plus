@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from libs.utils.constants import (
     SETTING_INSPECTOR_COLLAPSED, SETTING_INSPECTOR_TAB,
-    SETTING_INSPECTOR_WIDTH,
+    SETTING_INSPECTOR_WIDTH, SETTING_PROMPT_POLICY, SETTING_SINGLE_CLASS,
 )
 
 
@@ -12,6 +12,7 @@ DEFAULT_INSPECTOR_WIDTH = 304
 MIN_INSPECTOR_WIDTH = 260
 MAX_INSPECTOR_WIDTH = 420
 INSPECTOR_TABS = ('objects', 'files')
+PROMPT_POLICIES = ('reuse_active', 'confirm_each')
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,16 @@ def clamp_inspector_width(value):
     if isinstance(value, bool) or not isinstance(value, int):
         return DEFAULT_INSPECTOR_WIDTH
     return max(MIN_INSPECTOR_WIDTH, min(MAX_INSPECTOR_WIDTH, value))
+
+
+def load_prompt_policy(settings):
+    """Load a valid prompt policy while migrating the legacy mode."""
+    if settings.get(SETTING_SINGLE_CLASS) is True:
+        return 'reuse_active'
+    policy = settings.get(SETTING_PROMPT_POLICY)
+    if policy not in PROMPT_POLICIES:
+        return 'reuse_active'
+    return policy
 
 
 def load_workspace_settings(settings):
