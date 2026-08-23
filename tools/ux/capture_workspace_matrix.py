@@ -19,12 +19,15 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
-from PyQt5.QtCore import QRect, Qt  # noqa: E402
-from PyQt5.QtGui import QColor, QImage, QPainter, QPen  # noqa: E402
+from PyQt5.QtCore import Qt  # noqa: E402
+from PyQt5.QtGui import QColor, QImage  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from labelImgPlusPlus import get_main_app  # noqa: E402
+from libs.core.annotation_workflow import (  # noqa: E402
+    AnnotationTool, PromptPolicy,
+)
 from libs.formats.labelFile import LabelFileFormat  # noqa: E402
 from libs.utils.styles import Theme  # noqa: E402
 
@@ -71,7 +74,45 @@ def _context(window):
     return context
 
 
+def _clear_capture_save_state(window):
+    held = getattr(window, '_ux_capture_save', None)
+    if held is None:
+        return
+    coordinator = window.continuous_save
+    if coordinator._in_flight == held.ticket:
+        coordinator.complete(held.ticket)
+    elif coordinator.state == 'failed':
+        coordinator.reset(
+            window._continuous_document_key(), window._dataset_generation,
+            window._document_revision)
+    coordinator.set_enabled(held.original_enabled)
+    del window._ux_capture_save
+
+
+def _begin_held_save(window):
+    _clear_capture_save_state(window)
+    coordinator = window.continuous_save
+    original_enabled = coordinator.enabled
+    coordinator.saveRequested.disconnect(window._dispatch_continuous_save)
+    try:
+        coordinator.set_enabled(False)
+        coordinator.reset(
+            window._continuous_document_key(), window._dataset_generation,
+            window._document_revision)
+        coordinator.mark_dirty(window._document_revision + 1)
+        coordinator.set_enabled(True)
+        ticket = coordinator._in_flight
+        assert coordinator.state == 'saving'
+        assert ticket is not None
+    finally:
+        coordinator.saveRequested.connect(window._dispatch_continuous_save)
+    window._ux_capture_save = SimpleNamespace(
+        ticket=ticket, original_enabled=original_enabled)
+    return ticket
+
+
 def _empty_workspace(window):
+    _clear_capture_save_state(window)
     window.dirty = False
     window.close_file()
     window.recent_files = []
@@ -82,6 +123,7 @@ def _empty_workspace(window):
 
 
 def _first_image_fit(window):
+    _clear_capture_save_state(window)
     context = _context(window)
     if window.file_path != context.image_path:
         window.default_save_dir = None
@@ -128,18 +170,15 @@ def _inspector_closed(window):
 
 def _saving(window):
     _inspector_closed(window)
-    coordinator = window.continuous_save
-    coordinator.set_enabled(False)
-    coordinator.mark_dirty(window._document_revision + 1)
-    assert coordinator.state == 'pending'
+    _begin_held_save(window)
+    assert window.continuous_save.state == 'saving'
     _settle()
     _set_capture_status(window, 'Saving annotation')
 
 
 def _saved(window):
-    coordinator = window.continuous_save
-    coordinator.set_enabled(True)
-    assert _wait(lambda: coordinator.state == 'saved')
+    _two_rectangles(window)
+    assert window.continuous_save.state == 'saved'
     _settle()
     _set_capture_status(window, 'Annotation saved')
 
@@ -147,14 +186,7 @@ def _saved(window):
 def _save_failed(window):
     _two_rectangles(window)
     coordinator = window.continuous_save
-    coordinator.set_enabled(False)
-    coordinator.reset(
-        window._continuous_document_key(), window._dataset_generation,
-        window._document_revision)
-    coordinator.mark_dirty(window._document_revision + 1)
-    coordinator.set_enabled(True)
-    ticket = coordinator._in_flight
-    assert ticket is not None
+    ticket = _begin_held_save(window)
     coordinator.fail(ticket, 'Deterministic screenshot failure')
     assert coordinator.state == 'failed'
     _settle()
@@ -172,39 +204,70 @@ IMAGE_SCENARIOS = {
     'save-failed': _save_failed,
 }
 
+SCENARIO_SAVE_STATES = {
+    'first-image-fit': 'saved',
+    'two-rectangles': 'saved',
+    'inspector-open': 'saved',
+    'inspector-closed': 'saved',
+    'saving': 'saving',
+    'saved': 'saved',
+    'save-failed': 'failed',
+}
+
+SCENARIO_SHAPE_COUNTS = {
+    'empty-workspace': 0,
+    'first-image-fit': 0,
+    'two-rectangles': 2,
+    'inspector-open': 2,
+    'inspector-closed': 2,
+    'saving': 2,
+    'saved': 2,
+    'save-failed': 2,
+}
+
 
 def capture_scenario(window, scenario, size, theme, output_dir):
     """Apply one named state and save its full-window PNG."""
-    window.resize(*size)
-    selected_theme = Theme.DARK if theme == 'dark' else Theme.LIGHT
-    window._current_theme = selected_theme
-    window._apply_theme(selected_theme)
-    IMAGE_SCENARIOS[scenario](window)
-    QApplication.processEvents()
-    filename = '%s-%s-%sx%s.png' % (
-        scenario, theme, size[0], size[1])
-    output_dir = os.fspath(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, filename)
-    assert window.grab().save(path, 'PNG')
-    return path
+    original_policy = window.workflow.snapshot.prompt_policy
+    try:
+        window.active_class_control.confirm_each.setChecked(False)
+        assert window.workflow.snapshot.prompt_policy is \
+            PromptPolicy.REUSE_ACTIVE
+        window.resize(*size)
+        selected_theme = Theme.DARK if theme == 'dark' else Theme.LIGHT
+        window._current_theme = selected_theme
+        window._apply_theme(selected_theme)
+        IMAGE_SCENARIOS[scenario](window)
+        QApplication.processEvents()
+        expected_save_state = SCENARIO_SAVE_STATES.get(scenario)
+        if expected_save_state is not None:
+            assert window.continuous_save.state == expected_save_state
+            expected_copy = {
+                'saved': 'Saved',
+                'saving': 'Saving',
+                'failed': 'Save failed',
+            }[expected_save_state]
+            assert expected_copy in window.label_save_status.text()
+        assert len(window.canvas.shapes) == SCENARIO_SHAPE_COUNTS[scenario]
+        if SCENARIO_SHAPE_COUNTS[scenario]:
+            assert window.workflow.snapshot.active_class == 'vehicle'
+            assert window.workflow.snapshot.active_tool is \
+                AnnotationTool.RECTANGLE
+        filename = '%s-%s-%sx%s.png' % (
+            scenario, theme, size[0], size[1])
+        output_dir = os.fspath(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, filename)
+        assert window.grab().save(path, 'PNG')
+        return path
+    finally:
+        window.active_class_control.confirm_each.setChecked(
+            original_policy is PromptPolicy.CONFIRM_EACH)
 
 
 def _write_sample_image(path):
     image = QImage(640, 480, QImage.Format_RGB32)
     image.fill(QColor('#dce6ee'))
-    painter = QPainter(image)
-    painter.fillRect(QRect(0, 300, 640, 180), QColor('#c5d6b0'))
-    painter.fillRect(QRect(0, 0, 640, 90), QColor('#b9d7ea'))
-    painter.setPen(QPen(QColor('#8aa1b2'), 2))
-    for x in range(0, 641, 80):
-        painter.drawLine(x, 0, x, 480)
-    for y in range(0, 481, 60):
-        painter.drawLine(0, y, 640, y)
-    painter.setPen(QPen(QColor('#536878'), 4))
-    painter.drawRect(QRect(70, 60, 190, 170))
-    painter.drawRect(QRect(330, 140, 230, 250))
-    painter.end()
     assert image.save(str(path), 'PNG')
 
 
@@ -237,6 +300,7 @@ def _capture_matrix(output_dir):
                         assert os.path.getsize(path) > 0
                         captured.append(path)
                 finally:
+                    _clear_capture_save_state(window)
                     window.continuous_save.set_enabled(False)
                     window.dirty = False
                     window.close()

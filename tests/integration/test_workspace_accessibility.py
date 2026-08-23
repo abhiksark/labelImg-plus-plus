@@ -26,6 +26,28 @@ def _close(window):
     QApplication.processEvents()
 
 
+def test_primary_workspace_controls_have_accessible_names(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        assert window.canvas.accessibleName() == 'Annotation canvas'
+        assert window.active_class_control.combo.accessibleName() == \
+            'Active annotation class'
+        assert window.combo_box.cb.accessibleName() == \
+            'Filter annotations by class'
+        assert window.annotation_search.accessibleName() == \
+            'Search annotations'
+        assert window.label_list.accessibleName() == 'Annotations'
+        assert window.status_filter_combo.accessibleName() == \
+            'Filter files by annotation status'
+        assert window.file_list_widget.accessibleName() == 'Dataset files'
+        assert window.workspace_inspector.tabs.accessibleName() == 'Inspector'
+        assert window.full_gallery.list_widget.accessibleName() == \
+            'Dataset gallery'
+    finally:
+        _close(window)
+
+
 def test_drawer_scrim_dismisses_and_restores_reopen_focus(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)

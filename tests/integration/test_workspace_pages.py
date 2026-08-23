@@ -83,7 +83,9 @@ def test_gallery_is_embedded_and_keeps_workspace_chrome(
         assert window.full_gallery.window() is window
         assert not hasattr(window, 'gallery_window')
         assert window.tool_rail.isVisibleTo(window)
-        assert window.workspace_inspector.isVisibleTo(window)
+        assert window.workspace_shell.layout_mode == 'drawer'
+        assert not window.workspace_inspector.isVisibleTo(window)
+        assert window.workspace_shell.reopen_button.isVisibleTo(window)
         assert window.workspace_pages.status_strip.isVisibleTo(window)
 
         window.toggle_gallery_mode(False)
@@ -153,10 +155,9 @@ def test_canvas_chrome_reuses_actions_and_status_bar_is_hidden_bus(
         QApplication.processEvents()
         assert window.statusBar().currentMessage() == 'Decoder warning'
         assert window.label_status_message.text() == 'Decoder warning'
-        window.set_dirty()
-        assert 'Unsaved' in window.label_save_status.text()
         window._apply_theme(Theme.DARK)
-        assert 'Unsaved' in window.label_save_status.text()
+        window.set_dirty()
+        assert 'Saving…' in window.label_save_status.text()
         window.update_save_status(True)
         window._apply_theme(Theme.LIGHT)
         assert 'Saved' in window.label_save_status.text()

@@ -73,9 +73,10 @@ or light variants are stored beside it.
 
 The image slice now has one real-window acceptance flow covering a single
 class choice, two committed rectangles, continuous Pascal VOC persistence,
-next-image navigation, retained Rectangle/class state, and retained Fit Window
-view mode. A second real-window test protects the stable screenshot API's
-scenario dispatch, filename, dimensions, and non-empty PNG output.
+next-image navigation, retained Rectangle/class state, retained Fit Window
+view mode, navigation back, and exact sidecar reload. The screenshot API tests
+also construct fresh real windows for annotated, saving, saved, and failed
+states so advertised scenarios do not depend on matrix order.
 
 ### Test-first evidence
 
@@ -91,6 +92,20 @@ scenario dispatch, filename, dimensions, and non-empty PNG output.
   the first test. The test now explicitly selects Pascal VOC, enables
   continuous save, and waits for both `Saved` and the concrete XML sidecar.
   It passes alone and after the autosave integration module.
+- Review sensitivity runs then exposed three gaps before the fix: a saved
+  `confirm_each` prompt policy prevented choose-once/draw-twice, `saving`
+  produced `pending` instead of a real in-flight save, and the source-image
+  neutrality assertion found the baked-in rectangle colors `#536878` and
+  `#8aa1b2`. The fixed acceptance and harness explicitly establish
+  `reuse_active`, restore the original prompt policy, hold a real coordinator
+  ticket in the `saving` state, and use a uniform `#dce6ee` source image.
+- Navigation back now reparses the Pascal VOC sidecar and requires exactly
+  `['vehicle', 'vehicle']`, plus two reloaded canvas shapes.
+- The first verbose aggregate run named three stale expectations from earlier
+  tasks: the removed default-class combo, a docked-only inspector assertion at
+  narrow width, and legacy `Unsaved` copy. Their approved Active class,
+  responsive drawer, and `Saving…` contracts failed together in 0.22s before
+  the expectation update and passed together in 0.26s afterward.
 
 ### Screenshot matrix
 
@@ -111,35 +126,39 @@ All 64 exact filenames are listed in the
 The harness reopened every PNG, checked its named dimensions, and rejected
 empty files. A filesystem check also found 64 PNGs and zero zero-byte files.
 Two complete consecutive captures produced the same aggregate SHA-1:
-`4777dc2cfa95058de10c7840191b99bf08ceeaec`.
+`d9dc6e0d0525f74d5cdbd14fc1274b3ffc47be85`.
 
 ### Verification results
 
 | Scope | Result |
 |---|---|
-| Task 7 acceptance and capture API | **PASS — 2 passed** in 0.66s |
-| Acceptance after autosave integration tests | **PASS — 10 passed** in 7.95s |
-| Image core shard | **PASS — 254 passed, 13 deselected** in 0.65s |
-| Image widget shard | **PASS — 275 passed, 15 deselected** in 0.28s |
-| Screenshot harness | **PASS — 64 deterministic PNGs** in 10.8s per run |
-| Exact image-focused aggregate command | **CPU-bound path recurred after 69%** |
-| Complete `pytest -q` attempt | **CPU-bound path recurred after 37%** |
+| Task 7 acceptance and capture API | **PASS — 7 passed** in 3.45s |
+| Scoped stale-expectation nodes | **PASS — 3 passed** in 0.26s |
+| Screenshot harness | **PASS — 64 deterministic PNGs** in about 11.0s per run |
+| Exact image-focused aggregate command | **PASS — 733 passed, 47 deselected** in 200.51s |
+| Complete suite | **PASS — 1074 passed, 72 skipped** in 299.89s |
 
-The required image-focused command was attempted after the test isolation fix:
+The final required image-focused command ran serially with current-test
+visibility and completed normally:
 
 ```bash
-pytest -q tests/core tests/widgets tests/integration -k 'not video and not sam'
+QT_QPA_PLATFORM=offscreen pytest -vv tests/core tests/widgets \
+  tests/integration -k 'not video and not sam'
 ```
 
-It advanced past 69% and another 60 tests, then remained at 100% CPU (PID
-54743, 1:00 elapsed) in the known UI-heavy path. Only that pytest process was
-terminated. Running the core and widget portions in fresh processes produced
-the passing shard results above. An integration-only confirmation reproduced
-the same path at 100% CPU (PID 55067, 0:39 elapsed) after 28 tests and was also
-terminated without affecting other processes.
+The previously suspected CPU-bound path was a slow but progressing UI sequence.
+In particular,
+`tests/integration/test_autosave.py::test_disabled_automatic_save_uses_navigation_safeguard`
+took roughly 30 seconds and passed. No test stalled, so no process sampling or
+termination was needed.
 
-The required final `pytest -q` attempt reached 37% before the same behavior:
-PID 54854 remained at 100% CPU at 1:10 elapsed and only that pytest process was
-terminated. No test failure was printed in either post-fix aggregate attempt;
-the limitation is the pre-existing CPU-bound combined UI execution path, not a
-Task 7 assertion failure.
+The exact full suite then ran serially with the same verbose diagnostics:
+
+```bash
+QT_QPA_PLATFORM=offscreen pytest -vv
+```
+
+It completed with 1,074 passes and 72 optional-dependency/platform skips. Both
+passing aggregate runs emitted the repository's existing teardown tracebacks
+from deliberately incomplete `MainWindow` test objects after test execution;
+those tracebacks did not change either process exit status.
