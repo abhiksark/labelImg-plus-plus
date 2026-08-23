@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-24
 
-**Status:** Approved in chat; written specification awaiting review
+**Status:** Direction approved in chat; revised written specification awaiting
+review
 
 **Scope:** Image annotation, VFR video annotation, contextual AI assistance,
 responsive layout, persistence, and recovery
@@ -96,9 +97,14 @@ A small framework-independent workflow model owns:
 
 The canvas remains authoritative for low-level geometry mode. `MainWindow`
 projects workflow intent into the canvas and actions through one synchronization
-method. Document loading never resets `active_class` or `active_tool`; closing
-the dataset resets both. Escape cancels provisional geometry first, then returns
-to Select when no provisional work remains.
+method. Image and frame navigation within the same interaction session never
+resets `active_class` or `active_tool`. Opening a different standalone image,
+directory, video, or video project starts a new interaction session in Select
+with no active class; predefined classes and label history remain available as
+choices.
+Escape cancels provisional geometry first, then returns to Select only when no
+provisional work remains and Escape is pressed again. Closing the dataset also
+clears both values.
 
 The visible inspector control becomes **Active class**, not **Use default
 label**. Selecting a class establishes it immediately. With `reuse_active`, a
@@ -113,7 +119,8 @@ A save coordinator owns these states: `saved`, `pending`, `saving`, and
 `failed`. Mutation boundaries notify it with the current document revision.
 Those boundaries include shape commit, completed geometry edit, relabel,
 delete, verification, accepted AI result, propagation acceptance, undo, and
-redo. Pointer-move events may mark a revision dirty but are coalesced.
+redo. Pointer movement and unfinished drag or polygon geometry do not create a
+document revision and are never persisted as an intermediate shape.
 
 The coordinator waits 250 ms after the latest mutation, then calls the existing
 image or video save lane. If another mutation occurs during a save, it schedules
@@ -153,8 +160,10 @@ mode.
 
 - Opening a new dataset or video starts in `fit_window`.
 - Image navigation preserves the chosen mode. Fit modes recalculate after the
-  new pixmap and final canvas geometry are available. Manual mode preserves its
-  zoom percentage and centers the new image within valid scroll bounds.
+  new pixmap and final canvas geometry are available. Opening, closing, or
+  resizing the inspector also reprojects the current fit mode after the canvas
+  geometry settles. Manual mode preserves its zoom percentage and centers the
+  new image within valid scroll bounds.
 - Video frame changes preserve zoom and pan because frame dimensions are stable.
 - Switching documents starts a fresh `fit_window` session.
 - A deferred scale projection runs once on the next Qt event turn after initial
@@ -201,7 +210,11 @@ The layout responds to available workspace width rather than screen width.
 - At 960 logical pixels or wider, the inspector remains a docked column.
 - Below 960 logical pixels, the inspector becomes a canvas-overlay drawer. It
   starts closed for the session and is opened through the existing inspector
-  affordance, which shows the object count.
+  affordance, which shows the object count. Opening the drawer moves focus to
+  its heading; Escape, its Close action, and clicking the scrim dismiss it and
+  return focus to the invoking affordance. While open, keyboard focus remains
+  inside the drawer without making the underlying canvas inert to screen
+  readers after the drawer closes.
 - Crossing the breakpoint does not overwrite the user's persistent inspector
   preference. Returning to wide mode restores that preference.
 - Canvas, timeline, command bar, and status layouts have zero artificial
@@ -212,6 +225,15 @@ The status strip prioritizes save state, verification, object count, and zoom.
 Long paths and diagnostic detail use middle elision plus complete tooltips.
 
 ## Video workspace
+
+### Availability and opening
+
+Video remains an optional capability. If its runtime is unavailable, choosing
+a video opens an in-app setup card instead of a raw import error or a disabled
+menu. The card explains what video support adds, identifies the missing
+component, and provides a copyable installation command plus **Choose another
+file**. It never installs software or starts a network operation without an
+explicit user action. Cancelling setup preserves the current workspace.
 
 ### Responsive timeline
 
@@ -227,6 +249,12 @@ the tooltip and diagnostic surfaces. At compact width, propagation actions move
 into a named **Track** menu and secondary labels elide; transport, time, speed,
 and the seek track never disappear.
 
+Marker meaning is never communicated by color alone. Accepted, pending,
+verified, propagation, and gap markers use distinct shapes or patterns, expose
+names and counts to assistive technology, and have a visible legend available
+from the timeline. Clustered markers remain keyboard reachable at useful
+groups rather than adding one tab stop per frame.
+
 The command bar uses **Previous document** and **Next document** terminology.
 It never describes video navigation as image navigation.
 
@@ -239,10 +267,11 @@ immutable `VideoFrameRef`. Dragging may update at most every 50 ms and always
 emits the final release value.
 
 Exact time accepts `HH:MM:SS.mmm` only. Minutes and seconds must be between 0
-and 59; the resulting time is clamped to the video range. Return seeks and
-returns focus to the canvas. Escape restores the current frame time and returns
-focus to the canvas. Invalid input shows an inline error and never resets to the
-video's initial frame.
+and 59, and the resulting time must fall within the video range. Return seeks
+only valid in-range input and returns focus to the canvas. Escape restores the
+current frame time and returns focus to the canvas. Invalid or out-of-range
+input shows an inline error, does not seek, and never resets to the video's
+initial frame.
 
 The transport action exposes `Play video` while paused and `Pause video` while
 playing through its accessible name, tooltip, icon, and checked/state
@@ -256,7 +285,9 @@ accepted manual anchor. **Track all anchors** remains available from the Track
 menu. Progress replaces those commands with processed frames, active tracks,
 completed tracks, ETA, gaps/failures, and a real Cancel action. Cancel stops
 workers, keeps already accepted durable results, marks unresolved spans as
-gaps, and restores editing without requiring restart.
+gaps, and restores editing without requiring restart. Pending propagated
+results remain pending until the user accepts or rejects them; cancellation
+never converts pending results into accepted annotations.
 
 ## Contextual AI assistance
 
@@ -276,8 +307,10 @@ Setup explains the selected model's purpose, provider, storage location, and
 download size before network work starts. Download begins only after the user
 chooses it. Progress offers Cancel; cancellation stops network and worker
 activity, removes the incomplete temporary artifact, and never retries in the
-background. Completed files are moved atomically into the model cache. Failure
-offers Retry and preserves the document.
+background. A completed download must match the provider manifest, expected
+size, and checksum before it can be promoted atomically into the model cache.
+Offline, provider, and artifact-validation failures are distinguished so the
+next action is truthful. Failure offers Retry and preserves the document.
 
 Smart Box and Smart Points create provisional results. Results do not mutate
 the document until accepted. Enter accepts, Escape rejects, and prompt gestures
@@ -319,8 +352,12 @@ or mark a newer revision saved.
   remains on the QApplication thread.
 - Closing a document cancels decode, prefetch, inference, propagation, and
   download workers associated with its generation.
-- Quit waits for the latest save revision and bounded worker shutdown. If save
-  fails, Save/Discard/Cancel is shown. Discard is never chosen automatically.
+- Quit waits for the latest save revision and gives associated workers five
+  seconds to stop gracefully. If work remains, the window stays open and shows
+  **Wait** and **Force Quit**, identifying the remaining operation. Force Quit
+  requires a second confirmation when unsaved changes exist. No worker is
+  abandoned or force-terminated without that explicit choice. If save fails,
+  Save/Discard/Cancel is shown. Discard is never chosen automatically.
 - Worker completion after close is ignored through generation checks.
 - Temporary model downloads and temporary save files are either atomically
   promoted or safely removable; partially written files are never treated as
@@ -336,6 +373,9 @@ or mark a newer revision saved.
 - Canvas focus is restored after class acceptance, time acceptance/cancel,
   assist acceptance/rejection, and file selection.
 - Essential actions remain reachable without toolbar-overflow controls.
+- Primary pointer targets are at least 32×32 logical pixels. Normal text meets
+  4.5:1 contrast and meaningful control boundaries, focus rings, and selected
+  states meet 3:1 against adjacent colors.
 - User-facing shortcuts use native platform text while stored shortcut strings
   remain portable.
 
@@ -345,11 +385,29 @@ or mark a newer revision saved.
   formats do not change.
 - Undo/redo command semantics remain intact; autosave persists the resulting
   model state but does not clear history.
-- Existing predefined classes and session label history seed Active class.
+- Existing predefined classes and session label history seed the Active class
+  choices, never an implicit selection for a newly opened interaction session.
 - Existing `singleclass` users migrate to `reuse_active`.
 - Existing navigation-autosave users migrate to automatic continuous saving.
 - PyQt4 import fallbacks remain in touched production modules.
 - No new mandatory AI or video dependency is added to the base installation.
+
+## Delivery decomposition
+
+The approved design is delivered as four sequential, test-first implementation
+slices. Each slice builds on the previous one; this is delivery order, not a
+scope reduction.
+
+1. Continuous image workflow foundation: workflow state, Active class,
+   persistent tools, continuous revision-safe save, authoritative view modes,
+   and responsive inspector behavior.
+2. Video workspace: optional-runtime onboarding, responsive timeline, complete
+   seek/playback semantics, markers, exact time, propagation, and shutdown.
+3. Assist and model lifecycle: contextual setup, validated downloads, true
+   cancellation, provisional results, acceptance, and optional Track forward.
+4. Integrated hardening: migration, accessibility, full automated coverage,
+   screenshot comparison, the supplied-video live matrix, and crash/recovery
+   gates.
 
 ## Verification plan
 
@@ -357,25 +415,33 @@ or mark a newer revision saved.
 
 1. Workflow tests prove first-class confirmation, repeated prompt-free commits,
    persistent Rectangle/Polygon across navigation, explicit Select, Escape, and
-   exactly one checked tool.
+   exactly one checked tool. They also prove that switching datasets clears the
+   active class/tool while predefined choices remain available.
 2. Save-coordinator tests prove 250 ms coalescing, mutation-during-save replay,
    revision-safe completion, forced image-navigation flush, video snapshot
-   saving, Retry, and close failure handling.
+   saving, Retry, and close failure handling. Mid-drag and unfinished polygon
+   geometry must never create a save revision.
 3. View tests prove initial deferred Fit Window, checked-action agreement,
-   fit recalculation after image navigation, manual zoom preservation, and
-   video-frame transform preservation.
+   fit recalculation after image navigation and inspector geometry changes,
+   manual zoom preservation, and video-frame transform preservation.
 4. Responsive tests render at 800×600, 960×640, 1366×768, and 1440×900 and
    assert that canvas, transport, time, speed, seek, save state, and inspector
-   affordance remain visible and non-overlapping.
+   affordance remain visible and non-overlapping. Drawer focus, dismissal,
+   target size, focus visibility, and contrast are included.
 5. Timeline tests prove mouse, keyboard, and accessibility seeking; final drag
    emission; validator behavior; Return/Escape focus; semantic Play/Pause; end
-   pause; VFR neighboring PTS; and compact Track-menu behavior.
+   pause; VFR neighboring PTS; accessible marker meaning; and compact
+   Track-menu behavior. They cover missing-video-runtime onboarding and prove
+   that no automatic install occurs.
 6. Assist tests prove explicit setup, no automatic download, progress, true
-   cancellation without retry, atomic cache promotion, failure recovery,
-   provisional preview, accept/reject, active-class resolution, autosave, and
-   optional video tracking.
+   cancellation without retry, manifest/size/checksum validation before atomic
+   cache promotion, distinct failure recovery, provisional preview,
+   accept/reject, active-class resolution, autosave, and optional video
+   tracking.
 7. Recovery tests open, replace, fail, cancel, close, and reopen documents while
    stale async completions are delivered, proving the current generation wins.
+   They exercise graceful shutdown, the five-second Wait/Force Quit choice, and
+   unsaved-change confirmation without actually terminating the test runner.
 8. Focused suites and the complete base and video-enabled suites pass.
 
 ### Live macOS matrix
@@ -391,7 +457,9 @@ pause, mouse-seek, keyboard-seek, accessibility-seek, enter valid and invalid
 time, annotate twice with one class choice, navigate while autosaving, verify,
 save/reopen, run and cancel propagation, exercise Assist setup/cancel when
 available, close, and reopen. Repeat the essential flow at 800-pixel width and
-repeat open/play/seek/close ten times to detect shutdown crashes.
+repeat open/play/seek/close ten times to detect shutdown crashes. Use OS-level
+computer-use mouse and keyboard input for one pass on each unique video rather
+than relying only on programmatic Qt events.
 
 For the four-frame image dataset: choose `vehicle` once, draw two rectangles,
 navigate with `D`, confirm class/tool/fit continuity, verify immediate sidecar
