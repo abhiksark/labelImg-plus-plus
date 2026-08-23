@@ -1,208 +1,95 @@
-#!/usr/bin/env python
-# tests/test_autosave.py
-"""Tests for auto-save functionality (Issue #13).
-
-Tests cover:
-- Timer-based auto-save toggle
-- Auto-save interval selection
-- Save triggering conditions
-- Settings persistence
-"""
 import os
-import sys
-import tempfile
-import shutil
-import unittest
+import time
 
-# Set offscreen platform for headless testing
+
 if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
-dir_name = os.path.abspath(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from labelImgPlusPlus import get_main_app, SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED, SETTING_AUTO_SAVE_INTERVAL
+from PyQt5.QtCore import QEvent, QPointF, Qt  # noqa: E402
+from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
+from PyQt5.QtTest import QSignalSpy, QTest  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-
-class TestAutoSaveTimer(unittest.TestCase):
-    """Tests for timer-based auto-save feature."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Create app once for all tests."""
-        cls.app, cls.win = get_main_app()
-        cls.temp_dir = tempfile.mkdtemp()
-
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after tests."""
-        # Don't close window to avoid Qt segfault on cleanup
-        shutil.rmtree(cls.temp_dir, ignore_errors=True)
-
-    def setUp(self):
-        """Reset auto-save state before each test."""
-        self.win.auto_save_enabled.setChecked(False)
-        self.win.auto_save_timer.stop()
-        # Reset interval to default (60s)
-        for action in self.win.auto_save_interval_group.actions():
-            if action.data() == 60:
-                action.setChecked(True)
-                break
-
-    def test_auto_save_timer_exists(self):
-        """Test that auto-save timer is initialized."""
-        self.assertIsNotNone(self.win.auto_save_timer)
-        self.assertFalse(self.win.auto_save_timer.isActive())
-
-    def test_auto_save_toggle_starts_timer(self):
-        """Test that enabling auto-save starts the timer."""
-        self.win.auto_save_enabled.setChecked(True)
-        self.win._toggle_auto_save_timer()
-        self.assertTrue(self.win.auto_save_timer.isActive())
-
-    def test_auto_save_toggle_stops_timer(self):
-        """Test that disabling auto-save stops the timer."""
-        # Start first
-        self.win.auto_save_enabled.setChecked(True)
-        self.win._toggle_auto_save_timer()
-        self.assertTrue(self.win.auto_save_timer.isActive())
-
-        # Then stop
-        self.win.auto_save_enabled.setChecked(False)
-        self.win._toggle_auto_save_timer()
-        self.assertFalse(self.win.auto_save_timer.isActive())
-
-    def test_default_interval_is_one_minute(self):
-        """Test that default auto-save interval is 60 seconds."""
-        interval = self.win._get_current_auto_save_interval()
-        self.assertEqual(interval, 60)
-
-    def test_interval_selection_updates_timer(self):
-        """Test that changing interval updates running timer."""
-        # Enable auto-save
-        self.win.auto_save_enabled.setChecked(True)
-        self.win._toggle_auto_save_timer()
-
-        # Find the 30 second option and select it
-        for action in self.win.auto_save_interval_group.actions():
-            if action.data() == 30:
-                action.setChecked(True)
-                # Manually trigger since we're not using menu
-                self.win.auto_save_timer.start(30 * 1000)
-                break
-
-        # Verify interval changed
-        interval = self.win._get_current_auto_save_interval()
-        self.assertEqual(interval, 30)
+from labelImgPlusPlus import get_main_app  # noqa: E402
 
 
-class TestAutoSaveOnNavigate(unittest.TestCase):
-    """Tests for auto-save on navigation feature."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Create app once for all tests."""
-        cls.app, cls.win = get_main_app()
-
-    def test_auto_save_mode_action_exists(self):
-        """Test that auto-save mode action is initialized."""
-        self.assertIsNotNone(self.win.auto_saving)
-        self.assertTrue(self.win.auto_saving.isCheckable())
-
-    def test_auto_save_mode_is_checkable(self):
-        """Test that auto-save mode can be toggled."""
-        initial_state = self.win.auto_saving.isChecked()
-        self.win.auto_saving.setChecked(not initial_state)
-        self.assertEqual(self.win.auto_saving.isChecked(), not initial_state)
-        # Restore
-        self.win.auto_saving.setChecked(initial_state)
+def _wait(app, predicate, timeout_ms=3000):
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        QTest.qWait(5)
+    return False
 
 
-class TestAutoSaveTriggering(unittest.TestCase):
-    """Tests for auto-save triggering conditions."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Create app once for all tests."""
-        cls.app, cls.win = get_main_app()
-        cls.temp_dir = tempfile.mkdtemp()
-
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after tests."""
-        shutil.rmtree(cls.temp_dir, ignore_errors=True)
-
-    def setUp(self):
-        """Reset state before each test."""
-        self.win.dirty = False
-        self.win.file_path = None
-
-    def test_no_save_when_not_dirty(self):
-        """Test that auto-save doesn't trigger when no changes."""
-        self.win.dirty = False
-        self.win.file_path = '/some/path/image.jpg'
-
-        # This should return early without saving
-        self.win._auto_save_triggered()
-        # No error means success - nothing to assert
-
-    def test_no_save_when_no_file(self):
-        """Test that auto-save doesn't trigger when no file loaded."""
-        self.win.dirty = True
-        self.win.file_path = None
-
-        # This should return early without saving
-        self.win._auto_save_triggered()
-        # No error means success
-
-    def test_collision_uses_same_specific_path_as_manual_save(self):
-        from unittest.mock import call, patch
-
-        from libs.formats.annotation_paths import annotation_output_base
-
-        first = os.path.join(self.temp_dir, 'a', 'frame.png')
-        second = os.path.join(self.temp_dir, 'b', 'frame.png')
-        images = [first, second]
-        self.win.file_path = first
-        self.win.default_save_dir = self.temp_dir
-        self.win.m_img_list = images
-        expected = annotation_output_base(first, self.temp_dir, images)
-
-        with patch.object(self.win, '_save_file', return_value=True) as save:
-            self.assertTrue(self.win.save_file())
-            self.win.dirty = True
-            self.win._auto_save_triggered()
-
-        self.assertNotEqual(os.path.basename(expected), 'frame')
-        self.assertEqual(save.call_args_list, [call(expected), call(expected)])
+def commit_rectangle(window, label):
+    window._active_class_selected(label)
+    window.activate_box_tool()
+    window.canvas.commit_rectangle((2, 2, 20, 20))
 
 
-class TestAutoSaveIntervalMenu(unittest.TestCase):
-    """Tests for auto-save interval menu."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Create app once for all tests."""
-        cls.app, cls.win = get_main_app()
-
-    def test_interval_menu_exists(self):
-        """Test that interval submenu is created."""
-        self.assertIsNotNone(self.win.auto_save_interval_menu)
-
-    def test_interval_options_available(self):
-        """Test that all interval options are available."""
-        actions = self.win.auto_save_interval_group.actions()
-        intervals = [action.data() for action in actions]
-
-        self.assertIn(30, intervals)   # 30 seconds
-        self.assertIn(60, intervals)   # 1 minute
-        self.assertIn(120, intervals)  # 2 minutes
-        self.assertIn(300, intervals)  # 5 minutes
-
-    def test_intervals_are_exclusive(self):
-        """Test that only one interval can be selected at a time."""
-        self.assertTrue(self.win.auto_save_interval_group.isExclusive())
+def test_shape_commit_creates_sidecar_without_navigation(tmp_path):
+    app, window = get_main_app()
+    image_path = tmp_path / 'frame.png'
+    image = QImage(80, 60, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    try:
+        window.default_save_dir = None
+        window.save_changes_automatically.setChecked(True)
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(image_path))
+        commit_rectangle(window, 'vehicle')
+        sidecar = image_path.with_suffix('.xml')
+        assert _wait(app, sidecar.exists)
+        assert window.continuous_save.state == 'saved'
+    finally:
+        window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_mid_drag_does_not_schedule_a_save(tmp_path):
+    app, window = get_main_app()
+    try:
+        requested = QSignalSpy(window.continuous_save.saveRequested)
+        event = QMouseEvent(
+            QEvent.MouseMove, QPointF(20, 20), Qt.NoButton, Qt.LeftButton,
+            Qt.NoModifier)
+        window.canvas.mouseMoveEvent(event)
+        app.processEvents()
+        assert len(requested) == 0
+    finally:
+        window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()
+
+
+def test_disabled_automatic_save_uses_navigation_safeguard(monkeypatch,
+                                                           tmp_path):
+    app, window = get_main_app()
+    for name in ('a.png', 'b.png'):
+        image = QImage(40, 30, QImage.Format_RGB32)
+        image.fill(Qt.white)
+        assert image.save(str(tmp_path / name))
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window.save_changes_automatically.setChecked(False)
+        window.dirty = True
+        window.continuous_save.mark_dirty(1)
+        QApplication.processEvents()
+        assert window.continuous_save.state == 'pending'
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                window, 'discard_changes_dialog',
+                lambda: QMessageBox.Cancel)
+            current = window.file_path
+            window.request_next_image()
+            app.processEvents()
+            assert window.file_path == current
+    finally:
+        window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()

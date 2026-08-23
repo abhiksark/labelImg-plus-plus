@@ -95,6 +95,7 @@ from libs.core.image_pipeline import FrameCache, load_image_result
 from libs.core.save_pipeline import (
     SaveRequest, target_path as annotation_target_path, write_save_request,
 )
+from libs.core.continuous_save import ContinuousSaveCoordinator
 from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.plugin_manager import PluginManager
 from libs.core.profiling import (
@@ -142,8 +143,7 @@ from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
-    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
-    SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
+    SETTING_AUTO_SAVE, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
     SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
@@ -252,6 +252,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self._path_to_idx = {}  # O(1) lookup: path -> index
         self._annotation_status_cache = {}  # Cache: path -> status (reduces I/O)
         self.task_coordinator = TaskCoordinator(parent=self)
+        self.continuous_save = ContinuousSaveCoordinator(
+            delay_ms=250, parent=self)
+        self.continuous_save.saveRequested.connect(
+            self._dispatch_continuous_save)
+        self.continuous_save.stateChanged.connect(
+            self._on_continuous_save_state_changed)
         self._plugin_document_generation = 0
         self._plugin_document_ready = False
         self.plugin_manager = PluginManager(
@@ -494,7 +500,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.sam_controller = SamController(self)
         self.canvas.samClicked.connect(self.sam_controller.segment_at)
         self._sam_available = segmentation.sam_available()
-        self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.polygonVerticesEdited.connect(
             self._on_polygon_vertices_edited)
@@ -561,7 +566,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.shortcut_config.get('video_play_pause'), None,
             'Play or pause the active video without audio', enabled=False)
 
-        save = action(get_str('save'), self.request_save_file,
+        save = action(get_str('save'), self._request_save_or_retry,
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
 
         current_format_meta = format_metadata.meta_for_enum(self.label_file_format)
@@ -981,48 +986,17 @@ class MainWindow(QMainWindow, WindowMixin):
             recentFiles=QMenu(get_str('menu_openRecent')),
             labelList=label_menu)
 
-        # Auto saving : Enable auto saving if pressing next
-        self.auto_saving = QAction(get_str('autoSaveMode'), self)
-        self.auto_saving.setCheckable(True)
-        # On by default: save_file resolves a path beside the image when no
-        # save directory is chosen, so this can never surface a dialog.
-        self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, True))
-        self.auto_saving.setToolTip(get_str('autoSaveModeDetail'))
-
-        # Auto-save timer (Issue #13)
-        self.auto_save_timer = QTimer(self)
-        self.auto_save_timer.timeout.connect(self._request_auto_save_triggered)
-
-        # Auto-save enabled toggle
-        self.auto_save_enabled = QAction(get_str('autoSaveEnabled'), self)
-        self.auto_save_enabled.setCheckable(True)
-        self.auto_save_enabled.setChecked(settings.get(SETTING_AUTO_SAVE_ENABLED, False))
-        self.auto_save_enabled.triggered.connect(self._toggle_auto_save_timer)
-        self.auto_save_enabled.setToolTip(get_str('autoSaveEnabledDetail'))
-
-        # Auto-save interval submenu
-        self.auto_save_interval_menu = QMenu(get_str('autoSaveInterval'), self)
-        self.auto_save_interval_group = QActionGroup(self)
-        self.auto_save_interval_group.setExclusive(True)
-        auto_save_intervals = [
-            (get_str('autoSave30s'), 30),
-            (get_str('autoSave1m'), 60),
-            (get_str('autoSave2m'), 120),
-            (get_str('autoSave5m'), 300),
-        ]
-        saved_interval = settings.get(SETTING_AUTO_SAVE_INTERVAL, 60)
-        for name, interval in auto_save_intervals:
-            interval_action = QAction(name, self)
-            interval_action.setCheckable(True)
-            interval_action.setData(interval)
-            interval_action.triggered.connect(self._set_auto_save_interval)
-            self.auto_save_interval_group.addAction(interval_action)
-            self.auto_save_interval_menu.addAction(interval_action)
-            if interval == saved_interval:
-                interval_action.setChecked(True)
-        # Default to 1 minute if nothing selected
-        if not any(a.isChecked() for a in self.auto_save_interval_group.actions()):
-            self.auto_save_interval_group.actions()[1].setChecked(True)  # 1 minute
+        self.save_changes_automatically = QAction(
+            'Save changes automatically', self)
+        self.save_changes_automatically.setCheckable(True)
+        self.save_changes_automatically.setChecked(
+            settings.get(SETTING_AUTO_SAVE, True))
+        self.save_changes_automatically.setToolTip(
+            'Save each completed annotation change automatically')
+        self.save_changes_automatically.toggled.connect(
+            self._toggle_continuous_save)
+        # Compatibility name for extensions which used the navigation toggle.
+        self.auto_saving = self.save_changes_automatically
 
         # Sync single class mode from PR#106
         self.single_class_mode = QAction(get_str('singleClsMode'), self)
@@ -1069,8 +1043,7 @@ class MainWindow(QMainWindow, WindowMixin):
                      close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
-            self.auto_saving,
-            self.auto_save_enabled,
+            self.save_changes_automatically,
             self.single_class_mode,
             self.display_label_option,
             self.lock_on_verify_option,
@@ -1079,7 +1052,6 @@ class MainWindow(QMainWindow, WindowMixin):
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
             light_brighten, light_darken, light_org, None))
-        self.menus.view.addMenu(self.auto_save_interval_menu)
         self.menus.view.addSeparator()
         self.menus.view.addAction(self.show_grid_option)
         self.menus.view.addMenu(self.grid_size_menu)
@@ -1388,11 +1360,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setMenuWidget(self.command_bar)
         self.command_bar.apply_theme(self._current_theme)
         self._sync_command_bar()
-
-        # Start auto-save timer if enabled (Issue #13)
-        if self.auto_save_enabled.isChecked():
-            self._toggle_auto_save_timer()
-
         self.plugin_command_host = QtPluginCommandHost(
             self, self.menus.plugins, self.shortcut_config,
             self._action_map, self.settings)
@@ -1617,20 +1584,48 @@ class MainWindow(QMainWindow, WindowMixin):
             if not self._ensure_video_editable():
                 return
             self.pause_video()
+            revision = self.video_model.revision
+            self._document_revision = revision
             self.dirty = True
             self.actions.save.setEnabled(True)
             self.update_save_status(saved=False)
             self.update_box_count()
             self._sync_command_bar()
             self._publish_plugin_document()
+            self._mark_continuous_save_dirty(revision)
             return
         self._document_revision += 1
+        revision = self._document_revision
         self.dirty = True
         self.actions.save.setEnabled(True)
         self.update_save_status(saved=False)
         self.update_box_count()
         self._sync_command_bar()
         self._publish_plugin_document()
+        self._mark_continuous_save_dirty(revision)
+
+    def _mark_continuous_save_dirty(self, revision):
+        self.continuous_save.mark_dirty(revision)
+        if not self.save_changes_automatically.isChecked():
+            self.continuous_save._timer.stop()
+
+    def _toggle_continuous_save(self, enabled):
+        if enabled:
+            self.continuous_save.flush()
+        else:
+            self.continuous_save._timer.stop()
+
+    def _on_continuous_save_state_changed(self, state):
+        copy = {
+            'saved': 'Saved',
+            'failed': 'Save failed · Retry',
+        }.get(state, 'Saving…')
+        if hasattr(self, 'label_save_status'):
+            self.label_save_status.setText('● ' + copy)
+            self.label_save_status.setToolTip(copy)
+        command_bar = getattr(self, 'command_bar', None)
+        if command_bar is not None:
+            command_bar.save_button.setText(copy)
 
     def set_clean(self):
         self.dirty = False
@@ -1678,6 +1673,16 @@ class MainWindow(QMainWindow, WindowMixin):
             dirty=dirty,
             read_only=read_only,
         )
+
+    def _continuous_document_key(self):
+        if self.document_kind == DocumentKind.VIDEO:
+            snapshot = self.video_snapshot
+            path = (snapshot.project_path or snapshot.source_path
+                    if snapshot is not None else self.file_path)
+            return 'video:' + os.path.abspath(ustr(path or ''))
+        if self.document_kind == DocumentKind.IMAGE:
+            return 'image:' + os.path.abspath(ustr(self.file_path or ''))
+        return ''
 
     def _publish_plugin_document(self, new_generation=False, force=False):
         manager = getattr(self, 'plugin_manager', None)
@@ -1745,6 +1750,9 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             position = '— / —'
         command_bar.set_position(position)
+        if hasattr(self, 'continuous_save'):
+            self._on_continuous_save_state_changed(
+                self.continuous_save.state)
 
     def update_image_count(self):
         """Update image counter in status bar."""
@@ -1803,6 +1811,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._restart_workers_if_needed()
         self._close_video_decoder()
         self._set_document_kind(DocumentKind.NONE)
+        self.continuous_save.reset('', self._dataset_generation, 0)
         self.annotation_model.clear()
         self.annotation_search.clear()
         self.file_path = None
@@ -3585,6 +3594,9 @@ class MainWindow(QMainWindow, WindowMixin):
             frame_states=prepared.frame_states, classes=prepared.classes,
             gaps=prepared.gaps)
         self._document_revision = snapshot.revision
+        self.continuous_save.reset(
+            self._continuous_document_key(), self._dataset_generation,
+            snapshot.revision)
         self.m_img_list = []
         self._path_to_idx = {}
         self.img_count = 0
@@ -3835,6 +3847,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._refresh_video_track_list()
         self.update_box_count()
         self._publish_plugin_document()
+        self._mark_continuous_save_dirty(self._document_revision)
 
     def _shape_geometry(self, shape):
         inverse = (1.0 / self._image_scale_factor
@@ -5232,7 +5245,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return self.request_load_file(
                 file_path, skip_prompt=skip_prompt)
         if not skip_prompt and self.dirty:
-            if self.auto_saving.isChecked() and self.default_save_dir:
+            if self.save_changes_automatically.isChecked():
                 self.request_save_file(
                     on_success=lambda: self.request_open_file(
                         file_path, skip_prompt=True))
@@ -5270,7 +5283,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 u'<p>Open the image it describes instead.</p>')
             return None
         if not skip_prompt and self.dirty:
-            if self.auto_saving.isChecked() and self.default_save_dir:
+            if self.save_changes_automatically.isChecked():
                 self.request_save_file(
                     on_success=lambda: self.request_load_file(
                         file_path, skip_prompt=True,
@@ -5376,6 +5389,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.image_data = None
         self.image = result.image
         self.file_path = result.path
+        self.continuous_save.reset(
+            self._continuous_document_key(), self._dataset_generation,
+            self._document_revision)
         self.cur_img_idx = self._path_to_idx.get(
             result.path, self.cur_img_idx)
         self.canvas.verified = result.verified
@@ -5606,6 +5622,9 @@ class MainWindow(QMainWindow, WindowMixin):
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.on_image_changed()
             self.file_path = unicode_file_path
+            self.continuous_save.reset(
+                self._continuous_document_key(), self._dataset_generation,
+                self._document_revision)
             self.canvas.load_pixmap(QPixmap.fromImage(image))
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
@@ -5775,9 +5794,8 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             settings[SETTING_LAST_OPEN_DIR] = ''
 
-        settings[SETTING_AUTO_SAVE] = self.auto_saving.isChecked()
-        settings[SETTING_AUTO_SAVE_ENABLED] = self.auto_save_enabled.isChecked()
-        settings[SETTING_AUTO_SAVE_INTERVAL] = self._get_current_auto_save_interval()
+        settings[SETTING_AUTO_SAVE] = \
+            self.save_changes_automatically.isChecked()
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PROMPT_POLICY] = self.workflow.snapshot.prompt_policy.value
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
@@ -6334,7 +6352,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return None
         dir_path = os.path.abspath(ustr(dir_path))
         if not skip_prompt and self.dirty:
-            if self.auto_saving.isChecked() and self.default_save_dir:
+            if self.save_changes_automatically.isChecked():
                 self.request_save_file(
                     on_success=lambda: self.request_import_dir_images(
                         dir_path, skip_prompt=True))
@@ -6508,7 +6526,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas.locked = self.canvas.verified
             self._on_video_model_mutation()
             self.paint_canvas()
-            return self.request_save_video_project()
+            self.continuous_save.flush()
+            return self._video_save_handle
         if self.file_path is None:
             return None
         if self.label_file is None:
@@ -6519,7 +6538,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.locked = self.canvas.verified
         self.set_dirty()
         self.paint_canvas()
-        return self.request_save_file()
+        self.continuous_save.flush()
+        return self._save_handle
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
@@ -6593,8 +6613,79 @@ class MainWindow(QMainWindow, WindowMixin):
         if filename:
             self.request_open_video(ustr(filename))
 
+    def _dispatch_continuous_save(self, ticket):
+        if not self.save_changes_automatically.isChecked():
+            return
+        if ticket.document_key != self._continuous_document_key():
+            return
+        if self.document_kind == DocumentKind.VIDEO:
+            self._dispatch_continuous_video_save(ticket)
+        elif self.document_kind == DocumentKind.IMAGE:
+            handle = self.request_save_file(continuous_ticket=ticket)
+            if handle is None:
+                self.continuous_save.fail(
+                    ticket, 'Automatic save could not be started')
+            else:
+                self._save_handle = handle
+
+    def _request_save_or_retry(self, _value=False):
+        if self.continuous_save.state == 'failed':
+            if self.save_changes_automatically.isChecked():
+                self.continuous_save.retry()
+                return self._save_handle
+            return self.request_save_file(_value)
+        return self.request_save_file(_value)
+
+    def _dispatch_continuous_video_save(self, ticket):
+        snapshot = self.video_snapshot
+        model = self.video_model
+        if (snapshot is None or model is None or snapshot.read_only
+                or not snapshot.project_path):
+            self.continuous_save.fail(ticket, 'Video project is not writable')
+            return
+        request = model.build_save_request(snapshot.project_path)
+        generation = ticket.generation
+
+        def save(handle):
+            handle.check_cancelled()
+            return save_project_delta(
+                request, cancelled=handle.is_cancelled,
+                begin_commit=handle.begin_non_cancellable)
+
+        handle = self.task_coordinator.submit(
+            'background', save, priority=JobPriority.IMAGE_LOAD,
+            key='continuous-save:' + request.project_path, latest=True,
+            generation=generation)
+        self._video_save_handle = handle
+        handle.result.connect(
+            lambda revision, req=request, current=ticket:
+            self._on_continuous_video_save_result(
+                revision, req, current))
+        handle.error.connect(
+            lambda message, current=ticket:
+            self._on_continuous_save_error(current, message))
+
+    def _on_continuous_video_save_result(self, revision, request, ticket):
+        if (revision is None or ticket.generation != self._dataset_generation
+                or ticket.document_key != self._continuous_document_key()
+                or self.video_model is None or self.video_snapshot is None
+                or request.project_path != self.video_snapshot.project_path):
+            self.continuous_save.complete(ticket)
+            return
+        self.video_model.mark_saved(revision)
+        self.video_snapshot = replace(
+            self.video_snapshot, revision=revision)
+        self.continuous_save.complete(ticket)
+        if not self.video_model.dirty:
+            self.set_clean()
+        self.status('Saved video project to %s' % request.project_path)
+
+    def _on_continuous_save_error(self, ticket, message):
+        self.continuous_save.fail(ticket, message)
+        self.status('Error saving annotation: ' + str(message))
+
     def request_save_file(self, _value=False, on_success=None,
-                          annotation_base=None):
+                          annotation_base=None, continuous_ticket=None):
         """Queue an immutable, revision-aware save for GUI workflows."""
         if self.document_kind == DocumentKind.VIDEO:
             return self.request_save_video_project(on_success=on_success)
@@ -6661,7 +6752,9 @@ class MainWindow(QMainWindow, WindowMixin):
             shapes=tuple(serialized),
             class_list=tuple(self.label_hist),
             verified=bool(self.canvas.verified),
-            revision=self._document_revision,
+            revision=(continuous_ticket.revision
+                      if continuous_ticket is not None
+                      else self._document_revision),
         )
         save_lock = self._save_locks.setdefault(
             request.annotation_path, threading.Lock())
@@ -6682,21 +6775,34 @@ class MainWindow(QMainWindow, WindowMixin):
         self._save_handle = handle
         handle.result.connect(
             lambda path, req=request, callback=on_success,
-            gen=self._dataset_generation:
-            self._on_save_result(path, req, callback, gen))
-        handle.error.connect(self._on_save_error)
+            gen=self._dataset_generation, ticket=continuous_ticket:
+            self._on_save_result(path, req, callback, gen, ticket))
+        handle.error.connect(
+            lambda message, ticket=continuous_ticket:
+            self._on_save_error(message, ticket))
         return handle
 
-    def _on_save_result(self, path, request, on_success, generation=None):
+    def _on_save_result(self, path, request, on_success, generation=None,
+                        continuous_ticket=None):
         if path is None:
             return
         if (generation is not None
                 and generation != self._dataset_generation):
+            if continuous_ticket is not None:
+                self.continuous_save.complete(continuous_ticket)
             self.status('Saved superseded document to %s' % path)
             return
         self._record_annotation_written(path)
-        if (self.file_path == request.image_path
-                and self._document_revision == request.revision):
+        if continuous_ticket is not None:
+            self.continuous_save.complete(continuous_ticket)
+        current_revision = (
+            self.file_path == request.image_path
+            and self._document_revision == request.revision)
+        if current_revision and continuous_ticket is None:
+            self.continuous_save.reset(
+                self._continuous_document_key(), self._dataset_generation,
+                request.revision)
+        if current_revision:
             self.set_clean()
         self.status('Saved to %s' % path)
         if self.file_path == request.image_path:
@@ -6704,7 +6810,9 @@ class MainWindow(QMainWindow, WindowMixin):
         if callable(on_success):
             on_success()
 
-    def _on_save_error(self, message):
+    def _on_save_error(self, message, continuous_ticket=None):
+        if continuous_ticket is not None:
+            self.continuous_save.fail(continuous_ticket, message)
         self.status('Error saving annotation: ' + message)
 
     def _record_annotation_written(self, path):
@@ -7328,47 +7436,6 @@ class MainWindow(QMainWindow, WindowMixin):
             # Update toolbar icon size
             if hasattr(self, 'tools') and self.tools:
                 self.tools.update_icon_size(size)
-
-    # Auto-save timer methods (Issue #13)
-    def _toggle_auto_save_timer(self):
-        """Toggle timer-based auto-save."""
-        if self.auto_save_enabled.isChecked():
-            interval = self._get_current_auto_save_interval()
-            self.auto_save_timer.start(interval * 1000)  # Convert to ms
-        else:
-            self.auto_save_timer.stop()
-
-    def _set_auto_save_interval(self):
-        """Set auto-save interval from menu selection."""
-        action = self.sender()
-        if action:
-            interval = action.data()
-            if self.auto_save_enabled.isChecked():
-                self.auto_save_timer.start(interval * 1000)
-
-    def _get_current_auto_save_interval(self):
-        """Get currently selected auto-save interval in seconds."""
-        for action in self.auto_save_interval_group.actions():
-            if action.isChecked():
-                return action.data()
-        return 60  # Default 1 minute
-
-    def _auto_save_triggered(self):
-        """Synchronous auto-save compatibility hook for extensions/tests.
-
-        Delegates to save_file so there is exactly one place that decides
-        where an annotation lands; this used to carry its own copy of that
-        resolution and could drift from the real save path.
-        """
-        if not self.dirty or not self.file_path:
-            return
-        self.status("Auto-saving...")
-        self.save_file()
-
-    def _request_auto_save_triggered(self):
-        if self.dirty and self.file_path:
-            self.status("Auto-saving...")
-            self.request_save_file()
 
     # Dark mode methods (Issue #7)
     def _toggle_dark_mode(self):
