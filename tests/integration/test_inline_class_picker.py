@@ -136,8 +136,7 @@ def test_annotation_session_is_the_only_visible_class_strategy_surface(
     app, window = get_main_app()
     try:
         _prepare_image(window, tmp_path)
-        window.label_hist = ['car', 'person']
-        window.default_label = 'car'
+        window.default_label = 'dog'
         window._session_last_class = 'person'
         window._sync_inspector_context()
         card = window.inspector_context_card
@@ -163,6 +162,7 @@ def test_annotation_session_is_the_only_visible_class_strategy_surface(
         assert window.use_default_label_checkbox.isChecked()
         assert not window.single_class_mode.isChecked()
         assert window.default_label == 'car'
+        assert window.default_label_combo_box.cb.currentText() == 'car'
         assert not card.fixed_class_combo.isHidden()
     finally:
         window.dirty = False

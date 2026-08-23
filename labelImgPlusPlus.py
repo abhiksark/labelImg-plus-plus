@@ -2917,10 +2917,10 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         self.default_label = label
         if label in self.label_hist:
-            blocked = self.default_label_combo_box.blockSignals(True)
-            self.default_label_combo_box.setCurrentIndex(
+            blocked = self.default_label_combo_box.cb.blockSignals(True)
+            self.default_label_combo_box.cb.setCurrentIndex(
                 self.label_hist.index(label))
-            self.default_label_combo_box.blockSignals(blocked)
+            self.default_label_combo_box.cb.blockSignals(blocked)
         self._sync_inspector_context()
 
     def _sync_inspector_context(self):
