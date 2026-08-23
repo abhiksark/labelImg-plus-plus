@@ -208,6 +208,31 @@ def test_changing_fixed_class_preserves_dirty_annotation_and_labels_next(
         app.processEvents()
 
 
+def test_fixed_class_selects_label_created_after_window_construction(tmp_path):
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        _finalise_rectangle(window)
+        _enter_class(window, 'delivery robot')
+        app.processEvents()
+
+        card = window.inspector_context_card
+        card.class_strategy_combo.setCurrentIndex(
+            card.class_strategy_combo.findData('fixed'))
+        card.fixed_class_combo.setCurrentIndex(
+            card.fixed_class_combo.findText('delivery robot'))
+        app.processEvents()
+
+        assert card.fixed_class_combo.currentText() == 'delivery robot'
+        assert window.default_label_combo_box.cb.currentText() == \
+            'delivery robot'
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
 def test_escape_discards_provisional_shape_without_document_mutation(tmp_path):
     app, window = get_main_app()
     try:
