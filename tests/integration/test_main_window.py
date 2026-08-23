@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import shutil
+import time
 import unittest
 
 # Set offscreen platform for headless testing
@@ -27,8 +28,71 @@ from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QMessageBox, QToolButton  # noqa: E402
 
 from labelImgPlusPlus import get_main_app  # noqa: E402
+from libs.core.annotation_workflow import AnnotationTool  # noqa: E402
 from libs.core.shape import Shape  # noqa: E402
 from libs.formats.annotation_paths import annotation_output_base  # noqa: E402
+
+
+def _wait(app, predicate, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        QTest.qWait(5)
+    return False
+
+
+def _write_image(path):
+    image = QImage(80, 60, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(path))
+
+
+def test_rectangle_class_and_tool_survive_commit_and_navigation(tmp_path):
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window._active_class_selected('vehicle')
+        window.activate_box_tool()
+        window.canvas.commit_rectangle((2, 2, 20, 20))
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.RECTANGLE
+        assert window.canvas.mode == window.canvas.CREATE
+        assert window.canvas.selected_shape is None
+
+        window.set_clean()
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.canvas.mode == window.canvas.CREATE
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_new_dataset_clears_selection_but_retains_class_choices(tmp_path):
+    first_dir, second_dir = tmp_path / 'one', tmp_path / 'two'
+    first_dir.mkdir()
+    second_dir.mkdir()
+    _write_image(first_dir / 'a.png')
+    _write_image(second_dir / 'b.png')
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(first_dir))
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        assert window.import_dir_images(str(second_dir))
+        app.processEvents()
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert 'vehicle' in window.active_class_control.choices()
+    finally:
+        window.dirty = False
+        window.close()
 
 
 class TestMainWindowFileOperations(unittest.TestCase):
@@ -852,7 +916,7 @@ class TestMainWindowAnnotations(unittest.TestCase):
     def test_completed_rectangle_uses_the_active_class_control(self):
         """A completed shape must not retain a removed legacy control path."""
         try:
-            self.win.active_class_control.set_active_class('vehicle')
+            self.win._active_class_selected('vehicle')
             existing_count = len(self.win.canvas.shapes)
 
             self.win.canvas.commit_rectangle((10, 10, 60, 60))

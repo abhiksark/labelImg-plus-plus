@@ -181,6 +181,15 @@ class TestCanvasHighlight(unittest.TestCase):
 
         self.assertTrue(self.canvas.selected_vertex())
 
+    def test_committed_shape_flash_clears_without_selecting_it(self):
+        """The post-commit cue is visual-only, not an editable selection."""
+        self.canvas.flash_committed_shape(self.shape, duration_ms=0)
+
+        self.assertIs(self.canvas._commit_highlight, self.shape)
+        self.assertIsNone(self.canvas.selected_shape)
+        self.canvas._clear_commit_highlight()
+        self.assertIsNone(self.canvas._commit_highlight)
+
 
 class TestCanvasDrawingColor(unittest.TestCase):
     """Test cases for Canvas drawing color."""

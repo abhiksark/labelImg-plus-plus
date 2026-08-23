@@ -83,8 +83,9 @@ from libs.core.commands import (
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
-    clamp_inspector_width, load_workspace_settings,
+    clamp_inspector_width, load_prompt_policy, load_workspace_settings,
 )
+from libs.core.annotation_workflow import AnnotationTool, AnnotationWorkflow
 from libs.core.sam_controller import SamController
 from libs.core.sam_types import normalize_sam_output_mode
 from libs.core.annotation_catalog import AnnotationCatalog
@@ -149,6 +150,7 @@ from libs.utils.constants import (
     SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SHORTCUTS,
     SETTING_INSPECTOR_COLLAPSED, SETTING_INSPECTOR_TAB,
     SETTING_INSPECTOR_WIDTH, SETTING_SINGLE_CLASS,
+    SETTING_PROMPT_POLICY,
     SETTING_WIN_POSE, SETTING_WIN_SIZE,
     FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
@@ -218,6 +220,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings = Settings()
         self.settings.load()
         settings = self.settings
+        self.workflow = AnnotationWorkflow(load_prompt_policy(settings))
         self.workspace_settings = load_workspace_settings(settings)
         self.sam_output_mode = normalize_sam_output_mode(
             settings.get(SETTING_SAM_OUTPUT_MODE, 'polygon'))
@@ -356,6 +359,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.active_class_control = ActiveClassControl(self)
         self.active_class_control.set_choices(self.label_hist)
+        self.active_class_control.confirm_each.setChecked(
+            self.workflow.snapshot.prompt_policy.value == 'confirm_each')
+        self.active_class_control.classSelected.connect(
+            self._active_class_selected)
+        self.active_class_control.policyChanged.connect(
+            self._active_class_policy_changed)
 
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
@@ -1219,7 +1228,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
         self.canvas.provisionalClickBlocked.connect(
             self._on_provisional_click_blocked)
-        self._sync_tool_actions()
+        self._apply_workflow_state()
 
         # Create dropdown for file/directory operations
         file_dropdown = DropdownToolButton(
@@ -2081,11 +2090,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 and not self._ensure_video_editable()):
             self._sync_tool_actions()
             return
+        self.workflow.set_tool(AnnotationTool.RECTANGLE)
         self._leave_special_tool_modes()
-        self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
         self.actions.create_polygon.setEnabled(True)
         self.actions.editMode.setEnabled(True)
+        self._apply_workflow_state()
         self._finish_tool_activation()
 
     def create_polygon_mode(self):
@@ -2098,11 +2108,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 and not self._ensure_video_editable()):
             self._sync_tool_actions()
             return
+        self.workflow.set_tool(AnnotationTool.POLYGON)
         self._leave_special_tool_modes()
-        self.canvas.set_polygon_drawing(True)
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(False)
         self.actions.editMode.setEnabled(True)
+        self._apply_workflow_state()
         self._finish_tool_activation()
 
     def toggle_keypoint_mode(self):
@@ -2179,16 +2190,17 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def activate_select_tool(self):
         """Return to the neutral canvas selection/editing tool."""
+        self.workflow.set_tool(AnnotationTool.SELECT)
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
         self.sam_controller.set_enabled(False)
-        self.canvas.set_editing(True)
         editable = self._video_editable()
         self.actions.create.setEnabled(editable and bool(self.file_path))
         self.actions.create_polygon.setEnabled(
             editable and bool(self.file_path))
         self.actions.editMode.setEnabled(False)
+        self._apply_workflow_state()
         self._finish_tool_activation()
 
     def _leave_special_tool_modes(self):
@@ -2200,6 +2212,39 @@ class MainWindow(QMainWindow, WindowMixin):
     def _finish_tool_activation(self):
         self._sync_tool_actions()
         self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def _apply_workflow_state(self):
+        """Project the persistent annotation workflow into the canvas UI."""
+        state = self.workflow.snapshot
+        projection = {
+            AnnotationTool.SELECT: lambda: self.canvas.set_editing(True),
+            AnnotationTool.RECTANGLE: lambda: self.canvas.set_editing(False),
+            AnnotationTool.POLYGON:
+            lambda: self.canvas.set_polygon_drawing(True),
+        }
+        projection.get(state.active_tool, projection[AnnotationTool.SELECT])()
+        self.active_class_control.set_active_class(state.active_class)
+        self._sync_tool_actions()
+
+    def _start_interaction_session(self):
+        """Clear per-session class/tool selection when a document is replaced."""
+        self.workflow.start_session()
+        self._apply_workflow_state()
+
+    def _active_class_selected(self, label):
+        """Make a class choice available immediately and across navigation."""
+        label = str(label).strip()
+        if not label:
+            return
+        if label not in self.label_hist:
+            self.label_hist.append(label)
+            self.active_class_control.set_choices(self.label_hist)
+        self.workflow.set_active_class(label)
+        self._apply_workflow_state()
+
+    def _active_class_policy_changed(self, policy):
+        self.workflow.set_prompt_policy(policy)
+        self._apply_workflow_state()
 
     def _on_provisional_click_blocked(self):
         """Explain a canvas click that went nowhere, and recover from it.
@@ -3113,15 +3158,13 @@ class MainWindow(QMainWindow, WindowMixin):
                 and self._pending_provisional_shape is not shape):
             self._dismiss_class_picker(discard=False)
         self._pending_provisional_shape = shape
+        self.workflow.begin_provisional()
 
-        text = self.active_class_control.active_class()
-        if text and not self.active_class_control.confirm_each.isChecked():
+        text = self.workflow.snapshot.active_class
+        if (text and self.workflow.snapshot.prompt_policy.value
+                == 'reuse_active'):
             self._commit_provisional_shape(text)
             return
-        if self.single_class_mode.isChecked() and self._session_last_class:
-            self._commit_provisional_shape(self._session_last_class)
-            return
-
         self.class_picker.open_at(
             self.label_hist,
             self._session_last_class or self.prev_label_text,
@@ -3152,6 +3195,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._pending_provisional_shape = None
         if shape is None:
             return
+        self.workflow.set_active_class(text)
+        self.workflow.finish_provisional()
+        self._apply_workflow_state()
         self.add_label(shape)
 
         if self.document_kind == DocumentKind.VIDEO:
@@ -3174,22 +3220,15 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_hist.append(text)
         self._update_current_image_stats()
 
-        # Creation is transient: hand the user back to Select with the new
-        # shape selected, so the next gesture edits rather than redraws.
-        # Gated on the drawing modes because SAM's commit_rectangle and
-        # commit_polygon reach here too, and Smart Select is meant to stay
-        # armed across clicks. Polygon keeps its tool for bulk segmentation.
-        if self.canvas.mode == self.canvas.CREATE:
-            self.activate_select_tool()
-        else:
-            self._sync_tool_actions()
-        self.canvas.select_shape(shape)
-        self.shape_selection_changed(True)
+        self.canvas.de_select_shape()
+        self.shape_selection_changed(False)
+        self.canvas.flash_committed_shape(shape)
         self._restore_canvas_focus()
 
     def _cancel_provisional_shape(self):
         self._pending_provisional_shape = None
         self.canvas.discard_provisional_shape()
+        self.workflow.finish_provisional()
         self._sync_tool_actions()
         self._restore_canvas_focus()
 
@@ -3580,13 +3619,14 @@ class MainWindow(QMainWindow, WindowMixin):
                            self.actions.createMode, self.actions.editMode,
                            self.actions.verify):
                 action.setEnabled(True)
-        self.diffc_button.setEnabled(editable)
+        self.shape_selection_changed(False)
         self.actions.saveAs.setEnabled(bool(snapshot.project_path))
         self.add_recent_file(snapshot.project_path or snapshot.source_path)
         suffix = ' [read-only]' if snapshot.read_only else ''
         self.setWindowTitle(
             '%s %s%s' % (__appname__, snapshot.source_path, suffix))
         self.update_status_bar()
+        self._start_interaction_session()
         self.canvas.setFocus(True)
         if prepared.warning:
             self.status(prepared.warning, delay=15000)
@@ -5019,6 +5059,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_timeline.set_current_frame(result.frame_ref)
         self.paint_canvas()
         self.update_status_bar()
+        self.workflow.navigate()
+        self._apply_workflow_state()
         if not playback:
             self._schedule_video_prefetch(result.frame_ref)
 
@@ -5353,6 +5395,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setWindowTitle(
             __appname__ + ' ' + result.path + ' ' + self.counter_str())
         self.update_status_bar()
+        self.workflow.navigate()
+        self._apply_workflow_state()
         self.canvas.setFocus(True)
         self._update_current_image_stats()
         if result.annotation_error:
@@ -5450,6 +5494,8 @@ class MainWindow(QMainWindow, WindowMixin):
             if (is_video_project(requested)
                     or requested.lower().endswith(VIDEO_EXTENSIONS)):
                 return self.open_video(requested)
+        starts_new_session = (
+            bool(requested) and requested not in self._path_to_idx)
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
@@ -5559,6 +5605,11 @@ class MainWindow(QMainWindow, WindowMixin):
             # Update status bar widgets
             self.update_status_bar()
             self.update_save_status(saved=True)
+            if starts_new_session:
+                self._start_interaction_session()
+            else:
+                self.workflow.navigate()
+                self._apply_workflow_state()
 
             # Default: select the last canonical shape in the unified view.
             if self.canvas.shapes:
@@ -5705,6 +5756,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_AUTO_SAVE_ENABLED] = self.auto_save_enabled.isChecked()
         settings[SETTING_AUTO_SAVE_INTERVAL] = self._get_current_auto_save_interval()
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
+        settings[SETTING_PROMPT_POLICY] = self.workflow.snapshot.prompt_policy.value
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
         settings[SETTING_LOCK_ON_VERIFY] = self.lock_on_verify_option.isChecked()
@@ -6352,6 +6404,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if getattr(self, 'gallery_stats', None) is not None:
             self.gallery_stats.clear_stats()
         self.reset_state()
+        self._start_interaction_session()
 
         self.file_list_widget.setUpdatesEnabled(False)
         try:

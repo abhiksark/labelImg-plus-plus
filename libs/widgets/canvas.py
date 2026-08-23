@@ -8,7 +8,7 @@ try:
     from PyQt5.QtWidgets import QWidget, QMenu, QApplication
 except ImportError:
     from PyQt4.QtGui import (
-        QColor, QPixmap, QPainter, QCursor, QBrush, QPicture,
+        QColor, QPixmap, QPainter, QCursor, QBrush, QPen, QPicture,
         QWidget, QMenu, QApplication
     )
     from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
@@ -166,6 +166,7 @@ class Canvas(QWidget):
         # ``shapes`` so saves, inspectors, plugins, dirty state, and undo do
         # not observe it before the user commits a class.
         self.provisional_shape = None
+        self._commit_highlight = None
         # Worker output staged for review while whole-video propagation runs.
         # These shapes are paint-only and never enter canonical collections.
         self.propagation_preview_shapes = []
@@ -1454,6 +1455,15 @@ class Canvas(QWidget):
                 if shape.selected:
                     self._draw_polygon_midpoints(p, shape)
 
+        if self._commit_highlight is not None:
+            p.save()
+            pen = QPen(self._commit_highlight.line_color)
+            pen.setWidth(max(3, int(round(4.0 / self.scale))))
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(self._commit_highlight._paint_path())
+            p.restore()
+
         # Draw keypoints and skeleton for shapes that have them
         for shape in self.shapes:
             if shape.keypoints and self.isVisible(shape):
@@ -1612,6 +1622,16 @@ class Canvas(QWidget):
         self.rebuild_spatial_index()
         self.update()
         return shape
+
+    def flash_committed_shape(self, shape, duration_ms=350):
+        """Briefly outline a committed shape without making it editable."""
+        self._commit_highlight = shape
+        self.update()
+        QTimer.singleShot(duration_ms, self._clear_commit_highlight)
+
+    def _clear_commit_highlight(self):
+        self._commit_highlight = None
+        self.update()
 
     def discard_provisional_shape(self):
         """Drop pending geometry without changing canonical document state."""
@@ -1877,6 +1897,7 @@ class Canvas(QWidget):
         self._suppress_context_menu = False
         self.current = None
         self.provisional_shape = None
+        self._commit_highlight = None
         self.propagation_preview_shapes = []
         changed = self.mode != self.EDIT
         self.mode = self.EDIT
