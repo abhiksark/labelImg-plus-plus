@@ -4,7 +4,8 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QPushButton, QWidget,
 )
@@ -185,3 +186,67 @@ def test_hiding_open_drawer_removes_application_focus_filter(
     finally:
         other.close()
         _close(window)
+
+
+def _owner_focus_probe(window):
+    probe = QWidget(window)
+    probe.setGeometry(8, 8, 240, 56)
+    first, second = _focus_pair(probe)
+    probe.show()
+    probe.raise_()
+    return probe, first, second
+
+
+def test_closing_open_drawer_removes_application_focus_filter(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    probe, first, second = _owner_focus_probe(window)
+    try:
+        window.resize(800, 600)
+        window.show()
+        window.workspace_shell.open_inspector()
+        QApplication.processEvents()
+
+        QApplication.sendEvent(window.workspace_shell, QCloseEvent())
+        window.activateWindow()
+        first.setFocus()
+        QApplication.processEvents()
+
+        QTest.keyClick(first, Qt.Key_Tab)
+        QApplication.processEvents()
+
+        assert second.hasFocus()
+    finally:
+        probe.close()
+        window.deleteLater()
+        QApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+        QApplication.processEvents()
+
+
+def test_deferred_delete_of_open_drawer_removes_application_focus_filter(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    probe, first, second = _owner_focus_probe(window)
+    try:
+        window.resize(800, 600)
+        window.show()
+        window.workspace_shell.open_inspector()
+        QApplication.processEvents()
+
+        shell = window.workspace_shell
+        shell.deleteLater()
+        QApplication.sendPostedEvents(shell, QEvent.DeferredDelete)
+        QApplication.processEvents()
+        window.activateWindow()
+        first.setFocus()
+        QApplication.processEvents()
+
+        QTest.keyClick(first, Qt.Key_Tab)
+        QApplication.processEvents()
+
+        assert second.hasFocus()
+    finally:
+        probe.close()
+        window.deleteLater()
+        QApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+        QApplication.processEvents()
