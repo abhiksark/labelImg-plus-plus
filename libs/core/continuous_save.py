@@ -30,6 +30,7 @@ class ContinuousSaveCoordinator(QObject):
         self._durable_revision = 0
         self._newest_revision = 0
         self._in_flight = None
+        self._enabled = True
         self.error = None
 
     @property
@@ -40,6 +41,25 @@ class ContinuousSaveCoordinator(QObject):
         if value != self._state:
             self._state = value
             self.stateChanged.emit(value)
+
+    @property
+    def enabled(self):
+        return self._enabled
+
+    def set_enabled(self, enabled):
+        self._enabled = bool(enabled)
+        if not self._enabled:
+            self._timer.stop()
+            if (self._in_flight is None
+                    and self._newest_revision > self._durable_revision
+                    and self._state != 'failed'):
+                self._set_state('pending')
+            return
+        if (self._in_flight is None
+                and self._newest_revision > self._durable_revision
+                and self._state != 'failed'):
+            self._set_state('pending')
+            self.flush()
 
     def reset(self, document_key, generation, durable_revision=0):
         self._timer.stop()
@@ -56,12 +76,12 @@ class ContinuousSaveCoordinator(QObject):
         if self._state == 'failed':
             return
         self._set_state('pending')
-        if self._in_flight is None:
+        if self._enabled and self._in_flight is None:
             self._timer.start(self.delay_ms)
 
     def flush(self):
         self._timer.stop()
-        if (self._in_flight is None
+        if (self._enabled and self._in_flight is None
                 and self._newest_revision > self._durable_revision):
             ticket = SaveTicket(
                 self._document_key, self._generation, self._newest_revision)
@@ -76,7 +96,9 @@ class ContinuousSaveCoordinator(QObject):
             self._durable_revision, ticket.revision)
         self._in_flight = None
         if self._newest_revision > self._durable_revision:
-            self.flush()
+            self._set_state('pending')
+            if self._enabled:
+                self.flush()
         else:
             self._set_state('saved')
             self.drained.emit()

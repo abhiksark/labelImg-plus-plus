@@ -995,6 +995,8 @@ class MainWindow(QMainWindow, WindowMixin):
             'Save each completed annotation change automatically')
         self.save_changes_automatically.toggled.connect(
             self._toggle_continuous_save)
+        self.continuous_save.set_enabled(
+            self.save_changes_automatically.isChecked())
         # Compatibility name for extensions which used the navigation toggle.
         self.auto_saving = self.save_changes_automatically
 
@@ -1606,14 +1608,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _mark_continuous_save_dirty(self, revision):
         self.continuous_save.mark_dirty(revision)
-        if not self.save_changes_automatically.isChecked():
-            self.continuous_save._timer.stop()
 
     def _toggle_continuous_save(self, enabled):
-        if enabled:
-            self.continuous_save.flush()
-        else:
-            self.continuous_save._timer.stop()
+        self.continuous_save.set_enabled(enabled)
 
     def _on_continuous_save_state_changed(self, state):
         copy = {
@@ -3024,6 +3021,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # Push command for undo support (shape already created).
             cmd = CreateShapeCommand(self, shape)
             self.undo_stack.push(cmd)
+            self.set_dirty()
 
         # fix copy and delete
         self.shape_selection_changed(True)
@@ -6614,8 +6612,6 @@ class MainWindow(QMainWindow, WindowMixin):
             self.request_open_video(ustr(filename))
 
     def _dispatch_continuous_save(self, ticket):
-        if not self.save_changes_automatically.isChecked():
-            return
         if ticket.document_key != self._continuous_document_key():
             return
         if self.document_kind == DocumentKind.VIDEO:
@@ -6792,7 +6788,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.continuous_save.complete(continuous_ticket)
             self.status('Saved superseded document to %s' % path)
             return
-        self._record_annotation_written(path)
+        self._record_annotation_written(path, image_path=request.image_path)
         if continuous_ticket is not None:
             self.continuous_save.complete(continuous_ticket)
         current_revision = (
@@ -6815,21 +6811,24 @@ class MainWindow(QMainWindow, WindowMixin):
             self.continuous_save.fail(continuous_ticket, message)
         self.status('Error saving annotation: ' + message)
 
-    def _record_annotation_written(self, path):
+    def _record_annotation_written(self, path, image_path=None):
         if getattr(self, 'dataset_snapshot', None) is None:
             return
+        target_image = image_path or self.file_path
         self.dataset_snapshot = self.dataset_snapshot.with_annotation_file(
-            path, image_path=self.file_path)
-        if self.file_path:
-            self.frame_cache.remove(self.file_path)
+            path, image_path=target_image)
+        current_image = bool(
+            target_image and target_image == self.file_path)
+        if current_image:
+            self.frame_cache.remove(target_image)
         resolver = self.dataset_snapshot.resolver
         self.gallery_widget.set_annotation_resolver(resolver)
         if hasattr(self, 'full_gallery') and self.full_gallery:
             self.full_gallery.set_annotation_resolver(resolver)
         self.annotation_catalog._json_cache.invalidate(path)
-        if self.file_path:
+        if current_image:
             self.annotation_catalog.invalidate(
-                self.file_path, snapshot=self.dataset_snapshot)
+                target_image, snapshot=self.dataset_snapshot)
 
     def save_file(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:

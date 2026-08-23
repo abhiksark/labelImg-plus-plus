@@ -79,3 +79,45 @@ def test_reset_rejects_late_completion_from_replaced_document_generation():
     assert current.document_key == 'image:/b.png'
     assert current.generation == 2
     assert current.revision == 8
+
+
+def test_disabled_coordinator_keeps_dirty_work_pending_until_reenabled():
+    coordinator = ContinuousSaveCoordinator(delay_ms=1)
+    coordinator.reset('image:/a.png', 1, 0)
+    requested = QSignalSpy(coordinator.saveRequested)
+
+    coordinator.set_enabled(False)
+    coordinator.mark_dirty(1)
+    coordinator.flush()
+    QSignalSpy(coordinator.saveRequested).wait(20)
+
+    assert coordinator.state == 'pending'
+    assert len(requested) == 0
+
+    coordinator.set_enabled(True)
+    if not requested:
+        assert requested.wait(1000)
+    assert requested[0][0].revision == 1
+    assert coordinator.state == 'saving'
+
+
+def test_disable_during_save_requeues_newer_revision_without_dispatching():
+    coordinator = ContinuousSaveCoordinator(delay_ms=1)
+    coordinator.reset('image:/a.png', 1, 0)
+    requested = QSignalSpy(coordinator.saveRequested)
+    coordinator.mark_dirty(1)
+    assert requested.wait(1000)
+    first = requested[0][0]
+
+    coordinator.set_enabled(False)
+    coordinator.mark_dirty(2)
+    coordinator.complete(first)
+    QSignalSpy(coordinator.saveRequested).wait(20)
+
+    assert coordinator.state == 'pending'
+    assert len(requested) == 1
+
+    coordinator.set_enabled(True)
+    if len(requested) < 2:
+        assert requested.wait(1000)
+    assert requested[1][0].revision == 2
