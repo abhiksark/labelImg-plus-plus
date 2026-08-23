@@ -1206,6 +1206,8 @@ class MainWindow(QMainWindow, WindowMixin):
             lambda *_args: self._schedule_view_projection())
         self.workspace_shell.layoutModeChanged.connect(
             lambda *_args: self._schedule_view_projection())
+        self.workspace_shell.drawerVisibilityChanged.connect(
+            lambda *_args: self._schedule_view_projection())
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
@@ -3113,6 +3115,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Guard selection feedback between the inspector and canvas.
         if hasattr(self, '_updating_label_selection') and self._updating_label_selection:
             return
+        restore_list_focus = self.label_list.hasFocus()
         self._updating_label_selection = True
         try:
             identity = self.current_annotation_identity()
@@ -3141,6 +3144,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.diffc_button.blockSignals(blocked)
         finally:
             self._updating_label_selection = False
+            if restore_list_focus:
+                self.label_list.setFocus(Qt.OtherFocusReason)
 
     def _annotation_visibility_changed(self, identity, visible):
         if self.document_kind == DocumentKind.VIDEO:

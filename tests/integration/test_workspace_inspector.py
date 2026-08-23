@@ -5,6 +5,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QByteArray, Qt
+from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QApplication, QDockWidget, QToolBar
 from PyQt5.QtTest import QTest
 
@@ -234,5 +235,81 @@ def test_layout_mode_change_schedules_view_reprojection(
         window.workspace_shell.set_available_width(800)
 
         assert scheduled == ['projection']
+    finally:
+        _close(window)
+
+
+def _settle_layout():
+    QApplication.processEvents()
+    QTest.qWait(5)
+    QApplication.processEvents()
+
+
+def test_drawer_transitions_settle_overlay_bounds_and_fit_projection(
+        monkeypatch, tmp_path):
+    image_path = str(tmp_path / 'wide.png')
+    image = QImage(4000, 400, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(image_path)
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.resize(800, 600)
+        window.show()
+        assert window.load_file(image_path)
+        window.set_fit_window()
+        _settle_layout()
+        closed_viewport_width = window.scroll_area.viewport().width()
+        closed_zoom = window.zoom_widget.value()
+
+        window.workspace_shell.reopen_button.click()
+        _settle_layout()
+
+        bounds = window.workspace_shell.splitter.geometry()
+        drawer = window.workspace_inspector.geometry()
+        assert window.workspace_shell.scrim.geometry() == bounds
+        assert drawer.right() == bounds.right()
+        assert drawer.top() == bounds.top()
+        assert drawer.bottom() == bounds.bottom()
+        assert window.scroll_area.viewport().width() > closed_viewport_width
+        assert window.zoom_widget.value() > closed_zoom
+        assert (window.canvas.pixmap.width() * window.canvas.scale
+                <= window.scroll_area.viewport().width() + 1)
+
+        window.workspace_inspector.collapse_button.click()
+        _settle_layout()
+
+        assert window.workspace_shell.scrim.geometry() == \
+            window.workspace_shell.splitter.geometry()
+        assert window.scroll_area.viewport().width() == closed_viewport_width
+        assert window.zoom_widget.value() == closed_zoom
+        assert window.workspace_shell.reopen_button.hasFocus()
+    finally:
+        _close(window)
+
+
+def test_crossing_breakpoint_while_drawer_is_open_reparents_once(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.resize(800, 600)
+        window.show()
+        _settle_layout()
+        window.workspace_shell.open_inspector()
+        _settle_layout()
+
+        window.resize(1200, 700)
+        _settle_layout()
+
+        assert window.workspace_shell.layout_mode == 'docked'
+        assert window.workspace_shell.splitter.widget(1) is \
+            window.workspace_inspector
+        assert window.workspace_inspector.isVisible()
+        assert window.workspace_shell.scrim.isHidden()
+
+        window.resize(800, 600)
+        _settle_layout()
+        assert window.workspace_shell.layout_mode == 'drawer'
+        assert window.workspace_inspector.isHidden()
+        assert window.workspace_shell.reopen_button.isVisible()
     finally:
         _close(window)

@@ -1,13 +1,13 @@
 """Fixed inspector and splitter shell for the Balanced workspace."""
 
 try:
-    from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+    from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
     from PyQt5.QtWidgets import (
         QApplication, QHBoxLayout, QSizePolicy, QSplitter, QTabWidget,
         QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:
-    from PyQt4.QtCore import QEvent, Qt, pyqtSignal
+    from PyQt4.QtCore import QEvent, QTimer, Qt, pyqtSignal
     from PyQt4.QtGui import (
         QApplication, QHBoxLayout, QSizePolicy, QSplitter, QTabWidget,
         QToolButton, QVBoxLayout, QWidget,
@@ -91,6 +91,7 @@ class WorkspaceSplitterShell(QWidget):
 
     inspectorCollapsedChanged = pyqtSignal(bool)
     layoutModeChanged = pyqtSignal(str)
+    drawerVisibilityChanged = pyqtSignal(bool)
 
     def __init__(self, tool_rail, canvas_column, inspector,
                  inspector_width, collapsed=False, parent=None):
@@ -100,6 +101,7 @@ class WorkspaceSplitterShell(QWidget):
         self._inspector_width = int(inspector_width)
         self._wide_collapsed_preference = bool(collapsed)
         self._drawer_open = False
+        self._drawer_transition_serial = 0
         self.layout_mode = 'docked'
 
         self.splitter = QSplitter(Qt.Horizontal, self)
@@ -157,9 +159,10 @@ class WorkspaceSplitterShell(QWidget):
             self.inspector.setParent(self)
             self.scrim.hide()
             self.reopen_button.show()
-            self._update_drawer_geometry()
+            self._schedule_drawer_settle()
             return
 
+        self._drawer_transition_serial += 1
         self._remove_focus_trap()
         self._drawer_open = False
         self.inspector.collapse_button.setAccessibleName(
@@ -183,12 +186,12 @@ class WorkspaceSplitterShell(QWidget):
             self.inspector.tabs.setFocus(Qt.OtherFocusReason)
             return
         self._drawer_open = True
-        self._update_drawer_geometry()
         self.scrim.show()
         self.scrim.raise_()
         self.inspector.show()
         self.inspector.raise_()
         self.reopen_button.hide()
+        self._schedule_drawer_settle(notify=True)
         QApplication.instance().installEventFilter(self)
         self.inspector.tabs.setFocus(Qt.OtherFocusReason)
 
@@ -203,6 +206,7 @@ class WorkspaceSplitterShell(QWidget):
         self.scrim.hide()
         self.reopen_button.show()
         self.reopen_button.setFocus(Qt.OtherFocusReason)
+        self._schedule_drawer_settle(notify=True)
 
     def set_object_count(self, count):
         self.reopen_button.setAccessibleName(
@@ -217,9 +221,23 @@ class WorkspaceSplitterShell(QWidget):
         return widget is self.inspector or (
             widget is not None and self.inspector.isAncestorOf(widget))
 
+    def _is_active_drawer_event(self, watched):
+        if not isinstance(watched, QWidget):
+            return False
+        top_level = self.window()
+        if watched.window() is not top_level:
+            return False
+        modal = QApplication.activeModalWidget()
+        if modal is not None and modal is not top_level:
+            return False
+        return QApplication.activeWindow() is top_level
+
     def eventFilter(self, watched, event):
         if (self.layout_mode != 'drawer' or not self._drawer_open
                 or event.type() != QEvent.KeyPress):
+            return super(WorkspaceSplitterShell, self).eventFilter(
+                watched, event)
+        if not self._is_active_drawer_event(watched):
             return super(WorkspaceSplitterShell, self).eventFilter(
                 watched, event)
         if event.key() == Qt.Key_Escape:
@@ -250,6 +268,26 @@ class WorkspaceSplitterShell(QWidget):
         self.inspector.tabs.setFocus(Qt.TabFocusReason)
         return True
 
+    def _schedule_drawer_settle(self, notify=False):
+        self._drawer_transition_serial += 1
+        serial = self._drawer_transition_serial
+        QTimer.singleShot(
+            0, lambda: self._settle_drawer_layout(serial, notify))
+
+    def _settle_drawer_layout(self, serial, notify):
+        if (serial != self._drawer_transition_serial
+                or self.layout_mode != 'drawer'):
+            return
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+        self._update_drawer_geometry()
+        if self._drawer_open:
+            self.scrim.raise_()
+            self.inspector.raise_()
+        if notify:
+            self.drawerVisibilityChanged.emit(self._drawer_open)
+
     def _update_drawer_geometry(self):
         if self.layout_mode != 'drawer':
             return
@@ -263,6 +301,29 @@ class WorkspaceSplitterShell(QWidget):
     def resizeEvent(self, event):
         super(WorkspaceSplitterShell, self).resizeEvent(event)
         self._update_drawer_geometry()
+
+    def _dismiss_drawer_for_lifecycle(self):
+        self._drawer_transition_serial += 1
+        self._remove_focus_trap()
+        if self.layout_mode != 'drawer' or not self._drawer_open:
+            return
+        self._drawer_open = False
+        self.inspector.hide()
+        self.scrim.hide()
+        self.reopen_button.show()
+
+    def hideEvent(self, event):
+        self._dismiss_drawer_for_lifecycle()
+        super(WorkspaceSplitterShell, self).hideEvent(event)
+
+    def closeEvent(self, event):
+        self._dismiss_drawer_for_lifecycle()
+        super(WorkspaceSplitterShell, self).closeEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.DeferredDelete:
+            self._dismiss_drawer_for_lifecycle()
+        return super(WorkspaceSplitterShell, self).event(event)
 
     def set_inspector_width(self, width):
         self._inspector_width = int(width)

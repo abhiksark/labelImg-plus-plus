@@ -156,6 +156,9 @@ def test_fit_reprojects_after_resize_and_inspector_change(tmp_path):
 
         window.resize(1200, 600)
         assert _wait(app, lambda: window.zoom_widget.value() > initial)
+        window.set_inspector_collapsed(True)
+        assert _wait(
+            app, lambda: window.workspace_shell.is_inspector_collapsed())
         resized = window.zoom_widget.value()
 
         window.set_inspector_collapsed(False)
@@ -1970,6 +1973,11 @@ class TestCanvasKeepsFocusForToolShortcuts(unittest.TestCase):
         Hooking selection would fire on arrow-key moves too and yank focus
         away mid-navigation.
         """
+        self.win.resize(1200, 700)
+        self.app.processEvents()
+        self.win.set_inspector_collapsed(False)
+        self.win.workspace_inspector.set_selected_tab('objects')
+        self.app.processEvents()
         self.win.load_file(self.paths[0])
         self.app.processEvents()
         for label in ('person', 'car'):
