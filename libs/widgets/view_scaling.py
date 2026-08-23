@@ -23,7 +23,7 @@ def fit_window_scale(viewport_width, viewport_height,
     """
     w1 = viewport_width - _EPSILON
     h1 = viewport_height - _EPSILON
-    if h1 <= 0 or pixmap_width <= 0 or pixmap_height <= 0:
+    if w1 <= 0 or h1 <= 0 or pixmap_width <= 0 or pixmap_height <= 0:
         return 1.0
     a1 = w1 / h1
     w2 = float(pixmap_width)
@@ -34,6 +34,6 @@ def fit_window_scale(viewport_width, viewport_height,
 
 def fit_width_scale(viewport_width, pixmap_width):
     """Return the scale that fits the pixmap's width to the viewport width."""
-    if pixmap_width <= 0:
+    if viewport_width <= _EPSILON or pixmap_width <= 0:
         return 1.0
     return (viewport_width - _EPSILON) / pixmap_width

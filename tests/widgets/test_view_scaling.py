@@ -46,6 +46,10 @@ class TestFitWindowScale(unittest.TestCase):
         """Viewport collapsed to the epsilon must not raise."""
         self.assertEqual(fit_window_scale(800, 2, 100, 100), 1.0)
 
+    def test_degenerate_viewport_width_returns_unit_scale(self):
+        """A collapsed width must not produce a zero or negative scale."""
+        self.assertEqual(fit_window_scale(2, 600, 100, 100), 1.0)
+
 
 class TestFitWidthScale(unittest.TestCase):
 
@@ -55,6 +59,9 @@ class TestFitWidthScale(unittest.TestCase):
 
     def test_degenerate_pixmap_returns_unit_scale(self):
         self.assertEqual(fit_width_scale(800, 0), 1.0)
+
+    def test_degenerate_viewport_returns_unit_scale(self):
+        self.assertEqual(fit_width_scale(2, 100), 1.0)
 
 
 if __name__ == '__main__':

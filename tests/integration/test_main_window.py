@@ -50,6 +50,32 @@ def _write_image(path):
     assert image.save(str(path))
 
 
+def test_initial_fit_uses_final_canvas_viewport(tmp_path):
+    """The first fit projection must use the laid-out canvas viewport."""
+    app, window = get_main_app()
+    image_path = tmp_path / 'wide.png'
+    image = QImage(1600, 900, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    try:
+        window.resize(800, 600)
+        window.show()
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(
+            app, lambda: (window.canvas.pixmap is not None
+                          and window.canvas.scale != 1.0))
+        app.processEvents()
+        viewport = window.scroll_area.viewport().rect()
+        painted_width = window.canvas.pixmap.width() * window.canvas.scale
+        painted_height = window.canvas.pixmap.height() * window.canvas.scale
+        assert painted_width <= viewport.width() + 1
+        assert painted_height <= viewport.height() + 1
+        assert window.actions.fitWindow.isChecked()
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_rectangle_class_and_tool_survive_commit_and_navigation(tmp_path):
     first, second = tmp_path / 'a.png', tmp_path / 'b.png'
     _write_image(first)

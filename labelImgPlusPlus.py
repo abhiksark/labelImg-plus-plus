@@ -85,6 +85,7 @@ from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
     clamp_inspector_width, load_prompt_policy, load_workspace_settings,
 )
+from libs.core.view_transform import ViewMode, ViewTransform
 from libs.core.annotation_workflow import (
     AnnotationTool, AnnotationWorkflow, EscapeOutcome)
 from libs.core.sam_controller import SamController
@@ -758,13 +759,12 @@ class MainWindow(QMainWindow, WindowMixin):
         # Group zoom controls into a list for easier toggling.
         zoom_actions = (self.zoom_widget, zoom_in, zoom_out,
                         zoom_org, fit_window, fit_width)
-        self.zoom_mode = self.MANUAL_ZOOM
-        self.scalers = {
-            self.FIT_WINDOW: self.scale_fit_window,
-            self.FIT_WIDTH: self.scale_fit_width,
-            # Set to one to scale to 100% when loading files.
-            self.MANUAL_ZOOM: lambda: 1,
-        }
+        # ViewTransform owns whether zoom is fit-derived or explicitly chosen.
+        # zoom_mode remains a compatibility projection for older extensions.
+        self.view_transform = ViewTransform()
+        self.zoom_mode = self.FIT_WINDOW
+        self._view_projection_scheduled = False
+        self._applying_view_projection = False
 
         light = QWidgetAction(self)
         light.setDefaultWidget(self.light_widget)
@@ -1197,8 +1197,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self._persist_inspector_width)
         self.workspace_shell.splitter.splitterMoved.connect(
             self._schedule_inspector_width_persist)
+        self.workspace_shell.splitter.splitterMoved.connect(
+            lambda *_args: self._schedule_view_projection())
         self.workspace_shell.inspectorCollapsedChanged.connect(
             self._inspector_collapsed_changed)
+        self.workspace_shell.inspectorCollapsedChanged.connect(
+            lambda *_args: self._schedule_view_projection())
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
@@ -1316,6 +1320,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.request_open_file, self.file_path or ""))
 
         # Callbacks:
+        self.zoom_widget.valueChanged.connect(self._zoom_widget_changed)
         self.zoom_widget.valueChanged.connect(self.paint_canvas)
         self.zoom_widget.valueChanged.connect(self.update_zoom_display)
         self.light_widget.valueChanged.connect(self.paint_canvas)
@@ -2242,6 +2247,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def _start_interaction_session(self):
         """Clear per-session class/tool selection when a document is replaced."""
         self.workflow.start_session()
+        self.view_transform.start_session()
+        self._sync_view_actions()
+        self._schedule_view_projection()
         self._apply_workflow_state()
 
     def _active_class_selected(self, label):
@@ -3301,13 +3309,29 @@ class MainWindow(QMainWindow, WindowMixin):
         bar = self.scroll_bars[orientation]
         bar.setValue(int(bar.value() + bar.singleStep() * units))
 
+    def _scroll_ratios(self):
+        """Capture the visible point as normalized scroll-bar positions."""
+        ratios = []
+        for orientation in (Qt.Horizontal, Qt.Vertical):
+            bar = self.scroll_bars[orientation]
+            maximum = bar.maximum()
+            ratios.append(
+                float(bar.value()) / maximum if maximum else 0.5)
+        return tuple(ratios)
+
+    def _restore_scroll_ratios(self, ratios):
+        """Restore a manual video view after its frame changes size."""
+        if self.view_transform.mode is not ViewMode.MANUAL:
+            return
+        for orientation, ratio in zip((Qt.Horizontal, Qt.Vertical), ratios):
+            bar = self.scroll_bars[orientation]
+            bar.setValue(int(round(bar.maximum() * ratio)))
+
     def set_zoom(self, value):
-        self.actions.fitWidth.setChecked(False)
-        self.actions.fitWindow.setChecked(False)
-        self.zoom_mode = self.MANUAL_ZOOM
-        # Arithmetic on scaling factor often results in float
-        # Convert to int to avoid type errors
-        self.zoom_widget.setValue(int(value))
+        self.view_transform.choose_manual(value)
+        self._sync_view_actions()
+        self.zoom_widget.setValue(self.view_transform.manual_percent)
+        self.paint_canvas()
 
     def add_zoom(self, increment=10):
         self.set_zoom(self.zoom_widget.value() + increment)
@@ -3369,15 +3393,19 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def set_fit_window(self, value=True):
         if value:
-            self.actions.fitWidth.setChecked(False)
-        self.zoom_mode = self.FIT_WINDOW if value else self.MANUAL_ZOOM
-        self.adjust_scale()
+            self.view_transform.choose_fit_window()
+        else:
+            self.view_transform.choose_manual(self.zoom_widget.value())
+        self._sync_view_actions()
+        self._schedule_view_projection()
 
     def set_fit_width(self, value=True):
         if value:
-            self.actions.fitWindow.setChecked(False)
-        self.zoom_mode = self.FIT_WIDTH if value else self.MANUAL_ZOOM
-        self.adjust_scale()
+            self.view_transform.choose_fit_width()
+        else:
+            self.view_transform.choose_manual(self.zoom_widget.value())
+        self._sync_view_actions()
+        self._schedule_view_projection()
 
     def set_light(self, value):
         self.actions.lightOrg.setChecked(int(value) == 50)
@@ -3621,8 +3649,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._materialize_video_frame(first.frame_ref.pts)
         self.set_clean()
         self.canvas.setEnabled(True)
-        self.adjust_scale(initial=True)
-        self.paint_canvas()
+        self._schedule_view_projection()
         self.toggle_actions(True)
         editable = not snapshot.read_only
         mutation_actions = (
@@ -5066,6 +5093,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _commit_video_frame(self, result, playback=False):
         assert QApplication.instance().thread() == self.thread()
+        scroll_ratios = (self._scroll_ratios()
+                         if self.view_transform.mode is ViewMode.MANUAL
+                         else None)
         self.image = result.image
         self._image_scale_factor = (
             result.display_width / self.video_snapshot.width
@@ -5091,7 +5121,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.video_model, result.frame_ref.pts)
             self.canvas.load_shapes([])
         self.video_timeline.set_current_frame(result.frame_ref)
-        self.paint_canvas()
+        self._schedule_view_projection()
+        if scroll_ratios is not None:
+            QTimer.singleShot(
+                0, lambda ratios=scroll_ratios:
+                self._restore_scroll_ratios(ratios))
         self.update_status_bar()
         self.workflow.navigate()
         self._apply_workflow_state()
@@ -5421,8 +5455,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.edge_alignment_option.isChecked()
         self.set_clean()
         self.canvas.setEnabled(True)
-        self.adjust_scale(initial=True)
-        self.paint_canvas()
+        self._schedule_view_projection()
         self.add_recent_file(result.path)
         self.toggle_actions(True)
         if result.path in self._path_to_idx:
@@ -5633,8 +5666,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 checked_action = self.grid_size_group.checkedAction()
                 self.canvas._grid_size = checked_action.data() if checked_action else 32
                 self.canvas._edge_alignment = self.edge_alignment_option.isChecked()
-            self.adjust_scale(initial=True)
-            self.paint_canvas()
+            self._schedule_view_projection()
             self.add_recent_file(self.file_path)
             self.toggle_actions(True)
             self.show_bounding_box_from_annotation_file(self.file_path)
@@ -5708,10 +5740,8 @@ class MainWindow(QMainWindow, WindowMixin):
                     annotation_path, file_path)
 
     def resizeEvent(self, event):
-        if self.canvas and not self.image.isNull()\
-           and self.zoom_mode != self.MANUAL_ZOOM:
-            self.adjust_scale()
         super(MainWindow, self).resizeEvent(event)
+        self._schedule_view_projection()
         if self._loading_veil is not None and self._loading_veil.isVisible():
             self._loading_veil.setGeometry(self.centralWidget().rect())
 
@@ -5723,19 +5753,73 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.adjustSize()
         self.canvas.update()
 
+    def _zoom_widget_changed(self, value):
+        """Treat direct spin-box input as an explicit manual zoom command."""
+        if self._applying_view_projection:
+            return
+        self.view_transform.choose_manual(value)
+        self._sync_view_actions()
+
+    def _sync_view_actions(self):
+        """Project the authoritative mode into legacy actions and state."""
+        mode = self.view_transform.mode
+        self.zoom_mode = {
+            ViewMode.FIT_WINDOW: self.FIT_WINDOW,
+            ViewMode.FIT_WIDTH: self.FIT_WIDTH,
+            ViewMode.MANUAL: self.MANUAL_ZOOM,
+        }[mode]
+        for action, checked in (
+                (self.actions.fitWindow, mode is ViewMode.FIT_WINDOW),
+                (self.actions.fitWidth, mode is ViewMode.FIT_WIDTH)):
+            blocked = action.blockSignals(True)
+            action.setChecked(checked)
+            action.blockSignals(blocked)
+
+    def _schedule_view_projection(self):
+        """Coalesce fit work until Qt has finished the current layout pass."""
+        if self._view_projection_scheduled:
+            return
+        self._view_projection_scheduled = True
+        QTimer.singleShot(0, self._apply_view_projection)
+
+    def _apply_view_projection(self):
+        """Apply the active view mode using the actual scroll-area viewport."""
+        self._view_projection_scheduled = False
+        pixmap = self.canvas.pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+        viewport = self.scroll_area.viewport().size()
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            return
+        projection = self.view_transform.project(
+            (viewport.width(), viewport.height()),
+            (pixmap.width(), pixmap.height()))
+        self._applying_view_projection = True
+        try:
+            self.zoom_widget.setValue(projection.percent)
+        finally:
+            self._applying_view_projection = False
+        self._sync_view_actions()
+        self.paint_canvas()
+
     def adjust_scale(self, initial=False):
-        value = self.scalers[self.FIT_WINDOW if initial else self.zoom_mode]()
-        self.zoom_widget.setValue(int(100 * value))
+        """Compatibility entry point; layout owns when projection is applied."""
+        if initial:
+            self.view_transform.choose_fit_window()
+            self._sync_view_actions()
+        self._schedule_view_projection()
 
     def scale_fit_window(self):
-        """Figure out the size of the pixmap in order to fit the main widget."""
+        """Return the legacy fit ratio for the actual canvas viewport."""
+        viewport = self.scroll_area.viewport().size()
         return view_scaling.fit_window_scale(
-            self.centralWidget().width(), self.centralWidget().height(),
+            viewport.width(), viewport.height(),
             self.canvas.pixmap.width(), self.canvas.pixmap.height())
 
     def scale_fit_width(self):
+        viewport = self.scroll_area.viewport().size()
         return view_scaling.fit_width_scale(
-            self.centralWidget().width(), self.canvas.pixmap.width())
+            viewport.width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
         if self._reset_all_in_progress:
