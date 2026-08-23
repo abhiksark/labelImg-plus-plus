@@ -171,6 +171,43 @@ def test_annotation_session_is_the_only_visible_class_strategy_surface(
         app.processEvents()
 
 
+def test_changing_fixed_class_preserves_dirty_annotation_and_labels_next(
+        tmp_path):
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        existing = _finalise_rectangle(window)
+        _enter_class(window, 'dog')
+        app.processEvents()
+
+        assert window.canvas.shapes == [existing]
+        assert existing.label == 'dog'
+        assert window.dirty
+
+        card = window.inspector_context_card
+        card.class_strategy_combo.setCurrentIndex(
+            card.class_strategy_combo.findData('fixed'))
+        card.fixed_class_combo.setCurrentIndex(
+            card.fixed_class_combo.findText('car'))
+        app.processEvents()
+
+        assert window.canvas.shapes == [existing]
+        assert window.dirty
+        assert card.fixed_class_combo.currentText() == 'car'
+        assert window.default_label_combo_box.cb.currentText() == 'car'
+
+        created = _finalise_rectangle(window, 55, 10)
+        app.processEvents()
+        assert window.canvas.shapes == [existing, created]
+        assert [shape.label for shape in window.canvas.shapes] == [
+            'dog', 'car']
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
 def test_escape_discards_provisional_shape_without_document_mutation(tmp_path):
     app, window = get_main_app()
     try:
