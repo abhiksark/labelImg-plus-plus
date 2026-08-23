@@ -76,6 +76,146 @@ def test_initial_fit_uses_final_canvas_viewport(tmp_path):
         window.close()
 
 
+def test_opening_another_standalone_image_starts_a_fresh_view_session(
+        tmp_path):
+    """Replacement content must not inherit manual zoom or armed tools."""
+    first, second = tmp_path / 'first.png', tmp_path / 'second.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        window.show()
+        window.request_open_file(str(first), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(first))
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window.set_zoom(125)
+
+        window.request_open_file(str(second), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.view_transform.mode.value == 'fit_window'
+        assert window.actions.fitWindow.isChecked()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_manual_zoom_survives_dataset_navigation(tmp_path):
+    """Navigation within one dataset retains an explicitly selected zoom."""
+    first, second = tmp_path / 'first.png', tmp_path / 'second.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window.set_zoom(125)
+
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.zoom_widget.value() == 125
+        assert window.view_transform.mode.value == 'manual'
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_direct_zoom_widget_input_selects_manual_mode(tmp_path):
+    """Typing a zoom percentage must take ownership away from fit mode."""
+    image_path = tmp_path / 'image.png'
+    _write_image(image_path)
+    _app, window = get_main_app()
+    try:
+        assert window.load_file(str(image_path))
+        window.set_fit_window()
+
+        window.zoom_widget.setValue(125)
+
+        assert window.view_transform.mode.value == 'manual'
+        assert not window.actions.fitWindow.isChecked()
+        assert not window.actions.fitWidth.isChecked()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_fit_reprojects_after_resize_and_inspector_change(tmp_path):
+    """Layout changes reproject the active fit mode from the canvas viewport."""
+    image_path = tmp_path / 'large.png'
+    image = QImage(1600, 900, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    app, window = get_main_app()
+    try:
+        window.resize(800, 600)
+        window.show()
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(app, lambda: window.canvas.scale != 1.0)
+        initial = window.zoom_widget.value()
+
+        window.resize(1200, 600)
+        assert _wait(app, lambda: window.zoom_widget.value() > initial)
+        resized = window.zoom_widget.value()
+
+        window.set_inspector_collapsed(False)
+        assert _wait(app, lambda: window.zoom_widget.value() < resized)
+        window.set_inspector_collapsed(True)
+        assert _wait(app, lambda: window.zoom_widget.value() == resized)
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_manual_video_scroll_restores_from_projection(monkeypatch):
+    """A manual video frame restores ratios inside the projection callback."""
+    image = QImage(1600, 1200, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    _app, window = get_main_app()
+    restored = []
+    try:
+        window.resize(800, 600)
+        window.show()
+        window._set_document_kind(DocumentKind.VIDEO)
+        window.video_snapshot = SimpleNamespace(
+            width=1600, height=1200, read_only=False,
+            source_path='test.mp4', project_path=None)
+        window.video_frame_states = ()
+        window.video_model = None
+        monkeypatch.setattr(window, '_materialize_video_frame',
+                            lambda _pts: None)
+        monkeypatch.setattr(window.video_timeline, 'set_current_frame',
+                            lambda _frame_ref: None)
+        monkeypatch.setattr(window, '_restore_scroll_ratios',
+                            lambda ratios: restored.append(ratios))
+        first = SimpleNamespace(
+            image=image, display_width=1600,
+            frame_ref=SimpleNamespace(pts=1))
+        window._commit_video_frame(first, playback=True)
+        window._apply_view_projection()
+        window.set_zoom(125)
+        _app.processEvents()
+        horizontal = window.scroll_bars[Qt.Horizontal]
+        vertical = window.scroll_bars[Qt.Vertical]
+        horizontal.setValue(horizontal.maximum() // 3)
+        vertical.setValue(vertical.maximum() * 2 // 3)
+        expected = (
+            float(horizontal.value()) / horizontal.maximum(),
+            float(vertical.value()) / vertical.maximum())
+        second = SimpleNamespace(
+            image=image, display_width=1600,
+            frame_ref=SimpleNamespace(pts=2))
+
+        window._commit_video_frame(second, playback=True)
+        assert restored == []
+        window._apply_view_projection()
+
+        assert restored == [expected]
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_rectangle_class_and_tool_survive_commit_and_navigation(tmp_path):
     first, second = tmp_path / 'a.png', tmp_path / 'b.png'
     _write_image(first)

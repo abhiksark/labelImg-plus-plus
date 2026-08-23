@@ -290,6 +290,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_decode_in_flight = False
         self._video_prefetch_handle = None
         self.current_video_frame_ref = None
+        self._pending_video_scroll_ratios = None
         self._video_playback_speed = 1.0
         self._video_play_started_wall = None
         self._video_play_started_seconds = None
@@ -1809,6 +1810,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def reset_state(self):
         self._dismiss_class_picker()
+        self._pending_video_scroll_ratios = None
         self._plugin_document_ready = False
         self._restart_workers_if_needed()
         self._close_video_decoder()
@@ -5093,9 +5095,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _commit_video_frame(self, result, playback=False):
         assert QApplication.instance().thread() == self.thread()
-        scroll_ratios = (self._scroll_ratios()
-                         if self.view_transform.mode is ViewMode.MANUAL
-                         else None)
+        self._pending_video_scroll_ratios = (
+            self._scroll_ratios()
+            if self.view_transform.mode is ViewMode.MANUAL else None)
         self.image = result.image
         self._image_scale_factor = (
             result.display_width / self.video_snapshot.width
@@ -5122,10 +5124,6 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.load_shapes([])
         self.video_timeline.set_current_frame(result.frame_ref)
         self._schedule_view_projection()
-        if scroll_ratios is not None:
-            QTimer.singleShot(
-                0, lambda ratios=scroll_ratios:
-                self._restore_scroll_ratios(ratios))
         self.update_status_bar()
         self.workflow.navigate()
         self._apply_workflow_state()
@@ -5401,6 +5399,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if replacement_snapshot is not None:
             self._commit_dataset_snapshot(replacement_snapshot)
         self._commit_image_result(result)
+        if replacement_snapshot is not None:
+            self._start_interaction_session()
         self.frame_cache.put(result)
         self._pending_navigation_index = None
         self._hide_loading_veil()
@@ -5801,6 +5801,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self._applying_view_projection = False
         self._sync_view_actions()
         self.paint_canvas()
+        scroll_ratios = self._pending_video_scroll_ratios
+        self._pending_video_scroll_ratios = None
+        if scroll_ratios is not None:
+            self._restore_scroll_ratios(scroll_ratios)
 
     def adjust_scale(self, initial=False):
         """Compatibility entry point; layout owns when projection is applied."""

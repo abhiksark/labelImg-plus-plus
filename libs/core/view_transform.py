@@ -47,7 +47,25 @@ class ViewTransform:
             return ViewProjection(self.mode, self.manual_percent)
         if self.mode is ViewMode.FIT_WIDTH:
             scale = view_scaling.fit_width_scale(viewport[0], pixmap[0])
+            maximum_percent = self._maximum_width_percent(viewport, pixmap)
         else:
             scale = view_scaling.fit_window_scale(
                 viewport[0], viewport[1], pixmap[0], pixmap[1])
-        return ViewProjection(self.mode, max(1, int(round(scale * 100))))
+            maximum_percent = self._maximum_window_percent(
+                viewport, pixmap)
+        percent = min(int(round(scale * 100)), maximum_percent)
+        return ViewProjection(self.mode, max(1, percent))
+
+    @staticmethod
+    def _maximum_width_percent(viewport, pixmap):
+        if pixmap[0] <= 0:
+            return 1
+        return max(1, int(viewport[0] * 100 // pixmap[0]))
+
+    @classmethod
+    def _maximum_window_percent(cls, viewport, pixmap):
+        if pixmap[1] <= 0:
+            return cls._maximum_width_percent(viewport, pixmap)
+        return min(
+            cls._maximum_width_percent(viewport, pixmap),
+            max(1, int(viewport[1] * 100 // pixmap[1])))
