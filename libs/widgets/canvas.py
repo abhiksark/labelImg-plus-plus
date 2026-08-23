@@ -135,6 +135,9 @@ class Canvas(QWidget):
     shapeMoved = pyqtSignal()
     drawingPolygon = pyqtSignal(bool)
     modeChanged = pyqtSignal(int)
+    # Emitted only when a user Escape actually returns the canvas to EDIT.
+    # Programmatic mode projection never emits this signal.
+    escapeToEdit = pyqtSignal()
     # A canvas click was ignored because unnamed geometry is still pending.
     provisionalClickBlocked = pyqtSignal()
     # Emitted on polygon vertex insert / remove / drag-move with the
@@ -482,29 +485,31 @@ class Canvas(QWidget):
         """Abort any in-flight gesture and return the canvas to EDIT."""
         self._end_pan()
         if self.cancel_edit_drag_draw():
-            return
+            return False
         if self._freehand_active:
             # The freehand path never called handle_drawing, so no
             # drawingPolygon(True) is outstanding to pair.
             self._freehand_active = False
             self._freehand_points = []
             self.update()
-            return
+            return False
         if self.current is not None:
             self.current = None
             self.set_hiding(False)
             self.drawingPolygon.emit(False)
             self.prev_point = QPointF()
             self.update()
-            return
+            return False
         if self.mode == self.KEYPOINT_MODE:
             self.exit_keypoint_mode()
-            return
+            return False
         self.prev_point = QPointF()
         # set_editing already emits modeChanged only on a real change, and
         # does not deselect -- Escape drops the tool, not the selection.
+        changed = self.mode != self.EDIT
         self.set_editing(True)
         self.update()
+        return changed
 
     def un_highlight(self, shape=None):
         if shape is None or shape == self.h_shape:
@@ -1717,7 +1722,8 @@ class Canvas(QWidget):
             return
 
         if key == Qt.Key_Escape:
-            self.cancel_to_edit()
+            if self.cancel_to_edit():
+                self.escapeToEdit.emit()
         elif key == Qt.Key_Return and self.can_close_shape():
             self.finalise()
         elif (key == Qt.Key_Z and mods == Qt.ControlModifier

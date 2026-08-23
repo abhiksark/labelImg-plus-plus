@@ -100,6 +100,31 @@ def test_escape_discards_provisional_shape_without_document_mutation(tmp_path):
         app.processEvents()
 
 
+def test_canvas_escape_cancels_provisional_before_selecting_tool(tmp_path):
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        _finalise_rectangle(window)
+        assert window.workflow.snapshot.provisional
+
+        QTest.keyClick(window.canvas, Qt.Key_Escape)
+        app.processEvents()
+        assert window.canvas.provisional_shape is None
+        assert not window.workflow.snapshot.provisional
+        assert window.workflow.snapshot.active_tool.value == 'rectangle'
+        assert window.canvas.mode == window.canvas.CREATE
+
+        QTest.keyClick(window.canvas, Qt.Key_Escape)
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool.value == 'select'
+        assert window.canvas.mode == window.canvas.EDIT
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
 def test_active_class_reuses_after_required_confirmation(tmp_path):
     app, window = get_main_app()
     try:

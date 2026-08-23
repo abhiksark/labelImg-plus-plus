@@ -14,6 +14,7 @@ import tempfile
 import shutil
 import time
 import unittest
+from types import SimpleNamespace
 
 # Set offscreen platform for headless testing
 if 'QT_QPA_PLATFORM' not in os.environ:
@@ -27,7 +28,7 @@ from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QMessageBox, QToolButton  # noqa: E402
 
-from labelImgPlusPlus import get_main_app  # noqa: E402
+from labelImgPlusPlus import DocumentKind, get_main_app  # noqa: E402
 from libs.core.annotation_workflow import AnnotationTool  # noqa: E402
 from libs.core.shape import Shape  # noqa: E402
 from libs.formats.annotation_paths import annotation_output_base  # noqa: E402
@@ -93,6 +94,188 @@ def test_new_dataset_clears_selection_but_retains_class_choices(tmp_path):
     finally:
         window.dirty = False
         window.close()
+
+
+def test_polygon_class_and_tool_survive_commit_and_navigation(tmp_path):
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window.canvas.commit_polygon(((2, 2), (20, 2), (12, 20)))
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.POLYGON
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+        assert window.canvas.selected_shape is None
+
+        window.set_clean()
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_canvas_escape_selects_workflow_before_image_navigation(tmp_path):
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window._active_class_selected('vehicle')
+        window.activate_box_tool()
+
+        QTest.keyClick(window.canvas, Qt.Key_Escape)
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.canvas.mode == window.canvas.EDIT
+
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.canvas.mode == window.canvas.EDIT
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_object_list_selection_enters_select_without_resetting_polygon(tmp_path):
+    image_path = tmp_path / 'one.png'
+    _write_image(image_path)
+    app, window = get_main_app()
+    try:
+        assert window.load_file(str(image_path))
+        shape = Shape(label='vehicle')
+        for point in ((5, 5), (40, 5), (40, 40), (5, 40)):
+            shape.add_point(QPointF(*point))
+        shape.close()
+        window.canvas.shapes.append(shape)
+        window.add_label(shape)
+        identity = window.annotation_model.identity_for_shape(shape)
+        window.activate_polygon_tool()
+
+        # Navigation synchronizes rows programmatically and must preserve the
+        # armed tool.
+        window._select_annotation_identity(identity)
+        assert window.workflow.snapshot.active_tool is AnnotationTool.POLYGON
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+
+        index = window.annotation_proxy.index(0, 0)
+        window.label_list.selectionModel().clearSelection()
+        window.label_list.selectionModel().setCurrentIndex(
+            index, window.label_list.selectionModel().ClearAndSelect)
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.canvas.selected_shape is shape
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_opening_standalone_image_starts_new_workflow_session(tmp_path):
+    image_path = tmp_path / 'one.png'
+    _write_image(image_path)
+    _app, window = get_main_app()
+    try:
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        assert window.load_file(str(image_path))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_video_and_project_commits_start_new_workflow_sessions(
+        tmp_path, monkeypatch):
+    image = QImage(64, 48, QImage.Format_RGB32)
+    image.fill(Qt.white)
+
+    def prepared(source_path, project_path):
+        frame_ref = SimpleNamespace(pts=0)
+        frame = SimpleNamespace(
+            image=image, display_width=64, frame_ref=frame_ref,
+            cache_key=('video', 'test', str(source_path)), byte_size=64 * 48 * 4)
+        snapshot = SimpleNamespace(
+            initial_frame=frame, revision=0, source_path=str(source_path),
+            project_path=str(project_path), width=64, height=48,
+            read_only=False, fingerprint='test', stream_index=0,
+            time_base_num=1, time_base_den=12, duration_pts=2,
+            start_pts=0, average_rate_num=12, average_rate_den=1)
+        return SimpleNamespace(
+            snapshot=snapshot, decoder=None, tracks=(), observations=(),
+            frame_states=(), classes=(), gaps=(), warning=None)
+
+    app, window = get_main_app()
+    try:
+        monkeypatch.setattr(window, '_refresh_video_timeline_markers',
+                            lambda: None)
+        monkeypatch.setattr(window, '_materialize_video_frame',
+                            lambda _pts: None)
+        monkeypatch.setattr(window, 'adjust_scale',
+                            lambda initial=False: None)
+        monkeypatch.setattr(window, 'paint_canvas', lambda: None)
+        monkeypatch.setattr(window, 'update_status_bar', lambda: None)
+        monkeypatch.setattr(window, '_publish_plugin_document',
+                            lambda **_kwargs: None)
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window._commit_video_open(
+            prepared(tmp_path / 'clip.mp4', tmp_path / 'clip.sqlite'))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window._commit_video_open(
+            prepared(tmp_path / 'clip.mp4', tmp_path / 'clip.sqlite'))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+
+
+def test_video_frame_commit_preserves_active_polygon_workflow(monkeypatch):
+    image = QImage(64, 48, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    app, window = get_main_app()
+    try:
+        window._set_document_kind(DocumentKind.VIDEO)
+        window.video_snapshot = SimpleNamespace(
+            width=64, height=48, read_only=False,
+            source_path='test.mp4', project_path=None)
+        window.video_frame_states = ()
+        window.video_model = None
+        monkeypatch.setattr(window, '_materialize_video_frame',
+                            lambda _pts: None)
+        monkeypatch.setattr(window.video_timeline, 'set_current_frame',
+                            lambda _frame_ref: None)
+        monkeypatch.setattr(window, 'paint_canvas', lambda: None)
+        monkeypatch.setattr(window, 'update_status_bar', lambda: None)
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+
+        result = SimpleNamespace(
+            image=image, display_width=64,
+            frame_ref=SimpleNamespace(pts=1))
+        window._commit_video_frame(result, playback=True)
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.workflow.snapshot.active_tool is AnnotationTool.POLYGON
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
 
 
 class TestMainWindowFileOperations(unittest.TestCase):

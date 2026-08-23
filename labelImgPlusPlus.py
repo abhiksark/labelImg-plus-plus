@@ -85,7 +85,8 @@ from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
     clamp_inspector_width, load_prompt_policy, load_workspace_settings,
 )
-from libs.core.annotation_workflow import AnnotationTool, AnnotationWorkflow
+from libs.core.annotation_workflow import (
+    AnnotationTool, AnnotationWorkflow, EscapeOutcome)
 from libs.core.sam_controller import SamController
 from libs.core.sam_types import normalize_sam_output_mode
 from libs.core.annotation_catalog import AnnotationCatalog
@@ -353,6 +354,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.prev_label_text = ''
         self._session_last_class = None
         self._pending_provisional_shape = None
+        self._programmatic_annotation_selection = False
 
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
@@ -1226,6 +1228,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
+        self.canvas.escapeToEdit.connect(self._on_canvas_escape_to_edit)
         self.canvas.provisionalClickBlocked.connect(
             self._on_provisional_click_blocked)
         self._apply_workflow_state()
@@ -1971,16 +1974,20 @@ class MainWindow(QMainWindow, WindowMixin):
         return self.annotation_model.shape_at(index)
 
     def _select_annotation_identity(self, identity):
-        source = self.annotation_model.index_for_identity(identity)
-        self.annotation_model.set_selected_identity(identity)
-        if not source.isValid():
-            self.label_list.clearSelection()
-            return
-        proxy = self.annotation_proxy.mapFromSource(source)
-        if proxy.isValid():
-            self.label_list.selectionModel().setCurrentIndex(
-                proxy, QItemSelectionModel.ClearAndSelect |
-                QItemSelectionModel.Rows)
+        self._programmatic_annotation_selection = True
+        try:
+            source = self.annotation_model.index_for_identity(identity)
+            self.annotation_model.set_selected_identity(identity)
+            if not source.isValid():
+                self.label_list.clearSelection()
+                return
+            proxy = self.annotation_proxy.mapFromSource(source)
+            if proxy.isValid():
+                self.label_list.selectionModel().setCurrentIndex(
+                    proxy, QItemSelectionModel.ClearAndSelect |
+                    QItemSelectionModel.Rows)
+        finally:
+            self._programmatic_annotation_selection = False
 
     def add_recent_file(self, file_path):
         if file_path in self.recent_files:
@@ -2281,6 +2288,19 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.create_polygon.setEnabled(enabled)
             self.actions.editMode.setEnabled(False)
         self._sync_tool_actions(mode)
+
+    def _on_canvas_escape_to_edit(self):
+        """Project a user Escape into the workflow without mistaking resets.
+
+        Canvas emits ``escapeToEdit`` only for a physical Escape that changed
+        its mode.  Navigation and reset projections use ``modeChanged`` but
+        never this signal, so they retain their persistent drawing tool.
+        """
+        outcome = self.workflow.escape()
+        if outcome is EscapeOutcome.CANCEL_PROVISIONAL:
+            self._dismiss_class_picker(discard=False)
+            self._cancel_provisional_shape()
+        self._apply_workflow_state()
 
     def _sync_tool_actions(self, _mode=None):
         """Mirror the authoritative canvas mode into the exclusive actions."""
@@ -3085,6 +3105,9 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 shape = self.current_shape()
                 track = None
+            if (shape is not None
+                    and not self._programmatic_annotation_selection):
+                self.activate_select_tool()
             if shape is not None and self.canvas.editing():
                 self._no_selection_slot = True
                 self.canvas.select_shape(shape)

@@ -742,6 +742,9 @@ class _DrawFirstBase(unittest.TestCase):
         self.canvas.newShape.connect(lambda: self.log.append(('new',)))
         self.modes = []
         self.canvas.modeChanged.connect(self.modes.append)
+        self.escape_to_edit = []
+        self.canvas.escapeToEdit.connect(
+            lambda: self.escape_to_edit.append(self.canvas.mode))
 
     @staticmethod
     def _mouse(kind, x, y, button=Qt.LeftButton, buttons=Qt.LeftButton):
@@ -1024,6 +1027,18 @@ class TestCanvasEscape(_DrawFirstBase):
 
         self.assertEqual(self.canvas.mode, Canvas.EDIT)
         self.assertEqual(self.modes, [])
+        self.assertEqual(self.escape_to_edit, [])
+
+    def test_escape_to_edit_signal_is_only_user_escape_transition(self):
+        self.canvas.set_editing(False)
+        self.escape_to_edit.clear()
+
+        self.canvas.set_editing(True)
+        self.assertEqual(self.escape_to_edit, [])
+
+        self.canvas.set_editing(False)
+        self.canvas.keyPressEvent(self._escape())
+        self.assertEqual(self.escape_to_edit, [Canvas.EDIT])
 
     def test_escape_cancels_an_in_flight_polygon_before_leaving(self):
         self.canvas.set_polygon_drawing(True)
