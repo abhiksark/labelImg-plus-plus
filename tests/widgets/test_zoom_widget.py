@@ -38,6 +38,21 @@ class TestZoomWidget(unittest.TestCase):
         widget.setValue(150)
         self.assertEqual(widget.value(), 150)
 
+    def test_set_value_represents_positive_fractional_fit_percent(self):
+        """A fit projection below one percent remains usable by the widget."""
+        widget = ZoomWidget(value=100)
+
+        widget.setValue(0.49)
+
+        self.assertAlmostEqual(widget.value(), 0.49)
+        self.assertGreater(widget.value(), 0)
+
+    def test_whole_percent_display_remains_compact(self):
+        """Normal manual zoom does not gain a distracting decimal suffix."""
+        widget = ZoomWidget(value=100)
+
+        self.assertEqual(widget.text(), '100 %')
+
     def test_value_range(self):
         """Test zoom value stays within range."""
         widget = ZoomWidget(value=100)
@@ -59,10 +74,10 @@ class TestZoomWidget(unittest.TestCase):
         self.assertEqual(len(signal_received), 1)
         self.assertEqual(signal_received[0], 120)
 
-    def test_range_is_1_to_500(self):
-        """Test ZoomWidget range is 1-500."""
+    def test_range_is_positive_to_500(self):
+        """Test ZoomWidget permits positive fractional fit percentages."""
         widget = ZoomWidget(value=100)
-        self.assertEqual(widget.minimum(), 1)
+        self.assertGreater(widget.minimum(), 0)
         self.assertEqual(widget.maximum(), 500)
 
     def test_suffix(self):

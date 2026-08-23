@@ -1779,7 +1779,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def update_zoom_display(self):
         """Update zoom level in status bar."""
         if self.zoom_widget:
-            self.label_zoom.setText(f'Zoom: {self.zoom_widget.value()}%')
+            self.label_zoom.setText(
+                f'Zoom: {self.zoom_widget.cleanText()}%')
 
     def _update_save_status_style(self, saved):
         """Update save status indicator style based on theme."""

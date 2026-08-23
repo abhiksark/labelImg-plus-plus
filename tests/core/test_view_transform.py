@@ -39,6 +39,17 @@ def test_fit_width_never_rounds_up_past_the_viewport():
     assert 1600 * projection.percent <= 81200
 
 
+def test_fit_window_keeps_a_positive_fractional_percent_below_one():
+    """A very large image must fit without being rounded up to one percent."""
+    state = ViewTransform()
+    state.choose_fit_window()
+
+    projection = state.project((100, 100), (20000, 20000))
+
+    assert 0 < projection.percent < 1
+    assert 20000 * projection.percent / 100 <= 100
+
+
 def test_start_session_returns_manual_zoom_to_fit_window():
     """A new document session discards an explicit zoom selection."""
     state = ViewTransform()
