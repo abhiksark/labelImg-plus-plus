@@ -2,8 +2,7 @@
 
 **Date:** 2026-08-24
 
-**Status:** Direction approved in chat; revised written specification awaiting
-review
+**Status:** Approved in chat on 2026-08-24
 
 **Scope:** Image annotation, VFR video annotation, contextual AI assistance,
 responsive layout, persistence, and recovery
