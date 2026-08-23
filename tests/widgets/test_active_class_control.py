@@ -35,3 +35,25 @@ def test_prompt_confirmation_emits_the_confirm_each_policy():
     control.confirm_each.setChecked(True)
 
     assert spy[-1] == ['confirm_each']
+
+
+def test_placeholder_uses_the_editable_line_edit_when_combo_lacks_the_qt5_api():
+    class LegacyLineEdit(object):
+        def __init__(self):
+            self.placeholder = None
+
+        def setPlaceholderText(self, value):
+            self.placeholder = value
+
+    class LegacyCombo(object):
+        def __init__(self):
+            self.edit = LegacyLineEdit()
+
+        def lineEdit(self):
+            return self.edit
+
+    combo = LegacyCombo()
+
+    ActiveClassControl._set_placeholder_text(combo)
+
+    assert combo.edit.placeholder == 'Choose a class'

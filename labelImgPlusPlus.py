@@ -3114,12 +3114,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self._dismiss_class_picker(discard=False)
         self._pending_provisional_shape = shape
 
-        if self.use_default_label_checkbox.isChecked():
-            text = getattr(self, 'default_label', '')
-            if text:
-                self._commit_provisional_shape(text)
-            else:
-                self._cancel_provisional_shape()
+        text = self.active_class_control.active_class()
+        if text and not self.active_class_control.confirm_each.isChecked():
+            self._commit_provisional_shape(text)
             return
         if self.single_class_mode.isChecked() and self._session_last_class:
             self._commit_provisional_shape(self._session_last_class)

@@ -849,6 +849,23 @@ class TestMainWindowAnnotations(unittest.TestCase):
         self.assertEqual(len(self.win.canvas.shapes), 1)
         self.assertEqual(self.win.canvas.shapes[0].label, 'person')
 
+    def test_completed_rectangle_uses_the_active_class_control(self):
+        """A completed shape must not retain a removed legacy control path."""
+        try:
+            self.win.active_class_control.set_active_class('vehicle')
+            existing_count = len(self.win.canvas.shapes)
+
+            self.win.canvas.commit_rectangle((10, 10, 60, 60))
+            self.app.processEvents()
+
+            self.assertIsNone(self.win.canvas.provisional_shape)
+            self.assertEqual(len(self.win.canvas.shapes), existing_count + 1)
+            self.assertEqual(self.win.canvas.shapes[-1].label, 'vehicle')
+        finally:
+            self.win.canvas.load_shapes([])
+            self.win.annotation_model.clear()
+            self.win.set_clean()
+
     def test_delete_shape(self):
         """Test deleting an annotation."""
         # Add shape

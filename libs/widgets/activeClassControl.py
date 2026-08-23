@@ -28,7 +28,7 @@ class ActiveClassControl(QWidget):
         self.combo = QComboBox(self)
         self.combo.setEditable(True)
         self.combo.setAccessibleName('Active annotation class')
-        self.combo.setPlaceholderText('Choose a class')
+        self._set_placeholder_text(self.combo)
         self.combo.activated.connect(
             lambda _index: self._choose(self.combo.currentText()))
         self.confirm_each = QCheckBox('Ask for every object', self)
@@ -41,6 +41,13 @@ class ActiveClassControl(QWidget):
         layout.addWidget(QLabel('Active class', self))
         layout.addWidget(self.combo)
         layout.addWidget(self.confirm_each)
+
+    @staticmethod
+    def _set_placeholder_text(combo):
+        try:
+            combo.setPlaceholderText('Choose a class')
+        except AttributeError:
+            combo.lineEdit().setPlaceholderText('Choose a class')
 
     def set_choices(self, labels):
         current = self.active_class()
