@@ -1,5 +1,88 @@
 # Screenshots
 
+## Continuous image workflow 2026-08-24
+
+`continuous-workflow-2026-08-24/` is the deterministic offscreen Qt
+acceptance matrix for the choose-once, draw-twice, continuously saved image
+workflow. Regenerate it with:
+
+```bash
+QT_QPA_PLATFORM=offscreen QT_AUTO_SCREEN_SCALE_FACTOR=0 QT_SCALE_FACTOR=1 \
+  python tools/ux/capture_workspace_matrix.py
+```
+
+Every scenario is captured in light and dark themes at 800x600, 960x640,
+1366x768, and 1440x900. The exact artifacts are:
+
+- Empty workspace:
+  `empty-workspace-light-800x600.png`,
+  `empty-workspace-dark-800x600.png`,
+  `empty-workspace-light-960x640.png`,
+  `empty-workspace-dark-960x640.png`,
+  `empty-workspace-light-1366x768.png`,
+  `empty-workspace-dark-1366x768.png`,
+  `empty-workspace-light-1440x900.png`, and
+  `empty-workspace-dark-1440x900.png`.
+- First image fitted to the canvas:
+  `first-image-fit-light-800x600.png`,
+  `first-image-fit-dark-800x600.png`,
+  `first-image-fit-light-960x640.png`,
+  `first-image-fit-dark-960x640.png`,
+  `first-image-fit-light-1366x768.png`,
+  `first-image-fit-dark-1366x768.png`,
+  `first-image-fit-light-1440x900.png`, and
+  `first-image-fit-dark-1440x900.png`.
+- Two committed rectangles with Rectangle still active:
+  `two-rectangles-light-800x600.png`,
+  `two-rectangles-dark-800x600.png`,
+  `two-rectangles-light-960x640.png`,
+  `two-rectangles-dark-960x640.png`,
+  `two-rectangles-light-1366x768.png`,
+  `two-rectangles-dark-1366x768.png`,
+  `two-rectangles-light-1440x900.png`, and
+  `two-rectangles-dark-1440x900.png`.
+- Inspector open:
+  `inspector-open-light-800x600.png`,
+  `inspector-open-dark-800x600.png`,
+  `inspector-open-light-960x640.png`,
+  `inspector-open-dark-960x640.png`,
+  `inspector-open-light-1366x768.png`,
+  `inspector-open-dark-1366x768.png`,
+  `inspector-open-light-1440x900.png`, and
+  `inspector-open-dark-1440x900.png`.
+- Inspector closed:
+  `inspector-closed-light-800x600.png`,
+  `inspector-closed-dark-800x600.png`,
+  `inspector-closed-light-960x640.png`,
+  `inspector-closed-dark-960x640.png`,
+  `inspector-closed-light-1366x768.png`,
+  `inspector-closed-dark-1366x768.png`,
+  `inspector-closed-light-1440x900.png`, and
+  `inspector-closed-dark-1440x900.png`.
+- Saving:
+  `saving-light-800x600.png`, `saving-dark-800x600.png`,
+  `saving-light-960x640.png`, `saving-dark-960x640.png`,
+  `saving-light-1366x768.png`, `saving-dark-1366x768.png`,
+  `saving-light-1440x900.png`, and `saving-dark-1440x900.png`.
+- Saved:
+  `saved-light-800x600.png`, `saved-dark-800x600.png`,
+  `saved-light-960x640.png`, `saved-dark-960x640.png`,
+  `saved-light-1366x768.png`, `saved-dark-1366x768.png`,
+  `saved-light-1440x900.png`, and `saved-dark-1440x900.png`.
+- Save failed:
+  `save-failed-light-800x600.png`,
+  `save-failed-dark-800x600.png`,
+  `save-failed-light-960x640.png`,
+  `save-failed-dark-960x640.png`,
+  `save-failed-light-1366x768.png`,
+  `save-failed-dark-1366x768.png`,
+  `save-failed-light-1440x900.png`, and
+  `save-failed-dark-1440x900.png`.
+
+The harness verifies all 64 PNGs are non-empty and match the dimensions in
+their filenames. The matching acceptance record is
+[`docs/testing/ux-remediation-2026-08-23.md`](../testing/ux-remediation-2026-08-23.md#continuous-image-workflow-acceptance--2026-08-24).
+
 ## Workspace 3.2
 
 `workspace-3.2-balanced/` contains the accepted browser-lab contract for the
