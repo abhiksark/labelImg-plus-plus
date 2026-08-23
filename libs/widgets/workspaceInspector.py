@@ -320,11 +320,6 @@ class WorkspaceSplitterShell(QWidget):
         self._dismiss_drawer_for_lifecycle()
         super(WorkspaceSplitterShell, self).closeEvent(event)
 
-    def event(self, event):
-        if event.type() == QEvent.DeferredDelete:
-            self._dismiss_drawer_for_lifecycle()
-        return super(WorkspaceSplitterShell, self).event(event)
-
     def set_inspector_width(self, width):
         self._inspector_width = int(width)
         if self.layout_mode == 'drawer':
