@@ -91,6 +91,62 @@ def test_play_tooltip_tracks_live_native_action_shortcut_without_copying_it():
         widget.close()
 
 
+def test_playback_action_lifecycle_falls_back_and_rebinds_once():
+    widget = VideoTimelineWidget()
+    original = QAction('Original Play/Pause', widget)
+    replacement = QAction('Replacement Play/Pause', widget)
+    stale = QAction('Stale Play/Pause', widget)
+    replacement_receivers = replacement.receivers(replacement.changed)
+    try:
+        original.setShortcut(QKeySequence('Alt+P'))
+        widget.set_playback_action(original)
+        original.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(
+            None, QtCore.QEvent.DeferredDelete)
+        QApplication.processEvents()
+        with pytest.raises(RuntimeError):
+            original.shortcut()
+
+        widget.set_playing(True)
+        assert widget.play_button.accessibleName() == 'Pause video'
+        assert widget.play_button.toolTip() == 'Pause video'
+        assert widget.play_button.isChecked() is True
+        assert widget.play_button.icon().pixmap(16, 16).toImage() == \
+            widget.style().standardIcon(
+                QStyle.SP_MediaPause).pixmap(16, 16).toImage()
+
+        widget.set_playback_action(replacement)
+        widget.set_playback_action(replacement)
+        assert replacement.receivers(replacement.changed) == \
+            replacement_receivers + 1
+        replacement.setShortcut(QKeySequence('Meta+Shift+P'))
+        QApplication.processEvents()
+        native = replacement.shortcut().toString(QKeySequence.NativeText)
+        assert widget.play_button.toolTip() == \
+            'Pause video (%s)' % native
+
+        widget.set_playback_action(stale)
+        widget.set_playback_action(replacement)
+        stale.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(
+            None, QtCore.QEvent.DeferredDelete)
+        QApplication.processEvents()
+        with pytest.raises(RuntimeError):
+            stale.shortcut()
+
+        replacement.setShortcut(QKeySequence('Alt+N'))
+        widget.set_playing(False)
+        native = replacement.shortcut().toString(QKeySequence.NativeText)
+        assert widget.play_button.accessibleName() == 'Play video'
+        assert widget.play_button.toolTip() == 'Play video (%s)' % native
+        assert widget.play_button.isChecked() is False
+        assert widget.play_button.shortcut().isEmpty()
+        assert replacement.receivers(replacement.changed) == \
+            replacement_receivers + 1
+    finally:
+        widget.close()
+
+
 def test_compact_timeline_keeps_essential_controls_visible():
     widget = VideoTimelineWidget()
     propagate_all = QAction('Propagate across video', widget)

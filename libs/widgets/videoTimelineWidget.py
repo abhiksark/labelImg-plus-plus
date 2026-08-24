@@ -1,6 +1,7 @@
 """PTS-based controls and marker strip for smart-video documents."""
 
 import re
+import weakref
 
 try:
     from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
@@ -126,6 +127,7 @@ class VideoTimelineWidget(QWidget):
         self._drag_emitted_value = None
         self._playing = False
         self._playback_action = None
+        self._playback_action_destroyed_slot = None
         self._propagation_running = False
         self._projecting_position = False
         self._pending_seek_value = None
@@ -261,15 +263,35 @@ class VideoTimelineWidget(QWidget):
         self._update_layout_mode(self.width())
 
     def set_playback_action(self, action):
-        if self._playback_action is not None:
+        previous = self._playback_action
+        destroyed_slot = self._playback_action_destroyed_slot
+        if previous is not None:
             try:
-                self._playback_action.changed.disconnect(
-                    self._sync_play_button)
+                previous.changed.disconnect(self._sync_play_button)
             except (RuntimeError, TypeError):
                 pass
+            if destroyed_slot is not None:
+                try:
+                    previous.destroyed.disconnect(destroyed_slot)
+                except (RuntimeError, TypeError):
+                    pass
         self._playback_action = action
+        self._playback_action_destroyed_slot = None
         if action is not None:
+            owner_ref = weakref.ref(self)
+            action_ref = weakref.ref(action)
+
+            def clear_destroyed_action(_object=None, owner=owner_ref,
+                                       observed=action_ref):
+                widget = owner()
+                if (widget is not None
+                        and widget._playback_action is observed()):
+                    widget._playback_action = None
+                    widget._playback_action_destroyed_slot = None
+
+            self._playback_action_destroyed_slot = clear_destroyed_action
             action.changed.connect(self._sync_play_button)
+            action.destroyed.connect(clear_destroyed_action)
         self._sync_play_button()
 
     def set_propagation_progress(self, processed, total, active, completed,
