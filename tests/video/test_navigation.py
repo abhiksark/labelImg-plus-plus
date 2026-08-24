@@ -2,6 +2,9 @@ import threading
 import time
 from unittest.mock import patch
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QSignalSpy, QTest
+
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_types import VideoFrameRef
 
@@ -57,6 +60,27 @@ def test_rapid_seek_commits_only_latest_request(tmp_path, make_video):
         app.processEvents()
         assert abs(window.current_video_frame_ref.pts -
                    (start + 12 * step)) <= step
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_escape_from_exact_time_restores_display_and_canvas_focus():
+    app, window = get_main_app()
+    try:
+        window.workspace_pages.set_page('canvas')
+        timeline = window.video_timeline
+        timeline.show()
+        displayed = timeline.time_edit.text()
+        focus_returns = QSignalSpy(timeline.focusReturnRequested)
+        timeline.time_edit.setFocus(Qt.OtherFocusReason)
+        timeline.time_edit.setText('invalid')
+
+        QTest.keyClick(timeline.time_edit, Qt.Key_Escape)
+
+        assert _wait(app, window.canvas.hasFocus)
+        assert timeline.time_edit.text() == displayed
+        assert len(focus_returns) == 1
     finally:
         window.dirty = False
         window.close()
