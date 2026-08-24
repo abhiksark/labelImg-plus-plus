@@ -323,6 +323,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._save_locks = {}
         self._image_save_target_overrides = {}
         self._loading_veil = None
+        self._replacement_loading_owner = None
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -3606,7 +3607,10 @@ class MainWindow(QMainWindow, WindowMixin):
         # so a failed open cannot stale the visible document's save identity.
         generation = self._dataset_generation
         request_id = self._video_open_request_id
-        self._show_loading_veil('Opening video %s…' % os.path.basename(path))
+        loading_owner = ('video', request_id)
+        self._show_replacement_loading(
+            loading_owner,
+            'Opening video %s…' % os.path.basename(path))
 
         def prepare(handle):
             try:
@@ -3626,9 +3630,15 @@ class MainWindow(QMainWindow, WindowMixin):
                 return None
             return prepared
 
+        def discard_prepared(prepared):
+            decoder = getattr(prepared, 'decoder', None)
+            if decoder is not None:
+                decoder.close()
+
         handle = self.task_coordinator.submit(
             'video', prepare, priority=JobPriority.IMAGE_LOAD,
-            key='video-open', latest=True, generation=generation)
+            key='video-open', latest=True, generation=generation,
+            on_discard=discard_prepared)
         handle.result.connect(
             lambda prepared, rid=request_id, gen=generation,
             requested=path, project=target, override=source_override:
@@ -3643,8 +3653,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if (request_id != self._video_open_request_id
                 or generation != self._dataset_generation):
             return
-        self._hide_loading_veil()
-        self.canvas.setEnabled(bool(self.file_path))
+        self._settle_replacement_loading(
+            ('video', request_id), settle_unowned=True)
         self.status('Error opening video: ' + message, delay=10000)
 
     def _on_video_open_result(self, prepared, request_id, generation,
@@ -3659,7 +3669,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 decoder.close()
             return
         if isinstance(prepared, VideoOpenProblem):
-            self._hide_loading_veil()
+            self._settle_replacement_loading(
+                ('video', request_id), settle_unowned=True)
             if prepared.kind == 'dependency':
                 runtime_status = probe_video_runtime()
                 if runtime_status.available:
@@ -3674,7 +3685,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         self._dataset_generation = self.task_coordinator.next_generation()
         self._commit_video_open(prepared)
-        self._hide_loading_veil()
+        self._settle_replacement_loading(
+            ('video', request_id), settle_unowned=True)
 
     def _show_video_runtime_setup(self, path, status):
         """Explain missing optional support without replacing current work."""
@@ -3744,6 +3756,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_open_request_id += 1
         self.task_coordinator.cancel_key('image-load')
         self.task_coordinator.cancel_key('video-open')
+        self._settle_replacement_loading()
 
     def _locate_video_source(self, project_path):
         source, _selected = QFileDialog.getOpenFileName(
@@ -5469,8 +5482,10 @@ class MainWindow(QMainWindow, WindowMixin):
         generation = self._dataset_generation
         cached = (None if replacement_snapshot is not None
                   else self.frame_cache.get(file_path))
-        self.canvas.setEnabled(False)
-        self._show_loading_veil('Loading %s…' % os.path.basename(file_path))
+        loading_owner = ('image', request_id)
+        self._show_replacement_loading(
+            loading_owner, 'Loading %s…' % os.path.basename(file_path),
+            disable_canvas=True)
         if cached is not None:
             QTimer.singleShot(
                 0, lambda: self._on_image_result(
@@ -5515,8 +5530,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 or generation != self._dataset_generation):
             return
         self._pending_navigation_index = None
-        self.canvas.setEnabled(bool(self.file_path))
-        self._hide_loading_veil()
+        self._settle_replacement_loading(
+            ('image', request_id), settle_unowned=True)
         if previous_snapshot is not None:
             self.dataset_snapshot = previous_snapshot.with_generation(
                 generation)
@@ -5542,7 +5557,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self._start_interaction_session()
         self.frame_cache.put(result)
         self._pending_navigation_index = None
-        self._hide_loading_veil()
+        self._settle_replacement_loading(
+            ('image', request_id), settle_unowned=True)
         self._schedule_prefetch(result.path)
 
     def _commit_image_result(self, result, center_after_projection=False):
@@ -6718,6 +6734,24 @@ class MainWindow(QMainWindow, WindowMixin):
         self._loading_veil.setGeometry(self.centralWidget().rect())
         self._loading_veil.show()
         self._loading_veil.raise_()
+
+    def _show_replacement_loading(self, owner, text, disable_canvas=False):
+        self._replacement_loading_owner = owner
+        if disable_canvas:
+            self.canvas.setEnabled(False)
+        self._show_loading_veil(text)
+
+    def _settle_replacement_loading(self, owner=None,
+                                    settle_unowned=False):
+        if self._replacement_loading_owner is None:
+            if not settle_unowned:
+                return False
+        elif owner is not None and owner != self._replacement_loading_owner:
+            return False
+        self._replacement_loading_owner = None
+        self._hide_loading_veil()
+        self.canvas.setEnabled(bool(self.file_path))
+        return True
 
     def _hide_loading_veil(self):
         if self._loading_veil is not None:

@@ -559,6 +559,127 @@ def test_missing_runtime_supersedes_delayed_video_and_closes_decoder(
         window.close()
 
 
+def test_missing_runtime_supersedes_blocked_video_before_gui_delivery(
+        tmp_path):
+    from threading import Event
+
+    from libs.core.video_runtime import VideoRuntimeStatus
+
+    class Decoder:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    _image(current)
+    assert window.load_file(str(current))
+    window.show()
+    app.processEvents()
+    committed_generation = window._dataset_generation
+    started = Event()
+    release = Event()
+    decoder = Decoder()
+    prepared = SimpleNamespace(decoder=decoder)
+    ready = VideoRuntimeStatus(
+        True, (), 'pip install "labelimgplusplus[video]"', 'Ready')
+
+    def blocked_prepare(*_args, **_kwargs):
+        started.set()
+        assert release.wait(1)
+        return prepared
+
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                side_effect=(ready, _missing_runtime_status())), patch(
+                'libs.core.video_decoder.load_video_dependencies',
+                return_value=(object(), object())), patch(
+                'labelImgPlusPlus.prepare_video_open',
+                side_effect=blocked_prepare):
+            window.request_open_video(
+                str(tmp_path / 'blocked.mp4'), skip_prompt=True)
+            assert started.wait(1)
+            assert not window._loading_veil.isHidden()
+            release.set()
+            assert window.task_coordinator.pool('video').waitForDone(1000)
+            assert not decoder.closed
+
+            window.request_open_video(
+                str(tmp_path / 'missing-runtime.mp4'), skip_prompt=True)
+            app.processEvents()
+
+        assert decoder.closed
+        assert window.file_path == str(current)
+        assert window._dataset_generation == committed_generation
+        assert window.workspace_pages.video_setup_overlay.isVisible()
+        assert window.workspace_pages.video_setup_card.isEnabled()
+        assert window._loading_veil.isHidden()
+        assert window.canvas.isEnabled()
+    finally:
+        release.set()
+        _wait(
+            app, lambda: not window.task_coordinator.queue_depths()['video'])
+        window.dirty = False
+        window.close()
+
+
+def test_missing_runtime_supersedes_blocked_image_and_restores_canvas(
+        tmp_path):
+    from threading import Event
+
+    from libs.core.image_pipeline import load_image_result
+
+    app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    replacement = tmp_path / 'replacement.png'
+    _image(current)
+    _image(replacement)
+    assert window.load_file(str(current))
+    window.show()
+    app.processEvents()
+    committed_generation = window._dataset_generation
+    delayed_result = load_image_result(str(replacement))
+    started = Event()
+    release = Event()
+
+    def blocked_load(*_args, **_kwargs):
+        started.set()
+        assert release.wait(1)
+        return delayed_result
+
+    try:
+        with patch(
+                'labelImgPlusPlus.load_image_result',
+                side_effect=blocked_load):
+            window.request_load_file(str(replacement), skip_prompt=True)
+            assert started.wait(1)
+            assert not window.canvas.isEnabled()
+            assert not window._loading_veil.isHidden()
+
+            with patch(
+                    'labelImgPlusPlus.probe_video_runtime',
+                    return_value=_missing_runtime_status()):
+                window.request_open_video(
+                    str(tmp_path / 'missing-runtime.mp4'), skip_prompt=True)
+
+            assert window.workspace_pages.video_setup_overlay.isVisible()
+            assert window.workspace_pages.video_setup_card.isEnabled()
+            assert window._loading_veil.isHidden()
+            assert window.canvas.isEnabled()
+            assert window.file_path == str(current)
+            assert window._dataset_generation == committed_generation
+    finally:
+        release.set()
+        _wait(
+            app, lambda: not
+            window.task_coordinator.queue_depths()['interactive'])
+        window.dirty = False
+        window.close()
+
+
 def test_video_setup_choose_another_reopens_file_chooser(tmp_path):
     from libs.core.video_runtime import VideoRuntimeStatus
 

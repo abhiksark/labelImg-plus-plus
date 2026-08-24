@@ -96,6 +96,7 @@ class _JobRecord:
     lane: object = field(compare=False)
     function: object = field(compare=False)
     handle: JobHandle = field(compare=False)
+    on_discard: object = field(compare=False, default=None)
 
 
 class _Lane:
@@ -154,7 +155,7 @@ class TaskCoordinator(QObject):
         }
 
     def submit(self, lane, function, priority=JobPriority.BULK, key=None,
-               latest=False, generation=None):
+               latest=False, generation=None, on_discard=None):
         if self._shutting_down:
             raise RuntimeError('task coordinator is shutting down')
         if lane not in self._lanes:
@@ -169,7 +170,7 @@ class TaskCoordinator(QObject):
                 previous.cancel()
             self._latest_by_key[key] = handle
         record = _JobRecord(
-            int(priority), sequence, lane, function, handle)
+            int(priority), sequence, lane, function, handle, on_discard)
         target = self._lanes[lane]
         heapq.heappush(target.pending, record)
         self._dispatch(target)
@@ -235,7 +236,13 @@ class TaskCoordinator(QObject):
         if (handle.key is not None
                 and self._latest_by_key.get(handle.key) is handle):
             self._latest_by_key.pop(handle.key, None)
-        if not handle.is_cancelled():
+        if handle.is_cancelled():
+            if result is not None and record.on_discard is not None:
+                try:
+                    record.on_discard(result)
+                except Exception:
+                    pass
+        else:
             if error is None:
                 handle.result.emit(result)
             else:
