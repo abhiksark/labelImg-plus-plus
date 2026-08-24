@@ -180,6 +180,10 @@ from libs.resources import *  # noqa: F403
 __appname__ = 'labelImgPlusPlus'
 
 
+class _VideoPublicationError(RuntimeError):
+    """A candidate already disposed by the publication transaction."""
+
+
 class WindowMixin(object):
 
     def menu(self, title, actions=None):
@@ -3770,31 +3774,37 @@ class MainWindow(QMainWindow, WindowMixin):
                               source_override=None):
         if prepared is None:
             return
-        if (request_id != self._video_open_request_id
-                or generation != self._dataset_generation):
-            decoder = getattr(prepared, 'decoder', None)
-            if decoder is not None:
-                decoder.close()
-            return
-        if isinstance(prepared, VideoOpenProblem):
-            self._settle_replacement_loading(
-                ('video', request_id), settle_unowned=True)
-            if prepared.kind == 'dependency':
-                runtime_status = probe_video_runtime()
-                if runtime_status.available:
-                    runtime_status = VideoRuntimeStatus(
-                        False, runtime_status.missing,
-                        runtime_status.install_command, prepared.message)
-                self._show_video_runtime_setup(
-                    requested_path, runtime_status)
+        owner = ('video', request_id)
+        try:
+            if (request_id != self._video_open_request_id
+                    or generation != self._dataset_generation):
+                decoder = getattr(prepared, 'decoder', None)
+                if decoder is not None:
+                    decoder.close()
                 return
-            self._resolve_video_open_problem(
-                prepared, requested_path, project_path, source_override)
-            return
-        self._dataset_generation = self.task_coordinator.next_generation()
-        self._commit_video_open(prepared)
-        self._settle_replacement_loading(
-            ('video', request_id), settle_unowned=True)
+            if isinstance(prepared, VideoOpenProblem):
+                if prepared.kind == 'dependency':
+                    runtime_status = probe_video_runtime()
+                    if runtime_status.available:
+                        runtime_status = VideoRuntimeStatus(
+                            False, runtime_status.missing,
+                            runtime_status.install_command, prepared.message)
+                    self._show_video_runtime_setup(
+                        requested_path, runtime_status)
+                    return
+                self._resolve_video_open_problem(
+                    prepared, requested_path, project_path, source_override)
+                return
+            self._commit_video_open(prepared)
+        except Exception as exc:
+            if not isinstance(exc, _VideoPublicationError):
+                decoder = getattr(prepared, 'decoder', None)
+                if decoder is not None:
+                    decoder.close()
+            self.status('Error opening video: %s' % exc, delay=10000)
+        finally:
+            self._settle_replacement_loading(
+                owner, settle_unowned=True)
 
     def _show_video_runtime_setup(self, path, status):
         """Explain missing optional support without replacing current work."""
@@ -3937,101 +3947,452 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         self.status('Video project open cancelled')
 
-    def _commit_video_open(self, prepared):
-        """Atomically publish worker data on QApplication.thread()."""
-        assert QApplication.instance().thread() == self.thread()
+    def _capture_video_publication_checkpoint(self):
+        """Capture every mutable projection replaced by video publication."""
+        canvas = self.canvas
+        timeline = self.video_timeline
+        save = self.continuous_save
+        selected_flags = tuple(
+            (shape, bool(shape.selected)) for shape in canvas.shapes)
+        action_states = tuple((
+            action, action.isEnabled(), action.isChecked(), action.text(),
+            action.toolTip(), action.statusTip())
+            for action in self.findChildren(QAction))
+        combo = self.combo_box.cb
+        original_size = getattr(self, '_original_image_size', None)
+        return {
+            'dataset_generation': self._dataset_generation,
+            'continuous_identity_epoch': self._continuous_identity_epoch,
+            'plugin_generation': self._plugin_document_generation,
+            'plugin_ready': self._plugin_document_ready,
+            'document_kind': self.document_kind,
+            'document_revision': self._document_revision,
+            'dirty': self.dirty,
+            'file_path': getattr(self, 'file_path', None),
+            'image_data': getattr(self, 'image_data', None),
+            'image': getattr(self, 'image', None),
+            'image_scale_factor': getattr(self, '_image_scale_factor', 1.0),
+            'original_image_size': (
+                QSize(original_size) if original_size is not None else QSize()),
+            'label_file': getattr(self, 'label_file', None),
+            'video_decoder': self.video_decoder,
+            'video_snapshot': self.video_snapshot,
+            'video_model': self.video_model,
+            'video_tracks': self.video_tracks,
+            'video_observations': self.video_observations,
+            'video_frame_states': self.video_frame_states,
+            'video_classes': self.video_classes,
+            'video_gaps': self.video_gaps,
+            'current_video_frame_ref': self.current_video_frame_ref,
+            'selected_video_track_id': self._selected_video_track_id,
+            'video_open_request_id': self._video_open_request_id,
+            'load_request_id': self._load_request_id,
+            'video_frame_request_id': self._video_frame_request_id,
+            'video_decode_in_flight': self._video_decode_in_flight,
+            'video_prefetch_handle': self._video_prefetch_handle,
+            'playback_timer_active': self._video_playback_timer.isActive(),
+            'video_play_started_wall': self._video_play_started_wall,
+            'video_play_started_seconds': self._video_play_started_seconds,
+            'pending_propagation_keys': set(self._pending_propagation_keys),
+            'pending_propagation_gap_keys': set(
+                self._pending_propagation_gap_keys),
+            'pending_propagation_failures': self._pending_propagation_failures,
+            'propagation_preview': dict(self._propagation_preview),
+            'propagation_preview_gaps': dict(
+                self._propagation_preview_gaps),
+            'm_img_list': list(self.m_img_list),
+            'path_to_idx': dict(self._path_to_idx),
+            'img_count': self.img_count,
+            'cur_img_idx': self.cur_img_idx,
+            'file_items': tuple(
+                self.file_list_widget.item(index).clone()
+                for index in range(self.file_list_widget.count())),
+            'file_current_row': self.file_list_widget.currentRow(),
+            'combo_items': tuple(
+                (combo.itemText(index), combo.itemData(index))
+                for index in range(combo.count())),
+            'combo_index': combo.currentIndex(),
+            'annotation_search': self.annotation_search.text(),
+            'annotation_visibility': dict(self.annotation_model._visibility),
+            'annotation_selection': self.annotation_model._selected_identity,
+            'canvas_pixmap': (
+                None if canvas.pixmap is None else QPixmap(canvas.pixmap)),
+            'canvas_shapes': list(canvas.shapes),
+            'canvas_selected': canvas.selected_shape,
+            'canvas_selected_flags': selected_flags,
+            'canvas_visible': dict(canvas.visible),
+            'canvas_mode': canvas.mode,
+            'canvas_verified': canvas.verified,
+            'canvas_locked': canvas.locked,
+            'canvas_scale': canvas.scale,
+            'canvas_enabled': canvas.isEnabled(),
+            'canvas_current': canvas.current,
+            'canvas_provisional': canvas.provisional_shape,
+            'canvas_preview': list(canvas.propagation_preview_shapes),
+            'canvas_focus': canvas.hasFocus(),
+            'timeline_snapshot': timeline._snapshot,
+            'timeline_markers': {
+                key: tuple(value)
+                for key, value in timeline._marker_pts_by_kind.items()},
+            'timeline_review': timeline._propagation_review_counts,
+            'timeline_running': timeline._propagation_running,
+            'timeline_playing': timeline._playing,
+            'timeline_frame': self.current_video_frame_ref,
+            'timeline_time_text': timeline.time_edit.text(),
+            'timeline_time_modified': timeline.time_edit.isModified(),
+            'workflow': self.workflow.snapshot,
+            'view_mode': self.view_transform.mode,
+            'view_manual_percent': self.view_transform.manual_percent,
+            'zoom': self.zoom_widget.value(),
+            'scroll_ratios': self._scroll_ratios(),
+            'workspace_page': self.workspace_pages.current_page(),
+            'gallery_mode': self.gallery_mode_enabled,
+            'frame_cache_entries': self.frame_cache._entries.copy(),
+            'frame_cache_bytes': self.frame_cache._bytes,
+            'frame_cache_max_images': self.frame_cache.max_images,
+            'undo': list(self.undo_stack._undo_stack),
+            'redo': list(self.undo_stack._redo_stack),
+            'save_state': (
+                save._state, save._document_key, save._generation,
+                save._durable_revision, save._newest_revision,
+                save._in_flight, save._enabled, save._draining, save.error,
+                save._timer.isActive(), save._timer.remainingTime()),
+            'save_handle': self._save_handle,
+            'video_save_handle': self._video_save_handle,
+            'video_save_active': self._video_save_active,
+            'save_drain_callbacks': list(self._save_drain_callbacks),
+            'recent_files': list(self.recent_files),
+            'window_title': self.windowTitle(),
+            'status': self.statusBar().currentMessage(),
+            'actions': action_states,
+        }
+
+    def _restore_video_publication_checkpoint(self, state):
+        """Restore a prior workspace without invoking destructive reset."""
+        self._dataset_generation = state['dataset_generation']
+        self._continuous_identity_epoch = state['continuous_identity_epoch']
+        self._plugin_document_generation = state['plugin_generation']
+        self._plugin_document_ready = False
+        self.document_kind = state['document_kind']
+        self._document_revision = state['document_revision']
+        self.dirty = state['dirty']
+        self.file_path = state['file_path']
+        self.image_data = state['image_data']
+        self.image = state['image']
+        self._image_scale_factor = state['image_scale_factor']
+        self._original_image_size = QSize(state['original_image_size'])
+        self.label_file = state['label_file']
+        self.video_decoder = state['video_decoder']
+        self.video_snapshot = state['video_snapshot']
+        self.video_model = state['video_model']
+        self.video_tracks = state['video_tracks']
+        self.video_observations = state['video_observations']
+        self.video_frame_states = state['video_frame_states']
+        self.video_classes = state['video_classes']
+        self.video_gaps = state['video_gaps']
+        self.current_video_frame_ref = state['current_video_frame_ref']
+        self._selected_video_track_id = state['selected_video_track_id']
+        self._video_open_request_id = state['video_open_request_id']
+        self._load_request_id = state['load_request_id']
+        self._video_frame_request_id = state['video_frame_request_id']
+        self._video_decode_in_flight = state['video_decode_in_flight']
+        self._video_prefetch_handle = state['video_prefetch_handle']
+        self._video_play_started_wall = state['video_play_started_wall']
+        self._video_play_started_seconds = state['video_play_started_seconds']
+        self._pending_propagation_keys = state['pending_propagation_keys']
+        self._pending_propagation_gap_keys = \
+            state['pending_propagation_gap_keys']
+        self._pending_propagation_failures = \
+            state['pending_propagation_failures']
+        self._propagation_preview = state['propagation_preview']
+        self._propagation_preview_gaps = state['propagation_preview_gaps']
+        self.m_img_list = state['m_img_list']
+        self._path_to_idx = state['path_to_idx']
+        self.img_count = state['img_count']
+        self.cur_img_idx = state['cur_img_idx']
+        self.file_list_widget.clear()
+        for item in state['file_items']:
+            self.file_list_widget.addItem(item)
+        self.file_list_widget.setCurrentRow(state['file_current_row'])
+        combo = self.combo_box.cb
+        combo.clear()
+        for text, data in state['combo_items']:
+            combo.addItem(text, data)
+        combo.setCurrentIndex(state['combo_index'])
+        self.annotation_search.setText(state['annotation_search'])
+
+        self.frame_cache._entries = state['frame_cache_entries']
+        self.frame_cache._bytes = state['frame_cache_bytes']
+        self.frame_cache.max_images = state['frame_cache_max_images']
+        pixmap = state['canvas_pixmap']
+        if pixmap is None:
+            self.canvas.reset_state()
+        else:
+            self.canvas.load_pixmap(pixmap)
+        self.canvas.load_shapes(state['canvas_shapes'])
+        self.canvas.visible = state['canvas_visible']
+        for shape, selected in state['canvas_selected_flags']:
+            shape.selected = selected
+        self.canvas.selected_shape = state['canvas_selected']
+        self.canvas.current = state['canvas_current']
+        self.canvas.provisional_shape = state['canvas_provisional']
+        self.canvas.propagation_preview_shapes = state['canvas_preview']
+        self.canvas.mode = state['canvas_mode']
+        self.canvas.verified = state['canvas_verified']
+        self.canvas.locked = state['canvas_locked']
+        self.canvas.scale = state['canvas_scale']
+        self.canvas.setEnabled(state['canvas_enabled'])
+        self.canvas.update()
+
+        if self.document_kind == DocumentKind.VIDEO:
+            self.annotation_model.set_video_context(
+                self.video_model,
+                None if self.current_video_frame_ref is None
+                else self.current_video_frame_ref.pts)
+        elif self.document_kind == DocumentKind.IMAGE:
+            self.annotation_model.set_image_shapes(self.canvas.shapes)
+        else:
+            self.annotation_model.clear()
+        self.annotation_model._visibility = state['annotation_visibility']
+        self.annotation_model.set_selected_identity(
+            state['annotation_selection'])
+
+        timeline = self.video_timeline
+        timeline.set_session(state['timeline_snapshot'])
+        markers = state['timeline_markers']
+        timeline.set_markers(
+            accepted=markers.get('accepted', ()),
+            pending=markers.get('pending', ()),
+            verified=markers.get('verified', ()),
+            propagation=markers.get('propagation', ()),
+            gaps=markers.get('gap', ()))
+        if (state['timeline_snapshot'] is not None
+                and state['timeline_frame'] is not None):
+            timeline.set_current_frame(state['timeline_frame'])
+        timeline.set_propagation_review(*state['timeline_review'])
+        timeline._propagation_running = state['timeline_running']
+        timeline.set_playing(state['timeline_playing'])
+        if state['playback_timer_active']:
+            self._video_playback_timer.start()
+        timeline.time_edit.setText(state['timeline_time_text'])
+        timeline.time_edit.setModified(state['timeline_time_modified'])
+
+        self.workflow._state = state['workflow']
+        self.view_transform.mode = state['view_mode']
+        self.view_transform.manual_percent = state['view_manual_percent']
+        blocked = self.zoom_widget.blockSignals(True)
+        self.zoom_widget.setValue(state['zoom'])
+        self.zoom_widget.blockSignals(blocked)
+        self.gallery_mode_enabled = state['gallery_mode']
+        self.workspace_pages.set_video_visible(
+            self.document_kind == DocumentKind.VIDEO)
+        self.workspace_pages.set_page(state['workspace_page'])
+        self._restore_scroll_ratios(state['scroll_ratios'])
+
+        self.undo_stack._undo_stack = state['undo']
+        self.undo_stack._redo_stack = state['redo']
+        self.undo_stack._notify_callbacks()
+        save = self.continuous_save
+        save._timer.stop()
+        (save_state, save._document_key, save._generation,
+         save._durable_revision, save._newest_revision, save._in_flight,
+         save._enabled, save._draining, save.error, timer_active,
+         timer_remaining) = state['save_state']
+        save._set_state(save_state)
+        if timer_active:
+            save._timer.start(max(0, timer_remaining))
+        self._save_handle = state['save_handle']
+        self._video_save_handle = state['video_save_handle']
+        self._video_save_active = state['video_save_active']
+        self._save_drain_callbacks = state['save_drain_callbacks']
+        self.recent_files = state['recent_files']
+        self.workspace_pages.empty_page.set_recent_paths(
+            path for path in self.recent_files if os.path.exists(path))
+        self.setWindowTitle(state['window_title'])
+        self.statusBar().showMessage(state['status'])
+        self._sync_command_bar()
+        sync_verification = getattr(self, '_sync_verification_ui', None)
+        if sync_verification is not None:
+            sync_verification()
+        self._sync_tool_actions()
+        for action, enabled, checked, text, tooltip, status_tip in \
+                state['actions']:
+            try:
+                action.setEnabled(enabled)
+                if action.isCheckable():
+                    action.setChecked(checked)
+                action.setText(text)
+                action.setToolTip(tooltip)
+                action.setStatusTip(status_tip)
+            except RuntimeError:
+                # Rebuilding the marker legend destroys its old ephemeral
+                # menu actions. The rebuilt actions already reflect the
+                # restored marker model; only persistent actions need replay.
+                continue
+        self._plugin_document_ready = state['plugin_ready']
+        self._publish_plugin_document(force=True)
+        if state['canvas_focus']:
+            self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def _stage_video_publication(self, prepared):
         snapshot = prepared.snapshot
         first = snapshot.initial_frame
-        self.reset_state()
-        self._set_document_kind(DocumentKind.VIDEO)
-        self.video_decoder = prepared.decoder
-        self.video_snapshot = snapshot
-        self.video_tracks = prepared.tracks
-        self.video_observations = prepared.observations
-        self.video_frame_states = prepared.frame_states
-        self.video_classes = prepared.classes
-        self.video_gaps = prepared.gaps
-        self.video_model = VideoProjectModel(
+        if first is None or first.image is None or first.image.isNull():
+            raise ValueError('video candidate has no displayable first frame')
+        if getattr(prepared, 'decoder', None) is None:
+            raise ValueError('video candidate has no decoder')
+        pixmap = QPixmap.fromImage(first.image)
+        if pixmap.isNull():
+            raise ValueError('video candidate first frame is not displayable')
+        model = VideoProjectModel(
             snapshot.revision, tracks=prepared.tracks,
             observations=prepared.observations,
             frame_states=prepared.frame_states, classes=prepared.classes,
             gaps=prepared.gaps)
-        self._document_revision = snapshot.revision
-        self.continuous_save.reset(
-            self._continuous_document_key(), self._dataset_generation,
-            snapshot.revision)
-        self.m_img_list = []
-        self._path_to_idx = {}
-        self.img_count = 0
-        self.cur_img_idx = 0
-        self.file_list_widget.clear()
-        self.file_path = snapshot.source_path
-        self.image_data = None
-        self.image = first.image
-        self._image_scale_factor = (
-            first.display_width / snapshot.width if snapshot.width else 1.0)
-        self._original_image_size = QSize(snapshot.width, snapshot.height)
-        verified_pts = {state.pts for state in prepared.frame_states
-                        if state.verified}
-        self.canvas.verified = first.frame_ref.pts in verified_pts
-        self.canvas.locked = (
-            snapshot.read_only
-            or (self.canvas.verified
-                and self.lock_on_verify_option.isChecked()))
-        self.canvas.load_pixmap(QPixmap.fromImage(first.image))
-        self.current_video_frame_ref = first.frame_ref
-        self.frame_cache.put(first)
-        self.video_timeline.set_session(snapshot)
-        self._refresh_video_timeline_markers()
-        self._materialize_video_frame(first.frame_ref.pts)
-        self.set_clean()
-        self.canvas.setEnabled(True)
-        self._schedule_view_projection()
-        self.toggle_actions(True)
-        editable = not snapshot.read_only
-        mutation_actions = (
-            self.actions.create, self.actions.create_polygon,
-            self.actions.createMode, self.actions.editMode,
-            self.actions.verify, self.actions.delete, self.actions.copy,
-            self.actions.edit, self.actions.pasteFromClipboard,
-            self.actions.keypoint_mode, self.actions.sam_mode,
-            self.actions.shapeLineColor, self.actions.shapeFillColor,
-            self.actions.undo, self.actions.redo,
-            self.actions.videoAddKeyframe, self.actions.videoEditSpan,
-            self.actions.videoDeleteTrack,
-            self.actions.videoTrackForward,
-            self.actions.videoTrackBackward,
-            self.actions.videoAcceptSuggestion,
-            self.actions.videoRejectSuggestion,
-            self.actions.videoAcceptVisible,
-            self.actions.videoRejectVisible,
-            self.actions.videoAcceptRun,
-            self.actions.videoRejectRun,
-        )
-        if not editable:
-            for action in mutation_actions:
-                action.setEnabled(False)
+        return snapshot, first, pixmap, model
+
+    def _queue_replaced_video_decoder_close(self, decoder, generation):
+        if decoder is None:
+            return
+        coordinator = getattr(self, 'task_coordinator', None)
+        if coordinator is not None and not coordinator.is_shutting_down:
+            handle = coordinator.submit(
+                'video', lambda _handle, session=decoder: session.close(),
+                priority=JobPriority.IMAGE_LOAD, generation=generation)
+            handle.begin_non_cancellable()
         else:
-            for action in (self.actions.create, self.actions.create_polygon,
-                           self.actions.createMode, self.actions.editMode,
-                           self.actions.verify):
-                action.setEnabled(True)
-        self.shape_selection_changed(False)
-        self.actions.saveAs.setEnabled(bool(snapshot.project_path))
-        self.add_recent_file(snapshot.project_path or snapshot.source_path)
-        suffix = ' [read-only]' if snapshot.read_only else ''
-        self.setWindowTitle(
-            '%s %s%s' % (__appname__, snapshot.source_path, suffix))
-        self.update_status_bar()
-        self._start_interaction_session()
-        self.canvas.setFocus(True)
-        if prepared.warning:
-            self.status(prepared.warning, delay=15000)
-        else:
-            self.status(
-                'Opened video %s' % os.path.basename(snapshot.source_path))
-        self._plugin_document_ready = True
-        self._publish_plugin_document(new_generation=True, force=True)
+            decoder.close()
+
+    def _commit_video_open(self, prepared):
+        """Publish a prepared candidate or restore the complete prior UI."""
+        assert QApplication.instance().thread() == self.thread()
+        candidate_decoder = getattr(prepared, 'decoder', None)
+        checkpoint = None
+        committed = False
+        try:
+            snapshot, first, pixmap, model = \
+                self._stage_video_publication(prepared)
+            checkpoint = self._capture_video_publication_checkpoint()
+            candidate_generation = self.task_coordinator.next_generation()
+            # reset_state() is intentionally destructive, so detach the prior
+            # decoder first. It stays alive until every candidate projection
+            # has succeeded and is restored untouched on rollback.
+            self.video_decoder = None
+            self.reset_state()
+            self._set_document_kind(DocumentKind.VIDEO)
+            self.video_decoder = candidate_decoder
+            self.video_snapshot = snapshot
+            self.video_tracks = prepared.tracks
+            self.video_observations = prepared.observations
+            self.video_frame_states = prepared.frame_states
+            self.video_classes = prepared.classes
+            self.video_gaps = prepared.gaps
+            self.video_model = model
+            self._document_revision = snapshot.revision
+            self.continuous_save.reset(
+                self._continuous_document_key(), candidate_generation,
+                snapshot.revision)
+            self.m_img_list = []
+            self._path_to_idx = {}
+            self.img_count = 0
+            self.cur_img_idx = 0
+            self.file_list_widget.clear()
+            self.file_path = snapshot.source_path
+            self.image_data = None
+            self.image = first.image
+            self._image_scale_factor = (
+                first.display_width / snapshot.width
+                if snapshot.width else 1.0)
+            self._original_image_size = QSize(
+                snapshot.width, snapshot.height)
+            verified_pts = {state.pts for state in prepared.frame_states
+                            if state.verified}
+            self.canvas.verified = first.frame_ref.pts in verified_pts
+            self.canvas.locked = (
+                snapshot.read_only
+                or (self.canvas.verified
+                    and self.lock_on_verify_option.isChecked()))
+            self.canvas.load_pixmap(pixmap)
+            self.current_video_frame_ref = first.frame_ref
+            self.frame_cache.put(first)
+            self.video_timeline.set_session(snapshot)
+            self._refresh_video_timeline_markers()
+            self._materialize_video_frame(first.frame_ref.pts)
+            self.set_clean()
+            self.canvas.setEnabled(True)
+            self._schedule_view_projection()
+            self.toggle_actions(True)
+            editable = not snapshot.read_only
+            mutation_actions = (
+                self.actions.create, self.actions.create_polygon,
+                self.actions.createMode, self.actions.editMode,
+                self.actions.verify, self.actions.delete, self.actions.copy,
+                self.actions.edit, self.actions.pasteFromClipboard,
+                self.actions.keypoint_mode, self.actions.sam_mode,
+                self.actions.shapeLineColor, self.actions.shapeFillColor,
+                self.actions.undo, self.actions.redo,
+                self.actions.videoAddKeyframe, self.actions.videoEditSpan,
+                self.actions.videoDeleteTrack,
+                self.actions.videoTrackForward,
+                self.actions.videoTrackBackward,
+                self.actions.videoAcceptSuggestion,
+                self.actions.videoRejectSuggestion,
+                self.actions.videoAcceptVisible,
+                self.actions.videoRejectVisible,
+                self.actions.videoAcceptRun,
+                self.actions.videoRejectRun,
+            )
+            if not editable:
+                for action in mutation_actions:
+                    action.setEnabled(False)
+            else:
+                for action in (
+                        self.actions.create, self.actions.create_polygon,
+                        self.actions.createMode, self.actions.editMode,
+                        self.actions.verify):
+                    action.setEnabled(True)
+            self.shape_selection_changed(False)
+            self.actions.saveAs.setEnabled(bool(snapshot.project_path))
+            self.add_recent_file(
+                snapshot.project_path or snapshot.source_path)
+            suffix = ' [read-only]' if snapshot.read_only else ''
+            self.setWindowTitle(
+                '%s %s%s' % (__appname__, snapshot.source_path, suffix))
+            self.update_status_bar()
+            self._start_interaction_session()
+            self.canvas.setFocus(True)
+            if prepared.warning:
+                self.status(prepared.warning, delay=15000)
+            else:
+                self.status(
+                    'Opened video %s' % os.path.basename(
+                        snapshot.source_path))
+            self._dataset_generation = candidate_generation
+            self._plugin_document_ready = True
+            sync_verification = getattr(self, '_sync_verification_ui', None)
+            if sync_verification is not None:
+                sync_verification()
+            self._publish_plugin_document(new_generation=True, force=True)
+            committed = True
+        except Exception as exc:
+            if checkpoint is not None:
+                try:
+                    self._restore_video_publication_checkpoint(checkpoint)
+                except Exception as rollback_exc:
+                    raise _VideoPublicationError(
+                        'Video publication failed (%s); rollback failed (%s)'
+                        % (exc, rollback_exc)) from rollback_exc
+            raise _VideoPublicationError(str(exc)) from exc
+        finally:
+            if not committed and candidate_decoder is not None:
+                try:
+                    candidate_decoder.close()
+                except Exception as close_exc:
+                    raise _VideoPublicationError(
+                        'Could not dispose failed video candidate: %s'
+                        % close_exc) from close_exc
+        self._queue_replaced_video_decoder_close(
+            checkpoint['video_decoder'], self._dataset_generation)
 
     def open_video(self, path, project_path=None):
         """Synchronous compatibility API for extensions and tests."""
@@ -4046,8 +4407,11 @@ class MainWindow(QMainWindow, WindowMixin):
         except Exception as exc:
             self.status('Error opening video: %s' % exc, delay=10000)
             return False
-        self._dataset_generation = self.task_coordinator.next_generation()
-        self._commit_video_open(prepared)
+        try:
+            self._commit_video_open(prepared)
+        except Exception as exc:
+            self.status('Error opening video: %s' % exc, delay=10000)
+            return False
         return True
 
     def request_save_video_project(self, _value=False, on_success=None):

@@ -57,13 +57,18 @@ def test_open_fit_step_seek_annotate_verify_save_and_reopen(
         # A failed replacement is transactional: the current video remains.
         current_path = window.file_path
         with patch('labelImgPlusPlus.QMessageBox.warning'):
-            window.request_open_video(
+            failed_handle = window.request_open_video(
                 str(tmp_path / 'missing-replacement.mp4'), skip_prompt=True)
             assert _wait(
-                app, lambda: getattr(window, '_video_open_handle', None)
-                is None)
+                app, lambda: (
+                    failed_handle is None
+                    or (not window.task_coordinator.queue_depths()['video']
+                        and window._replacement_loading_owner is None)))
         assert window.file_path == current_path
         assert window.document_kind == DocumentKind.VIDEO
+        assert window.video_decoder is not None
+        assert window.canvas.isEnabled()
+        assert window._loading_veil.isHidden()
 
         first = window.current_video_frame_ref
         window.request_next_video_frame()

@@ -9,7 +9,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication, QPushButton, QToolButton
 
 from labelImgPlusPlus import DocumentKind, get_main_app
-from libs.core.video_decoder import VideoDependencyError
+from libs.core.video_decoder import PreparedVideoOpen, VideoDependencyError
 from libs.core.video_model import VideoProjectModel
 from libs.core.video_project import (
     default_project_path, initialize_project, load_project,
@@ -17,7 +17,7 @@ from libs.core.video_project import (
 )
 from libs.core.video_types import (
     ObservationRecord, VideoFingerprint, VideoFrameRef,
-    VideoSessionSnapshot,
+    VideoFrameResult, VideoSessionSnapshot,
 )
 
 
@@ -72,6 +72,67 @@ def _install_writable_video_document(window, tmp_path):
     window.continuous_save.reset(
         window._continuous_document_key(), window._dataset_generation, 0)
     return str(source), str(project)
+
+
+class _RecordingDecoder:
+    def __init__(self, on_close=None):
+        self.close_count = 0
+        self.on_close = on_close
+
+    def close(self):
+        self.close_count += 1
+        if self.on_close is not None:
+            self.on_close()
+
+
+def _prepared_video(tmp_path, name, decoder=None, color=0xFF336699):
+    source = tmp_path / ('%s.mp4' % name)
+    source.write_bytes(('fixture-%s' % name).encode('ascii'))
+    stat = source.stat()
+    fingerprint = VideoFingerprint(
+        stat.st_size, stat.st_mtime_ns, '%s-fingerprint' % name)
+    image = QImage(64, 48, QImage.Format_RGB32)
+    image.fill(color)
+    byte_size = (image.sizeInBytes() if hasattr(image, 'sizeInBytes')
+                 else image.byteCount())
+    frame_ref = VideoFrameRef(fingerprint, 0, 0, 1, 12)
+    first = VideoFrameResult(
+        frame_ref, image, 64, 48, 64, 48, 0, byte_size,
+        '%s:0' % name)
+    project = tmp_path / ('%s.labelimgpp.sqlite' % name)
+    snapshot = VideoSessionSnapshot(
+        source_path=str(source), project_path=str(project),
+        fingerprint=fingerprint, stream_index=0, time_base_num=1,
+        time_base_den=12, width=64, height=48, rotation=0,
+        codec='fixture', duration_pts=2, start_pts=0,
+        average_rate_num=12, average_rate_den=1, revision=0,
+        initial_frame=first, read_only=False)
+    initialize_project(str(project), snapshot)
+    return PreparedVideoOpen(
+        snapshot=snapshot, decoder=decoder or _RecordingDecoder(),
+        tracks=(), observations=(), frame_states=(), classes=(), gaps=(),
+        warning=None)
+
+
+def _install_prepared_video(window, prepared):
+    window._dataset_generation = window.task_coordinator.next_generation()
+    window._commit_video_open(prepared)
+
+
+def _add_and_save_video_observation(app, window, project, pts):
+    track = window.video_model.tracks.get('track-1')
+    if track is None:
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+    window.video_model.upsert_manual(
+        track.track_id, pts, [2 + pts, 3, 22 + pts, 23])
+    window._on_video_model_mutation()
+    window.continuous_save.flush()
+    revision = window.video_model.revision
+    assert _wait(app, lambda: (
+        load_project(project).revision == revision
+        and not window.video_model.dirty))
+    return revision
 
 
 def test_synchronous_open_creates_sidecar_after_first_frame(
@@ -189,6 +250,228 @@ def test_async_open_decodes_qimage_off_thread_and_builds_qpixmap_on_gui(
             assert _wait(app, lambda: window.document_kind == DocumentKind.VIDEO)
         assert decode_threads == [True]
         assert pixmap_threads == [True]
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def _assert_prior_video_restored(
+        window, prepared, snapshot, timeline_snapshot, generation,
+        revision, save_identity, model, pixmap_key):
+    assert window.document_kind == DocumentKind.VIDEO
+    assert window.file_path == prepared.snapshot.source_path
+    assert window.video_decoder is prepared.decoder
+    assert window.video_snapshot is snapshot
+    assert window.video_model is model
+    assert window.current_video_frame_ref == \
+        snapshot.initial_frame.frame_ref
+    assert window._dataset_generation == generation
+    assert window._document_revision == revision
+    assert window._save_document_identity() == save_identity
+    assert window.canvas.pixmap.cacheKey() == pixmap_key
+    assert window.canvas.isEnabled()
+    assert window.video_timeline._snapshot is timeline_snapshot
+    assert window.actions.videoPlayPause.isEnabled()
+    assert window.actions.saveAs.isEnabled()
+    assert window._plugin_document_ready
+
+
+def test_async_publication_failure_rolls_back_prior_video_and_save_owner(
+        tmp_path):
+    app, window = get_main_app()
+    old_decoder = _RecordingDecoder()
+    candidate_decoder = _RecordingDecoder()
+    prior = _prepared_video(tmp_path, 'prior-async', old_decoder)
+    candidate = _prepared_video(
+        tmp_path, 'candidate-async', candidate_decoder, color=0xFF993322)
+    try:
+        _install_prepared_video(window, prior)
+        prior_revision = _add_and_save_video_observation(
+            app, window, prior.snapshot.project_path, 0)
+        window._refresh_video_timeline_markers()
+        window.canvas.setFocus(Qt.OtherFocusReason)
+        app.processEvents()
+        prior_generation = window._dataset_generation
+        prior_snapshot = window.video_snapshot
+        prior_timeline_snapshot = window.video_timeline._snapshot
+        prior_save_identity = window._save_document_identity()
+        prior_model = window.video_model
+        prior_pixmap_key = window.canvas.pixmap.cacheKey()
+        prior_plugin_generation = window._plugin_document_generation
+        assert window._plugin_document_ready
+        prior_marker_groups = window.video_timeline.slider.marker_groups()
+        owner = ('video', window._video_open_request_id)
+        window._show_replacement_loading(owner, 'Opening candidate…')
+        original_materialize = window._materialize_video_frame
+
+        def fail_after_reset(pts):
+            if window.file_path == candidate.snapshot.source_path:
+                raise RuntimeError('fail after destructive publication')
+            return original_materialize(pts)
+
+        with patch.object(
+                window, '_materialize_video_frame',
+                side_effect=fail_after_reset):
+            window._on_video_open_result(
+                candidate, window._video_open_request_id,
+                prior_generation, requested_path=candidate.snapshot.source_path)
+
+        _assert_prior_video_restored(
+            window, prior, prior_snapshot, prior_timeline_snapshot,
+            prior_generation, prior_revision,
+            prior_save_identity, prior_model, prior_pixmap_key)
+        assert window._plugin_document_generation == prior_plugin_generation
+        assert window.video_timeline.slider.marker_groups() == \
+            prior_marker_groups
+        assert candidate_decoder.close_count == 1
+        assert old_decoder.close_count == 0
+        assert window._loading_veil.isHidden()
+        assert window._replacement_loading_owner is None
+        assert 'fail after destructive publication' in \
+            window.statusBar().currentMessage()
+        assert window.canvas.hasFocus()
+
+        second_revision = _add_and_save_video_observation(
+            app, window, prior.snapshot.project_path, 1)
+        assert second_revision > prior_revision
+        assert len(load_project(
+            prior.snapshot.project_path).observations) == 2
+        assert old_decoder.close_count == 0
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_synchronous_publication_failure_rolls_back_prior_video_and_saves(
+        tmp_path):
+    app, window = get_main_app()
+    old_decoder = _RecordingDecoder()
+    candidate_decoder = _RecordingDecoder()
+    prior = _prepared_video(tmp_path, 'prior-sync', old_decoder)
+    candidate = _prepared_video(
+        tmp_path, 'candidate-sync', candidate_decoder, color=0xFF225588)
+    try:
+        _install_prepared_video(window, prior)
+        prior_revision = _add_and_save_video_observation(
+            app, window, prior.snapshot.project_path, 0)
+        prior_generation = window._dataset_generation
+        prior_snapshot = window.video_snapshot
+        prior_timeline_snapshot = window.video_timeline._snapshot
+        prior_save_identity = window._save_document_identity()
+        prior_model = window.video_model
+        prior_pixmap_key = window.canvas.pixmap.cacheKey()
+        assert window._plugin_document_ready
+        original_materialize = window._materialize_video_frame
+
+        def fail_after_reset(pts):
+            if window.file_path == candidate.snapshot.source_path:
+                raise RuntimeError('sync failure after reset')
+            return original_materialize(pts)
+
+        with patch(
+                'labelImgPlusPlus.prepare_video_open',
+                return_value=candidate), patch.object(
+                window, '_video_project_target',
+                return_value=(candidate.snapshot.project_path, False)), \
+                patch.object(
+                    window, '_materialize_video_frame',
+                    side_effect=fail_after_reset):
+            assert window.open_video(candidate.snapshot.source_path) is False
+
+        _assert_prior_video_restored(
+            window, prior, prior_snapshot, prior_timeline_snapshot,
+            prior_generation, prior_revision,
+            prior_save_identity, prior_model, prior_pixmap_key)
+        assert candidate_decoder.close_count == 1
+        assert old_decoder.close_count == 0
+        assert window._loading_veil is None or window._loading_veil.isHidden()
+        assert 'sync failure after reset' in window.statusBar().currentMessage()
+
+        _add_and_save_video_observation(
+            app, window, prior.snapshot.project_path, 1)
+        assert len(load_project(
+            prior.snapshot.project_path).observations) == 2
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_failed_video_publication_restores_existing_image_workspace(
+        tmp_path):
+    _app, window = get_main_app()
+    image = tmp_path / 'prior-image.png'
+    _image(image)
+    candidate_decoder = _RecordingDecoder()
+    candidate = _prepared_video(
+        tmp_path, 'candidate-over-image', candidate_decoder)
+    try:
+        assert window.load_file(str(image))
+        prior_generation = window._dataset_generation
+        prior_pixmap_key = window.canvas.pixmap.cacheKey()
+        original_materialize = window._materialize_video_frame
+
+        def fail_after_reset(pts):
+            if window.file_path == candidate.snapshot.source_path:
+                raise RuntimeError('image rollback')
+            return original_materialize(pts)
+
+        with patch(
+                'labelImgPlusPlus.prepare_video_open',
+                return_value=candidate), patch.object(
+                window, '_video_project_target',
+                return_value=(candidate.snapshot.project_path, False)), \
+                patch.object(
+                    window, '_materialize_video_frame',
+                    side_effect=fail_after_reset):
+            assert window.open_video(candidate.snapshot.source_path) is False
+
+        assert window.document_kind == DocumentKind.IMAGE
+        assert window.file_path == str(image)
+        assert window._dataset_generation == prior_generation
+        assert window.canvas.pixmap.cacheKey() == prior_pixmap_key
+        assert window.canvas.isEnabled()
+        assert window.actions.create.isEnabled()
+        assert window._plugin_document_ready
+        assert candidate_decoder.close_count == 1
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_successful_publication_closes_old_decoder_after_candidate_commit(
+        tmp_path):
+    app, window = get_main_app()
+    candidate_decoder = _RecordingDecoder()
+    candidate = _prepared_video(tmp_path, 'successful-candidate',
+                                candidate_decoder)
+    close_observations = []
+
+    def observe_close():
+        close_observations.append((
+            window.video_decoder is candidate_decoder,
+            window.video_snapshot is candidate.snapshot,
+            window.video_timeline._snapshot is candidate.snapshot,
+            window.file_path == candidate.snapshot.source_path,
+            window._plugin_document_ready,
+        ))
+
+    old_decoder = _RecordingDecoder(on_close=observe_close)
+    prior = _prepared_video(tmp_path, 'successful-prior', old_decoder)
+    try:
+        _install_prepared_video(window, prior)
+        prior_generation = window._dataset_generation
+
+        with patch(
+                'labelImgPlusPlus.prepare_video_open',
+                return_value=candidate), patch.object(
+                window, '_video_project_target',
+                return_value=(candidate.snapshot.project_path, False)):
+            assert window.open_video(candidate.snapshot.source_path) is True
+
+        assert _wait(app, lambda: old_decoder.close_count == 1)
+        assert close_observations == [(True, True, True, True, True)]
+        assert candidate_decoder.close_count == 0
+        assert window._dataset_generation != prior_generation
     finally:
         window.dirty = False
         window.close()

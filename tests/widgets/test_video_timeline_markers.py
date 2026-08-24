@@ -296,3 +296,39 @@ def test_legend_visibly_and_accessibly_maps_every_marker_pattern(
         assert len(set(icons)) == 5
     finally:
         widget.close()
+
+
+def test_clearing_session_clears_markers_review_and_accessible_legend(
+        video_snapshot):
+    widget = timeline.VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        widget.set_markers(
+            accepted=(1900,), pending=(2100,), verified=(2300,),
+            propagation=((2500, 2700),), gaps=((3100, 3300),))
+        widget.set_propagation_review(2, gaps=1, failures=1)
+        widget.set_current_frame(
+            replace(video_snapshot.initial_frame.frame_ref, pts=2300))
+        assert widget.slider.marker_groups()
+        assert widget._marker_pts_by_kind['accepted'] == ((1900, 1900),)
+        assert widget.legend_menu.actions()
+
+        widget.set_session(None)
+
+        assert widget._snapshot is None
+        assert widget._displayed_pts is None
+        assert widget.slider.value() == 0
+        assert widget.slider.marker_groups() == ()
+        assert widget._marker_pts_by_kind == {
+            'accepted': (), 'pending': (), 'verified': (),
+            'propagation': (), 'gap': (),
+        }
+        assert widget._legend_actions == {}
+        assert widget.legend_menu.actions() == []
+        assert widget._propagation_review_counts == (0, 0, 0)
+        assert widget.progress_label.text() == ''
+        empty_summary = widget.slider.accessible_marker_summary()
+        assert widget.legend_button.accessibleDescription() == empty_summary
+        assert widget.legend_button.toolTip() == empty_summary
+    finally:
+        widget.close()

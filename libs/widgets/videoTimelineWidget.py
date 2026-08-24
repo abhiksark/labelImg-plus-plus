@@ -504,7 +504,8 @@ class VideoTimelineWidget(QWidget):
         if snapshot is None:
             self._propagation_review_counts = (0, 0, 0)
             self._propagation_running = False
-            self._show_propagation_review_summary()
+            self.progress_label.clear()
+            self.set_markers()
         self.setEnabled(snapshot is not None)
         if snapshot is None:
             blocked = self.slider.blockSignals(True)
