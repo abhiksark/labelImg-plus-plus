@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QAction
 
 from labelImgPlusPlus import get_main_app
+from libs.core.video_types import DocumentKind
 
 
 def _menu_actions(menu):
@@ -121,6 +122,37 @@ def test_command_bar_syncs_document_position_dirty_state_and_actions():
         assert window.command_bar.overflow_button.geometry().right() < \
             window.command_bar.width()
         assert window.command_bar.save_button.focusPolicy() == Qt.StrongFocus
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_video_command_bar_names_document_navigation_without_image_nouns():
+    _app, window = get_main_app([])
+    try:
+        window.document_kind = DocumentKind.VIDEO
+        window._sync_command_bar()
+
+        previous = window.command_bar.previous_button
+        next_button = window.command_bar.next_button
+        assert previous.accessibleName() == 'Previous document'
+        assert next_button.accessibleName() == 'Next document'
+        assert previous.text() == 'Previous document'
+        assert next_button.text() == 'Next document'
+        exposed_text = ' '.join((
+            previous.accessibleName(), previous.text(), previous.toolTip(),
+            next_button.accessibleName(), next_button.text(),
+            next_button.toolTip(),
+        ))
+        assert 'image' not in exposed_text.lower()
+
+        window.actions.previous.setEnabled(False)
+        window.actions.next.setEnabled(False)
+        _app.processEvents()
+        assert previous.text() == 'Previous document'
+        assert next_button.text() == 'Next document'
+        assert 'image' not in ' '.join((
+            previous.toolTip(), next_button.toolTip())).lower()
     finally:
         window.dirty = False
         window.close()

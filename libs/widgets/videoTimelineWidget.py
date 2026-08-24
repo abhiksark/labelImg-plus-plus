@@ -6,16 +6,16 @@ try:
     from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
     from PyQt5.QtGui import QColor, QPainter, QPen
     from PyQt5.QtWidgets import (
-        QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
-        QStyle, QToolButton, QVBoxLayout, QWidget,
+        QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
+        QSizePolicy, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
     )
     _QT5 = True
 except ImportError:
     from PyQt4.QtCore import QEvent, QRegExp, Qt, QTimer, pyqtSignal
     from PyQt4.QtGui import (
         QColor, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPainter, QPen,
-        QPushButton, QRegExpValidator, QSlider, QStyle, QToolButton,
-        QVBoxLayout, QWidget,
+        QMenu, QPushButton, QRegExpValidator, QSizePolicy, QSlider, QStyle,
+        QToolButton, QVBoxLayout, QWidget,
     )
     _QT5 = False
 
@@ -125,6 +125,7 @@ class VideoTimelineWidget(QWidget):
         self._drag_seek_value = None
         self._drag_emitted_value = None
         self._playing = False
+        self._propagation_running = False
         self._projecting_position = False
         self._pending_seek_value = None
         self._displayed_timecode = '00:00:00.000'
@@ -135,58 +136,90 @@ class VideoTimelineWidget(QWidget):
 
         style = self.style()
         self.play_button = QPushButton()
-        self.play_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
-        self.play_button.setToolTip('Play/Pause (Ctrl+Space)')
+        self.play_button.setCheckable(True)
         self.previous_button = QPushButton()
         self.previous_button.setIcon(
             style.standardIcon(QStyle.SP_MediaSkipBackward))
         self.previous_button.setToolTip('Previous frame (A)')
+        self.previous_button.setAccessibleName('Previous frame')
         self.next_button = QPushButton()
         self.next_button.setIcon(
             style.standardIcon(QStyle.SP_MediaSkipForward))
         self.next_button.setToolTip('Next frame (D)')
+        self.next_button.setAccessibleName('Next frame')
         self.time_edit = QLineEdit('00:00:00.000')
         self.time_edit.setValidator(_timecode_validator(self.time_edit))
         self.time_edit.installEventFilter(self)
         self.time_edit.setMaximumWidth(110)
         self.time_edit.setToolTip('Exact presentation time (HH:MM:SS.mmm)')
+        self.time_edit.setAccessibleName('Exact video time')
         self.speed_combo = QComboBox()
         for speed in (0.25, 0.5, 1.0, 2.0):
             self.speed_combo.addItem('%gx' % speed, speed)
         self.speed_combo.setCurrentIndex(2)
-        self.position_label = QLabel('PTS — · Frame ~—')
+        self.speed_combo.setAccessibleName('Playback speed')
+        for control in (
+                self.previous_button, self.play_button, self.next_button,
+                self.time_edit, self.speed_combo):
+            control.setMinimumSize(32, 32)
+        self.position_label = QLabel('Frame ~— · 00:00:00.000')
+        self.position_label.setToolTip('PTS —')
+        self.position_label.setMinimumWidth(0)
+        self.position_label.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.propagate_all_button = QToolButton()
+        self.propagate_all_button.setText('Track all anchors')
         self.propagate_selected_button = QToolButton()
+        self.propagate_selected_button.setText('Track selected object')
         self.cancel_propagation_button = QToolButton()
+        self.cancel_propagation_button.setText('Cancel propagation')
         for button in (
                 self.propagate_all_button, self.propagate_selected_button,
                 self.cancel_propagation_button):
             button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.track_menu = QMenu('Track', self)
+        self.track_menu.setObjectName('videoTrackMenu')
+        self.track_button = QToolButton()
+        self.track_button.setText('Track')
+        self.track_button.setAccessibleName('Track')
+        self.track_button.setToolTip('Track video objects')
+        self.track_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.track_button.setPopupMode(QToolButton.InstantPopup)
+        self.track_button.setMenu(self.track_menu)
+        self.track_button.setMinimumSize(32, 32)
         self.progress_label = QLabel()
         self.progress_label.setObjectName('videoPropagationProgress')
+        self.progress_label.setMinimumWidth(0)
+        self.progress_label.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.progress_label.hide()
         self.cancel_propagation_button.hide()
         self.slider = _MarkerSlider()
         self.slider.setRange(0, TIMELINE_MAX)
 
-        top = QHBoxLayout()
-        top.setContentsMargins(4, 2, 4, 0)
-        top.addWidget(self.previous_button)
-        top.addWidget(self.play_button)
-        top.addWidget(self.next_button)
-        top.addWidget(self.time_edit)
-        top.addWidget(self.speed_combo)
-        top.addWidget(self.position_label)
-        top.addStretch(1)
-        top.addWidget(self.progress_label)
-        top.addWidget(self.propagate_all_button)
-        top.addWidget(self.propagate_selected_button)
-        top.addWidget(self.cancel_propagation_button)
+        transport = QHBoxLayout()
+        transport.setContentsMargins(4, 0, 4, 2)
+        transport.setSpacing(4)
+        transport.addWidget(self.previous_button)
+        transport.addWidget(self.play_button)
+        transport.addWidget(self.next_button)
+        transport.addWidget(self.time_edit)
+        transport.addWidget(self.speed_combo)
+        transport.addWidget(self.position_label, 1)
+        transport.addWidget(self.progress_label, 1)
+        transport.addWidget(self.propagate_all_button)
+        transport.addWidget(self.propagate_selected_button)
+        transport.addWidget(self.cancel_propagation_button)
+        transport.addWidget(self.track_button)
+        self._transport_layout = transport
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(1)
-        layout.addLayout(top)
         layout.addWidget(self.slider)
+        layout.addLayout(transport)
+        self.layout_mode = 'compact'
+        self._apply_responsive_visibility()
+        self.set_playing(False)
 
         self.play_button.clicked.connect(self.playPauseRequested)
         self.previous_button.clicked.connect(self.previousRequested)
@@ -219,23 +252,26 @@ class VideoTimelineWidget(QWidget):
         self.propagate_all_button.setDefaultAction(all_action)
         self.propagate_selected_button.setDefaultAction(selected_action)
         self.cancel_propagation_button.setDefaultAction(cancel_action)
+        self.track_menu.clear()
+        self.track_menu.addAction(all_action)
+        self.track_menu.addAction(selected_action)
+        self.track_menu.addAction(cancel_action)
+        self._update_layout_mode(self.width())
 
     def set_propagation_progress(self, processed, total, active, completed,
                                  eta_seconds, failures, running=True):
-        self.propagate_all_button.setVisible(not running)
-        self.propagate_selected_button.setVisible(not running)
-        self.cancel_propagation_button.setVisible(running)
-        self.progress_label.setVisible(running)
+        self._propagation_running = bool(running)
         if not running:
             self.progress_label.clear()
-            return
-        eta = ('—' if eta_seconds is None
-               else format_timecode(float(eta_seconds)))
-        total_text = str(total) if total else '—'
-        self.progress_label.setText(
-            '%s/%s frames · %s active · %s complete · ETA %s · '
-            '%s gaps/failures' % (
-                processed, total_text, active, completed, eta, failures))
+        else:
+            eta = ('—' if eta_seconds is None
+                   else format_timecode(float(eta_seconds)))
+            total_text = str(total) if total else '—'
+            self.progress_label.setText(
+                '%s/%s frames · %s active · %s complete · ETA %s · '
+                '%s gaps/failures' % (
+                    processed, total_text, active, completed, eta, failures))
+        self._update_layout_mode(self.width())
 
     def set_session(self, snapshot):
         self._debounce.stop()
@@ -251,16 +287,22 @@ class VideoTimelineWidget(QWidget):
             self.slider.blockSignals(blocked)
             self._displayed_timecode = '00:00:00.000'
             self.time_edit.setText(self._displayed_timecode)
-            self.position_label.setText('PTS — · Frame ~—')
+            self.position_label.setText(
+                'Frame ~— · %s' % self._displayed_timecode)
+            self.position_label.setToolTip('PTS —')
             return
         self.time_edit.setModified(False)
         self.set_current_frame(snapshot.initial_frame.frame_ref)
 
     def set_playing(self, playing):
         self._playing = bool(playing)
+        verb = 'Pause' if self._playing else 'Play'
         icon = (QStyle.SP_MediaPause if self._playing
                 else QStyle.SP_MediaPlay)
         self.play_button.setIcon(self.style().standardIcon(icon))
+        self.play_button.setAccessibleName('%s video' % verb)
+        self.play_button.setToolTip('%s video (Ctrl+Space)' % verb)
+        self.play_button.setChecked(self._playing)
 
     def set_markers(self, spans=(), accepted=(), pending=(), verified=()):
         self.slider.set_markers(
@@ -291,7 +333,60 @@ class VideoTimelineWidget(QWidget):
             if rate_num and rate_den else None)
         frame_text = '~%s' % approximate if approximate is not None else '~—'
         self.position_label.setText(
-            'PTS %s · Frame %s' % (frame_ref.pts, frame_text))
+            'Frame %s · %s' % (frame_text, self._displayed_timecode))
+        self.position_label.setToolTip('PTS %s' % frame_ref.pts)
+
+    @staticmethod
+    def _measured_control_width(control):
+        width = max(
+            control.minimumWidth(), control.minimumSizeHint().width(),
+            control.sizeHint().width())
+        maximum = control.maximumWidth()
+        return min(width, maximum) if maximum > 0 else width
+
+    def _wide_required_width(self):
+        essentials = (
+            self.previous_button, self.play_button, self.next_button,
+            self.time_edit, self.speed_combo, self.position_label,
+        )
+        idle_track = (
+            self.propagate_all_button, self.propagate_selected_button)
+        running_track = (
+            self.progress_label, self.cancel_propagation_button)
+
+        def measured(controls):
+            return sum(self._measured_control_width(item)
+                       for item in controls)
+
+        context_width = max(measured(idle_track), measured(running_track))
+        control_count = len(essentials) + max(
+            len(idle_track), len(running_track))
+        margins = self._transport_layout.contentsMargins()
+        outer = self.layout().contentsMargins()
+        return (
+            measured(essentials) + context_width
+            + max(0, control_count - 1) * self._transport_layout.spacing()
+            + margins.left() + margins.right()
+            + outer.left() + outer.right())
+
+    def _apply_responsive_visibility(self):
+        wide = self.layout_mode == 'wide'
+        running = self._propagation_running
+        self.propagate_all_button.setVisible(wide and not running)
+        self.propagate_selected_button.setVisible(wide and not running)
+        self.cancel_propagation_button.setVisible(wide and running)
+        self.progress_label.setVisible(running)
+        self.track_button.setVisible(not wide)
+
+    def _update_layout_mode(self, width):
+        self.layout_mode = (
+            'wide' if int(width) >= self._wide_required_width()
+            else 'compact')
+        self._apply_responsive_visibility()
+
+    def resizeEvent(self, event):
+        self._update_layout_mode(event.size().width())
+        super(VideoTimelineWidget, self).resizeEvent(event)
 
     def _duration_pts(self):
         return max(0, int(self._snapshot.duration_pts or 0))

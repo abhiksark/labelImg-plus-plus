@@ -10,7 +10,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QAction, QApplication
+from PyQt5.QtWidgets import QAction, QApplication, QStyle
 
 from libs.core.video_decoder import VideoDecoderSession
 from libs.core.video_types import (
@@ -38,6 +38,104 @@ def video_snapshot():
     return VideoSessionSnapshot(
         'timeline.mp4', None, fingerprint, 0, 1, 1000,
         96, 64, 0, 'fixture', 10_000, 900, 12, 1, 0, first)
+
+
+def test_play_button_names_and_depicts_the_current_action():
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_playing(False)
+        assert widget.play_button.accessibleName() == 'Play video'
+        assert widget.play_button.toolTip() == 'Play video (Ctrl+Space)'
+        assert widget.play_button.isChecked() is False
+        assert widget.play_button.icon().pixmap(16, 16).toImage() == \
+            widget.style().standardIcon(
+                QStyle.SP_MediaPlay).pixmap(16, 16).toImage()
+
+        widget.set_playing(True)
+        assert widget.play_button.accessibleName() == 'Pause video'
+        assert widget.play_button.toolTip() == 'Pause video (Ctrl+Space)'
+        assert widget.play_button.isChecked() is True
+        assert widget.play_button.icon().pixmap(16, 16).toImage() == \
+            widget.style().standardIcon(
+                QStyle.SP_MediaPause).pixmap(16, 16).toImage()
+    finally:
+        widget.close()
+
+
+def test_compact_timeline_keeps_essential_controls_visible():
+    widget = VideoTimelineWidget()
+    propagate_all = QAction('Propagate across video', widget)
+    propagate_selected = QAction('Propagate selected object', widget)
+    cancel = QAction('Cancel propagation', widget)
+    widget.set_propagation_actions(
+        propagate_all, propagate_selected, cancel)
+    try:
+        widget.resize(748, 96)
+        widget.show()
+        QApplication.processEvents()
+
+        assert widget.layout_mode == 'compact'
+        assert all(control.isVisible() for control in (
+            widget.previous_button, widget.play_button, widget.next_button,
+            widget.time_edit, widget.speed_combo, widget.slider,
+        ))
+        assert widget.track_button.isVisible()
+        assert widget.track_button.accessibleName() == 'Track'
+        assert widget.track_menu.title() == 'Track'
+        assert widget.track_menu.actions() == [
+            propagate_all, propagate_selected, cancel]
+        assert all(control.minimumHeight() >= 32 for control in (
+            widget.previous_button, widget.play_button, widget.next_button,
+            widget.time_edit, widget.speed_combo,
+        ))
+        assert widget.slider.geometry().bottom() < \
+            widget.play_button.geometry().top()
+        assert not any(control.isVisible() for control in (
+            widget.propagate_all_button,
+            widget.propagate_selected_button,
+            widget.cancel_propagation_button,
+        ))
+    finally:
+        widget.close()
+
+
+def test_wide_mode_uses_live_control_measurements():
+    widget = VideoTimelineWidget()
+    propagate_all = QAction('Propagate across video', widget)
+    propagate_selected = QAction('Propagate selected object', widget)
+    cancel = QAction('Cancel propagation', widget)
+    widget.set_propagation_actions(
+        propagate_all, propagate_selected, cancel)
+    try:
+        widget.resize(1400, 96)
+        widget.show()
+        QApplication.processEvents()
+        assert widget.layout_mode == 'wide'
+        assert widget.propagate_all_button.isVisible()
+        assert widget.propagate_selected_button.isVisible()
+        assert not widget.track_button.isVisible()
+
+        propagate_selected.setText('Track ' + ('selected objects ' * 20))
+        widget.resize(1399, 96)
+        widget.resize(1400, 96)
+        QApplication.processEvents()
+        assert widget.layout_mode == 'compact'
+        assert widget.track_button.isVisible()
+        assert not widget.propagate_selected_button.isVisible()
+    finally:
+        widget.close()
+
+
+def test_position_prioritizes_frame_and_time_while_pts_stays_in_tooltip(
+        video_snapshot):
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        assert widget.position_label.text() == \
+            'Frame ~30 · 00:00:02.500'
+        assert widget.position_label.toolTip() == 'PTS 3400'
+    finally:
+        widget.close()
 
 
 @pytest.mark.parametrize('seconds, expected', [
@@ -82,8 +180,8 @@ def test_module_constructs_through_true_pyqt4_fallback(monkeypatch):
     for name in (
             'QColor', 'QPainter', 'QPen', 'QRegExpValidator',
             'QComboBox', 'QHBoxLayout', 'QLabel', 'QLineEdit',
-            'QPushButton', 'QSlider', 'QStyle', 'QToolButton',
-            'QVBoxLayout', 'QWidget'):
+            'QMenu', 'QPushButton', 'QSizePolicy', 'QSlider', 'QStyle',
+            'QToolButton', 'QVBoxLayout', 'QWidget'):
         source = QtGui if hasattr(QtGui, name) else QtWidgets
         setattr(qt_gui, name, getattr(source, name))
     qt4.QtCore = qt_core
@@ -487,6 +585,10 @@ def test_propagation_actions_and_progress_replace_each_other():
     cancel = QAction('Cancel', widget)
     widget.set_propagation_actions(
         propagate_all, propagate_selected, cancel)
+    widget.resize(1400, 96)
+    widget.show()
+    QApplication.processEvents()
+    assert widget.layout_mode == 'wide'
     assert widget.propagate_all_button.defaultAction() is propagate_all
     assert widget.propagate_selected_button.defaultAction() is \
         propagate_selected

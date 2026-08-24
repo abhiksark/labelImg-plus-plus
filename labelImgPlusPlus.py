@@ -1818,7 +1818,8 @@ class MainWindow(QMainWindow, WindowMixin):
             and snapshot is not None and snapshot.read_only)
         command_bar.set_document(
             name, dirty=getattr(self, 'dirty', False),
-            full_path=source_path, read_only=read_only)
+            full_path=source_path, read_only=read_only,
+            video=self.document_kind == DocumentKind.VIDEO)
 
         if self.document_kind == DocumentKind.VIDEO:
             timeline = getattr(self, 'video_timeline', None)
