@@ -1,5 +1,17 @@
 # Screenshots
 
+## Video workspace supplied-file acceptance 2026-08-24
+
+`video-workspace-2026-08-24/` contains the 32-state video acceptance matrix at
+800x600, 960x640, 1366x768, and 1440x900. The eight states are paused,
+playing, invalid time, compact Track menu, propagation progress, pending
+review, missing-runtime setup, and shutdown timeout.
+
+The matching acceptance record identifies the computer-use captures and the
+deterministic real-Qt surrogates, with source-video metadata, accessibility
+observations, exact dimensions, and SHA-256 hashes:
+[`docs/testing/video-workspace-acceptance.md`](../testing/video-workspace-acceptance.md).
+
 ## Continuous image workflow 2026-08-24
 
 `continuous-workflow-2026-08-24/` is the deterministic offscreen Qt
