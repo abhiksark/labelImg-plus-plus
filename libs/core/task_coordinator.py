@@ -114,6 +114,12 @@ class _ShutdownSubmissionPermit(object):
     __slots__ = ()
 
 
+class _ShutdownSaveAuthority(object):
+    """Opaque authority held by the active application shutdown owner."""
+
+    __slots__ = ()
+
+
 class TaskCoordinator(QObject):
     """Own application worker capacity and apply latest-request-wins policy."""
 
@@ -135,7 +141,10 @@ class TaskCoordinator(QObject):
         self._generation = 0
         self._latest_by_key = {}
         self._shutting_down = False
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_authority = None
         self._shutdown_submission = None
+        self._shutdown_used_intents = []
         self._completion = _CompletionSignals(self)
         self._completion.done.connect(self._on_done)
 
@@ -191,26 +200,33 @@ class TaskCoordinator(QObject):
 
     def submit(self, lane, function, priority=JobPriority.BULK, key=None,
                latest=False, generation=None, on_discard=None,
-               shutdown_permit=None, shutdown_owner=None):
+               shutdown_permit=None, shutdown_owner=None,
+               shutdown_intent=None):
         if lane not in self._lanes:
             raise ValueError('unknown worker lane: %s' % lane)
         if generation is None:
             generation = self._generation
         supplied_shutdown_capability = bool(
-            shutdown_permit is not None or shutdown_owner is not None)
-        if self._shutting_down:
-            authorization = self._shutdown_submission
-            allowed_during_shutdown = bool(
-                authorization is not None
-                and shutdown_permit is authorization[0]
-                and shutdown_owner is authorization[1]
-                and lane == 'background'
-                and key == authorization[2]
-                and generation == authorization[3])
-            if not allowed_during_shutdown:
-                raise RuntimeError('task coordinator is shutting down')
-        elif supplied_shutdown_capability:
-            raise RuntimeError('shutdown submission permit is not active')
+            shutdown_permit is not None or shutdown_owner is not None
+            or shutdown_intent is not None)
+        with self._shutdown_lock:
+            if self._shutting_down:
+                authorization = self._shutdown_submission
+                allowed_during_shutdown = bool(
+                    authorization is not None
+                    and shutdown_permit is authorization[0]
+                    and shutdown_owner is authorization[1]
+                    and lane == 'background'
+                    and key == authorization[2]
+                    and generation == authorization[3]
+                    and shutdown_intent is authorization[4])
+                if not allowed_during_shutdown:
+                    raise RuntimeError('task coordinator is shutting down')
+                self._shutdown_submission = None
+                self._shutdown_used_intents.append(shutdown_intent)
+            elif supplied_shutdown_capability:
+                raise RuntimeError(
+                    'shutdown submission permit is not active')
         sequence = next(self._sequence)
         handle = JobHandle(sequence, generation, key, self)
         if latest and key is not None:
@@ -256,32 +272,60 @@ class TaskCoordinator(QObject):
             if id(handle) in excluded
         }
 
-    def begin_shutdown(self, exclude_handles=(), save_identity=None,
-                       save_owner=None):
-        """Stop new work and optionally authorize one exact save stream."""
-        self._shutting_down = True
-        permit = None
-        self._shutdown_submission = None
-        if save_identity is not None:
-            if save_owner is None:
-                raise ValueError('shutdown save owner is required')
-            key, generation = save_identity
-            if key is None:
-                raise ValueError('shutdown save key is required')
+    def begin_shutdown(self, exclude_handles=()):
+        """Stop new work and return authority for exact save admission."""
+        with self._shutdown_lock:
+            if self._shutting_down:
+                raise RuntimeError('task coordinator shutdown already began')
+            self._shutting_down = True
+            authority = _ShutdownSaveAuthority()
+            self._shutdown_authority = authority
+            self._shutdown_submission = None
+            self._shutdown_used_intents = []
+        self.cancel_all(exclude_handles=exclude_handles)
+        return authority
+
+    def authorize_shutdown_save(self, authority, key, generation, owner,
+                                intent):
+        """Issue one exact, one-shot permit for the active save owner."""
+        if key is None or owner is None or intent is None:
+            raise ValueError('shutdown save identity is incomplete')
+        with self._shutdown_lock:
+            if (not self._shutting_down
+                    or authority is not self._shutdown_authority):
+                raise RuntimeError('shutdown save authority is not active')
+            if self._shutdown_submission is not None:
+                raise RuntimeError('a shutdown save permit is already active')
+            if any(value is intent for value in self._shutdown_used_intents):
+                raise RuntimeError('shutdown save intent was already used')
             permit = _ShutdownSubmissionPermit()
             self._shutdown_submission = (
-                permit, save_owner, str(key), int(generation))
-        self.cancel_all(exclude_handles=exclude_handles)
-        return permit
+                permit, owner, str(key), int(generation), intent)
+            return permit
+
+    def revoke_shutdown_save_authority(self, authority):
+        """Seal save admission while leaving the general shutdown gate on."""
+        with self._shutdown_lock:
+            if authority is not self._shutdown_authority:
+                raise RuntimeError('shutdown save authority is not active')
+            self._shutdown_authority = None
+            self._shutdown_submission = None
+            self._shutdown_used_intents = []
 
     def abort_shutdown(self):
         """Reopen submissions after the user cancels application shutdown."""
-        self._shutting_down = False
-        self._shutdown_submission = None
+        with self._shutdown_lock:
+            self._shutting_down = False
+            self._shutdown_authority = None
+            self._shutdown_submission = None
+            self._shutdown_used_intents = []
 
     def shutdown(self, wait_ms=500):
-        self._shutting_down = True
-        self._shutdown_submission = None
+        with self._shutdown_lock:
+            self._shutting_down = True
+            self._shutdown_authority = None
+            self._shutdown_submission = None
+            self._shutdown_used_intents = []
         self.cancel_all()
         all_done = True
         for lane in self._lanes.values():

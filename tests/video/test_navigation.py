@@ -219,6 +219,7 @@ def test_close_is_nonblocking_and_waits_for_video_lane_before_decoder_close():
         assert finished.is_set()
         assert closed == [True]
         assert window._shutdown_ready is True
+        assert window._shutdown_save_authority is None
     finally:
         release.set()
         window.dirty = False
@@ -281,6 +282,8 @@ def test_shutdown_timeout_surface_is_named_reused_and_keyboard_reachable():
         with patch.object(window, 'close', return_value=True) as close:
             window.closeEvent(first_event)
             coordinator = window._shutdown_coordinator
+            authority = window._shutdown_save_authority
+            assert authority is not None
             coordinator._deadline_expired()
             app.processEvents()
             surface = window._shutdown_surface
@@ -302,6 +305,7 @@ def test_shutdown_timeout_surface_is_named_reused_and_keyboard_reachable():
             coordinator._deadline_expired()
             QTest.mouseClick(window._shutdown_force_button, Qt.LeftButton)
             assert coordinator.state == 'force_requested'
+            assert window._shutdown_save_authority is None
             assert close.called
     finally:
         release.set()

@@ -177,28 +177,18 @@ def test_task_cancellation_can_preserve_the_sole_active_save_owner():
         coordinator.shutdown()
 
 
-def test_begin_shutdown_allows_only_the_exact_owned_background_save_drain():
+def test_shutdown_save_permit_is_exact_and_consumed_by_one_submit():
     coordinator = TaskCoordinator(logical_cpus=1)
-    gate = threading.Event()
-    started = threading.Event()
     owner = object()
-
-    def save(_handle):
-        started.set()
-        gate.wait(2)
+    intent = object()
 
     try:
-        active_save = coordinator.submit(
-            'background', save, key='save:image.png')
-        assert started.wait(1)
-
-        permit = coordinator.begin_shutdown(
-            exclude_handles=(active_save,),
-            save_identity=('save:image.png', coordinator.generation),
-            save_owner=owner)
+        authority = coordinator.begin_shutdown()
+        permit = coordinator.authorize_shutdown_save(
+            authority, 'save:image.png', coordinator.generation,
+            owner, intent)
 
         assert coordinator.is_shutting_down is True
-        assert active_save.is_cancelled() is False
         with pytest.raises(RuntimeError):
             coordinator.submit(
                 'interactive', lambda _handle: None, key='image load')
@@ -212,36 +202,53 @@ def test_begin_shutdown_allows_only_the_exact_owned_background_save_drain():
             ('background', 'save:image.png', coordinator.generation + 1,
              permit, owner),
             ('background', 'save:image.png', coordinator.generation,
-             permit, object()),
+             permit, object(), intent),
             ('background', 'save:image.png', coordinator.generation,
-             object(), owner),
+             object(), owner, intent),
             ('background', 'save:image.png', coordinator.generation,
-             None, owner),
+             None, owner, intent),
+            ('background', 'save:image.png', coordinator.generation,
+             permit, owner, object()),
         )
-        for lane, key, generation, candidate_permit, candidate_owner in rejected:
+        for candidate in rejected:
+            if len(candidate) == 5:
+                lane, key, generation, candidate_permit, candidate_owner = candidate
+                candidate_intent = intent
+            else:
+                (lane, key, generation, candidate_permit,
+                 candidate_owner, candidate_intent) = candidate
             with pytest.raises(RuntimeError):
                 coordinator.submit(
                     lane, lambda _handle: None, key=key,
                     generation=generation,
                     shutdown_permit=candidate_permit,
-                    shutdown_owner=candidate_owner)
+                    shutdown_owner=candidate_owner,
+                    shutdown_intent=candidate_intent)
         chained = coordinator.submit(
             'background', lambda _handle: None,
             key='save:image.png', latest=True,
             generation=coordinator.generation,
-            shutdown_permit=permit, shutdown_owner=owner)
+            shutdown_permit=permit, shutdown_owner=owner,
+            shutdown_intent=intent)
         assert chained.is_cancelled() is False
+        with pytest.raises(RuntimeError):
+            coordinator.submit(
+                'background', lambda _handle: None,
+                key='save:image.png', latest=True,
+                generation=coordinator.generation,
+                shutdown_permit=permit, shutdown_owner=owner,
+                shutdown_intent=intent)
     finally:
-        gate.set()
         coordinator.shutdown()
 
 
 def test_abort_shutdown_revokes_the_save_permit_and_reopens_normal_work():
     coordinator = TaskCoordinator(logical_cpus=1)
     owner = object()
-    permit = coordinator.begin_shutdown(
-        save_identity=('save:image.png', coordinator.generation),
-        save_owner=owner)
+    intent = object()
+    authority = coordinator.begin_shutdown()
+    permit = coordinator.authorize_shutdown_save(
+        authority, 'save:image.png', coordinator.generation, owner, intent)
 
     coordinator.abort_shutdown()
 
@@ -252,6 +259,148 @@ def test_abort_shutdown_revokes_the_save_permit_and_reopens_normal_work():
         coordinator.submit(
             'background', lambda _handle: None, key='save:image.png',
             generation=coordinator.generation,
-            shutdown_permit=permit, shutdown_owner=owner)
+            shutdown_permit=permit, shutdown_owner=owner,
+            shutdown_intent=intent)
     assert normal.is_cancelled() is False
+
+    next_authority = coordinator.begin_shutdown()
+    with pytest.raises(RuntimeError):
+        coordinator.authorize_shutdown_save(
+            authority, 'save:image.png', coordinator.generation,
+            owner, object())
+    with pytest.raises(RuntimeError):
+        coordinator.submit(
+            'background', lambda _handle: None, key='save:image.png',
+            generation=coordinator.generation,
+            shutdown_permit=permit, shutdown_owner=owner,
+            shutdown_intent=intent)
+    next_intent = object()
+    next_permit = coordinator.authorize_shutdown_save(
+        next_authority, 'save:image.png', coordinator.generation,
+        owner, next_intent)
+    coordinator.submit(
+        'background', lambda _handle: None, key='save:image.png',
+        generation=coordinator.generation,
+        shutdown_permit=next_permit, shutdown_owner=owner,
+        shutdown_intent=next_intent)
+    coordinator.shutdown()
+
+
+def test_reentrant_begin_shutdown_cannot_replace_the_active_authority():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    owner = object()
+    intent = object()
+    authority = coordinator.begin_shutdown()
+
+    with pytest.raises(RuntimeError):
+        coordinator.begin_shutdown()
+    with pytest.raises(RuntimeError):
+        coordinator.authorize_shutdown_save(
+            object(), 'save:other.png', coordinator.generation,
+            object(), object())
+
+    permit = coordinator.authorize_shutdown_save(
+        authority, 'save:image.png', coordinator.generation, owner, intent)
+    accepted = coordinator.submit(
+        'background', lambda _handle: None, key='save:image.png',
+        generation=coordinator.generation,
+        shutdown_permit=permit, shutdown_owner=owner,
+        shutdown_intent=intent)
+    assert accepted.is_cancelled() is False
+    coordinator.shutdown()
+
+
+def test_each_save_intent_requires_a_fresh_shutdown_permit():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    owner = object()
+    first_intent = object()
+    second_intent = object()
+    authority = coordinator.begin_shutdown()
+
+    first = coordinator.authorize_shutdown_save(
+        authority, 'save:image.png', coordinator.generation,
+        owner, first_intent)
+    coordinator.submit(
+        'background', lambda _handle: None, key='save:image.png',
+        generation=coordinator.generation,
+        shutdown_permit=first, shutdown_owner=owner,
+        shutdown_intent=first_intent)
+    with pytest.raises(RuntimeError):
+        coordinator.authorize_shutdown_save(
+            authority, 'save:image.png', coordinator.generation,
+            owner, first_intent)
+
+    second = coordinator.authorize_shutdown_save(
+        authority, 'save:image.png', coordinator.generation,
+        owner, second_intent)
+    assert second is not first
+    coordinator.submit(
+        'background', lambda _handle: None, key='save:image.png',
+        generation=coordinator.generation,
+        shutdown_permit=second, shutdown_owner=owner,
+        shutdown_intent=second_intent)
+    coordinator.shutdown()
+
+
+def test_concurrent_authorization_for_one_save_intent_issues_once():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    owner = object()
+    intent = object()
+    authority = coordinator.begin_shutdown()
+    barrier = threading.Barrier(3)
+    permits = []
+    rejected = []
+
+    def issue():
+        barrier.wait()
+        try:
+            permits.append(coordinator.authorize_shutdown_save(
+                authority, 'save:image.png', coordinator.generation,
+                owner, intent))
+        except RuntimeError:
+            rejected.append(True)
+
+    threads = [threading.Thread(target=issue) for _index in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(1)
+
+    assert len(permits) == 1
+    assert rejected == [True]
+    coordinator.shutdown()
+
+
+def test_concurrent_submission_consumes_one_shutdown_permit_once():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    owner = object()
+    intent = object()
+    authority = coordinator.begin_shutdown()
+    permit = coordinator.authorize_shutdown_save(
+        authority, 'save:image.png', coordinator.generation, owner, intent)
+    barrier = threading.Barrier(3)
+    accepted = []
+    rejected = []
+
+    def submit():
+        barrier.wait()
+        try:
+            accepted.append(coordinator.submit(
+                'background', lambda _handle: None, key='save:image.png',
+                generation=coordinator.generation,
+                shutdown_permit=permit, shutdown_owner=owner,
+                shutdown_intent=intent))
+        except RuntimeError:
+            rejected.append(True)
+
+    threads = [threading.Thread(target=submit) for _index in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(1)
+
+    assert len(accepted) == 1
+    assert rejected == [True]
     coordinator.shutdown()

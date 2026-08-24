@@ -473,6 +473,8 @@ def test_failed_save_timeout_save_button_explicitly_retries_and_closes(
                 app, lambda: window.continuous_save.state == 'failed')
 
             window.closeEvent(event)
+            authority = window._shutdown_save_authority
+            assert authority is not None
             assert _wait(
                 app, lambda: (window.continuous_save.state == 'failed'
                               and window.task_coordinator.is_idle()))
@@ -491,6 +493,7 @@ def test_failed_save_timeout_save_button_explicitly_retries_and_closes(
             assert _wait(app, lambda: close.called)
             assert writer.attempts == 2
             assert window.continuous_save.state == 'saved'
+            assert window._shutdown_save_authority is None
     finally:
         window.dirty = False
         window._shutdown_force = True
@@ -531,6 +534,7 @@ def test_failed_save_timeout_cancel_restores_editing_and_can_close_again(
 
             assert old_coordinator.state == 'cancelled'
             assert window._shutdown_coordinator is None
+            assert window._shutdown_save_authority is None
             assert window.task_coordinator.is_shutting_down is False
             assert window._plugin_document_ready is True
             assert window.workspace_pages.isEnabled()
@@ -678,6 +682,7 @@ def test_quit_save_waits_for_the_continuous_video_writer_to_drain(tmp_path):
         assert close_observations == [('saved', target_revision)]
         assert load_project(project).revision == target_revision
         assert blocked.max_active == 1
+        assert window._shutdown_save_authority is None
     finally:
         blocked.release.set()
         window.save_changes_automatically.setChecked(True)
@@ -753,6 +758,7 @@ def test_close_during_propagation_stages_review_and_drains_its_save(tmp_path):
             'saved', request.document_revision + 1, 'pending', True)]
         assert load_project(project).revision == request.document_revision + 1
         assert window._shutdown_ready is True
+        assert window._shutdown_save_authority is None
     finally:
         window.dirty = False
         window.close()

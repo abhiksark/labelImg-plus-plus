@@ -239,12 +239,9 @@ class _WindowShutdownActivity(object):
         if hasattr(window, 'sam_controller'):
             window.sam_controller.cancel()
         save_handles = self._remember_save_handles()
-        save_identity = window._shutdown_save_identity()
-        window._shutdown_save_permit = window.task_coordinator.begin_shutdown(
-            exclude_handles=save_handles,
-            save_identity=save_identity,
-            save_owner=(window._continuous_save_submission_owner
-                        if save_identity is not None else None))
+        window._shutdown_save_authority = (
+            window.task_coordinator.begin_shutdown(
+                exclude_handles=save_handles))
 
     def active_jobs(self):
         jobs = []
@@ -408,7 +405,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._shutdown_finished = False
         self._shutdown_decoder = None
         self._shutdown_discard_confirmed = False
-        self._shutdown_save_permit = None
+        self._shutdown_save_authority = None
         self._continuous_save_submission_owner = object()
         self._shutdown_widget_states = []
         self._shutdown_action_states = []
@@ -6406,18 +6403,25 @@ class MainWindow(QMainWindow, WindowMixin):
             except Exception:
                 pass
 
-    def _shutdown_save_identity(self):
-        if self.document_kind == DocumentKind.IMAGE and self.file_path:
-            return (
-                'save:' + self.file_path,
-                self._dataset_generation)
-        if (self.document_kind == DocumentKind.VIDEO
-                and self.video_snapshot is not None
-                and self.video_snapshot.project_path):
-            return (
-                'continuous-save:' + self.video_snapshot.project_path,
-                self._dataset_generation)
-        return None
+    def _authorize_shutdown_save(self, key, generation, intent):
+        authority = self._shutdown_save_authority
+        if authority is None:
+            return {}
+        permit = self.task_coordinator.authorize_shutdown_save(
+            authority, key, generation,
+            self._continuous_save_submission_owner, intent)
+        return {
+            'shutdown_permit': permit,
+            'shutdown_owner': self._continuous_save_submission_owner,
+            'shutdown_intent': intent,
+        }
+
+    def _revoke_shutdown_save_authority(self):
+        authority = self._shutdown_save_authority
+        if authority is None:
+            return
+        self.task_coordinator.revoke_shutdown_save_authority(authority)
+        self._shutdown_save_authority = None
 
     def _begin_async_shutdown(self):
         if self._shutdown_coordinator is not None:
@@ -6480,6 +6484,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def _on_shutdown_ready(self):
         if self._shutdown_ready or self._shutdown_force:
             return
+        self._revoke_shutdown_save_authority()
         self._shutdown_ready = True
         self._video_close_save_pending = False
         self._hide_shutdown_timeout()
@@ -6636,7 +6641,7 @@ class MainWindow(QMainWindow, WindowMixin):
             pass
         coordinator.deleteLater()
         self.task_coordinator.abort_shutdown()
-        self._shutdown_save_permit = None
+        self._shutdown_save_authority = None
         self._shutdown_activity = None
         self._shutdown_coordinator = None
         self._shutdown_ready = False
@@ -6673,6 +6678,7 @@ class MainWindow(QMainWindow, WindowMixin):
             if answer != QMessageBox.Yes:
                 self._shutdown_force_button.setFocus(Qt.OtherFocusReason)
                 return
+        self._revoke_shutdown_save_authority()
         coordinator.force_requested()
         self._shutdown_force = True
         self._video_close_save_pending = False
@@ -6691,6 +6697,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.annotation_catalog.cancel()
         if hasattr(self, 'sam_controller'):
             self.sam_controller.cancel()
+        self._shutdown_save_authority = None
         decoder = self._shutdown_decoder
         self._shutdown_decoder = None
         if force and decoder is None:
@@ -7559,11 +7566,9 @@ class MainWindow(QMainWindow, WindowMixin):
                 request, cancelled=handle.is_cancelled,
                 begin_commit=handle.begin_non_cancellable)
 
-        shutdown_permit = getattr(self, '_shutdown_save_permit', None)
-        shutdown_capability = ({
-            'shutdown_permit': shutdown_permit,
-            'shutdown_owner': self._continuous_save_submission_owner,
-        } if shutdown_permit is not None else {})
+        shutdown_capability = self._authorize_shutdown_save(
+            'continuous-save:' + request.project_path,
+            generation, ticket)
         handle = self.task_coordinator.submit(
             'background', save, priority=JobPriority.IMAGE_LOAD,
             key='continuous-save:' + request.project_path, latest=True,
@@ -7719,11 +7724,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         request, cancelled=handle.is_cancelled,
                         begin_commit=handle.begin_non_cancellable)
 
-        shutdown_permit = getattr(self, '_shutdown_save_permit', None)
-        shutdown_capability = ({
-            'shutdown_permit': shutdown_permit,
-            'shutdown_owner': self._continuous_save_submission_owner,
-        } if shutdown_permit is not None else {})
+        shutdown_capability = self._authorize_shutdown_save(
+            'save:' + request.image_path,
+            self._dataset_generation, continuous_ticket)
         handle = self.task_coordinator.submit(
             'background', save, priority=JobPriority.IMAGE_LOAD,
             key='save:' + request.image_path, latest=True,
