@@ -97,6 +97,7 @@ from libs.core.save_pipeline import (
     SaveRequest, target_path as annotation_target_path, write_save_request,
 )
 from libs.core.continuous_save import ContinuousSaveCoordinator
+from libs.core.shutdown_coordinator import ShutdownCoordinator
 from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.plugin_manager import PluginManager
 from libs.core.profiling import (
@@ -201,6 +202,47 @@ class WindowMixin(object):
             add_actions(toolbar, actions)
         self.addToolBar(Qt.LeftToolBarArea, toolbar)
         return toolbar
+
+
+class _WindowShutdownActivity(object):
+    """Combine document workers and the sole save owner for shutdown."""
+
+    def __init__(self, window):
+        self.window = window
+
+    def cancel_all(self):
+        window = self.window
+        window._plugin_document_ready = False
+        window._publish_plugin_document(new_generation=True, force=True)
+        window.annotation_catalog.cancel()
+        if hasattr(window, 'sam_controller'):
+            window.sam_controller.cancel()
+        save_handles = tuple(
+            handle for handle in (
+                getattr(window, '_save_handle', None),
+                getattr(window, '_video_save_handle', None))
+            if handle is not None)
+        window.task_coordinator.begin_shutdown(
+            exclude_handles=save_handles)
+
+    def active_jobs(self):
+        jobs = []
+        for name in self.window.task_coordinator.active_jobs():
+            if (name.startswith('save:')
+                    or name.startswith('continuous-save:')):
+                continue
+            jobs.append(name)
+        save = self.window.continuous_save
+        if not save.is_drained:
+            jobs.append(
+                'Save failed · Retry' if save.state == 'failed'
+                else 'Saving newest revision')
+        return tuple(sorted(set(jobs)))
+
+    def is_idle(self):
+        return (
+            self.window.task_coordinator.is_idle()
+            and self.window.continuous_save.is_drained)
 
 
 def _probe_status(image_path, save_dir, image_list=None, resolver=None):
@@ -327,6 +369,17 @@ class MainWindow(QMainWindow, WindowMixin):
         self._image_save_target_overrides = {}
         self._loading_veil = None
         self._replacement_loading_owner = None
+        self._shutdown_activity = None
+        self._shutdown_coordinator = None
+        self._shutdown_surface = None
+        self._shutdown_remaining_label = None
+        self._shutdown_wait_button = None
+        self._shutdown_force_button = None
+        self._shutdown_ready = False
+        self._shutdown_force = False
+        self._shutdown_finished = False
+        self._shutdown_decoder = None
+        self._shutdown_discard_confirmed = False
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -6212,14 +6265,34 @@ class MainWindow(QMainWindow, WindowMixin):
             viewport.width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
-        if self._reset_all_in_progress:
+        if not hasattr(self, 'task_coordinator'):
+            event.accept()
+            return
+        if getattr(self, '_reset_all_in_progress', False):
             self._shutdown_workers()
             event.accept()
             return
 
-        if self._video_close_save_pending:
+        if self._shutdown_force or self._shutdown_ready:
+            self._finish_async_shutdown(force=self._shutdown_force)
+            event.accept()
+            return
+
+        coordinator = self._shutdown_coordinator
+        if coordinator is not None and coordinator.state in (
+                'waiting', 'timed_out'):
+            if coordinator.state == 'timed_out':
+                self._show_shutdown_timeout(
+                    coordinator.activity.active_jobs())
             event.ignore()
             return
+
+        if hasattr(self, '_video_playback_timer'):
+            self.pause_video()
+        if getattr(self, '_propagation_handle', None) is not None:
+            # Quit is a reviewable cancellation boundary. Stage accumulated
+            # observations and gaps before the save owner is drained.
+            self.cancel_video_propagation()
 
         if self.dirty:
             answer = self.discard_changes_dialog()
@@ -6228,16 +6301,9 @@ class MainWindow(QMainWindow, WindowMixin):
                 return
             if answer == QMessageBox.Yes:
                 self._video_close_save_pending = True
-                self.request_save_file(
-                    on_success=self._finish_video_close_after_save)
-                if (self.continuous_save.state == 'failed'
-                        and self.dirty):
-                    self._video_close_save_pending = False
-                    self.status(
-                        'Could not save the document; close cancelled',
-                        delay=10000)
-                event.ignore()
-                return
+            else:
+                self._shutdown_discard_confirmed = True
+                self._video_close_save_pending = False
 
         settings = self.settings
         # If it loads images from dir, don't load it at the beginning
@@ -6279,13 +6345,184 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_SHORTCUTS] = self.shortcut_config.to_dict()
         settings[SETTING_SAM_OUTPUT_MODE] = self.sam_output_mode
         settings.save()
-        self._shutdown_workers()
+        self._begin_async_shutdown()
+        event.ignore()
+
+    def _begin_async_shutdown(self):
+        if self._shutdown_coordinator is not None:
+            return
+        if self._shutdown_discard_confirmed:
+            self.continuous_save.reset(
+                self._continuous_document_key(), self._dataset_generation,
+                self._document_revision)
+        else:
+            self._request_continuous_save_drain()
+            if (self.document_kind == DocumentKind.NONE
+                    and not self.continuous_save.is_drained):
+                self.continuous_save.drain()
+        self._video_close_save_pending = not self.continuous_save.is_drained
+        self._freeze_shutdown_workspace()
+        activity = _WindowShutdownActivity(self)
+        coordinator = ShutdownCoordinator(
+            activity, timeout_ms=5000, parent=self)
+        self._shutdown_activity = activity
+        self._shutdown_coordinator = coordinator
+        coordinator.ready.connect(self._on_shutdown_ready)
+        coordinator.timedOut.connect(self._show_shutdown_timeout)
+        coordinator.begin()
+
+    def _freeze_shutdown_workspace(self):
+        """Keep the draining document immutable while close is pending."""
+        for widget_name in (
+                'workspace_pages', 'workspace_shell', 'workspace_inspector',
+                'tool_rail', 'command_bar'):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.setEnabled(False)
+        for item in self.findChildren(QAction):
+            item.setEnabled(False)
+
+    def _on_shutdown_ready(self):
+        if self._shutdown_ready or self._shutdown_force:
+            return
+        self._shutdown_ready = True
+        self._video_close_save_pending = False
+        self._hide_shutdown_timeout()
+        decoder = self._close_video_decoder(close_decoder=False)
+        self._shutdown_decoder = decoder
+        if decoder is not None:
+            decoder.close()
+            self._shutdown_decoder = None
+        QTimer.singleShot(0, self.close)
+
+    def _ensure_shutdown_surface(self):
+        if self._shutdown_surface is not None:
+            return self._shutdown_surface
+        surface = QWidget(self)
+        surface.setObjectName('shutdownTimeoutSurface')
+        surface.setAccessibleName('Shutdown waiting')
+        surface.setStyleSheet(
+            'QWidget#shutdownTimeoutSurface {'
+            ' background: rgba(20, 24, 32, 235); color: white; }')
+        layout = QVBoxLayout(surface)
+        layout.setContentsMargins(48, 48, 48, 48)
+        layout.addStretch(1)
+        heading = QLabel('Still finishing work', surface)
+        heading.setObjectName('shutdownTimeoutHeading')
+        heading.setAccessibleName('Still finishing work')
+        layout.addWidget(heading, 0, Qt.AlignHCenter)
+        remaining = QLabel(surface)
+        remaining.setObjectName('shutdownRemainingWork')
+        remaining.setAccessibleName('Remaining shutdown work')
+        remaining.setWordWrap(True)
+        remaining.setAlignment(Qt.AlignCenter)
+        layout.addWidget(remaining)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        wait_button = QToolButton(surface)
+        wait_button.setText('Wait')
+        wait_button.setAccessibleName('Wait another five seconds')
+        wait_button.setFocusPolicy(Qt.StrongFocus)
+        wait_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        wait_button.setMinimumSize(72, 32)
+        wait_button.clicked.connect(self._wait_for_shutdown_again)
+        buttons.addWidget(wait_button)
+        force_button = QToolButton(surface)
+        force_button.setText('Force Quit')
+        force_button.setAccessibleName('Force Quit')
+        force_button.setFocusPolicy(Qt.StrongFocus)
+        force_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        force_button.setMinimumSize(96, 32)
+        force_button.clicked.connect(self._request_force_shutdown)
+        buttons.addWidget(force_button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        layout.addStretch(1)
+        QWidget.setTabOrder(wait_button, force_button)
+        self._shutdown_surface = surface
+        self._shutdown_remaining_label = remaining
+        self._shutdown_wait_button = wait_button
+        self._shutdown_force_button = force_button
+        return surface
+
+    def _show_shutdown_timeout(self, jobs):
+        surface = self._ensure_shutdown_surface()
+        names = tuple(str(name) for name in jobs) or ('Unknown work',)
+        self._shutdown_remaining_label.setText(
+            'Remaining: %s' % ', '.join(names))
+        surface.setGeometry(self.rect())
+        surface.show()
+        surface.raise_()
+        self._shutdown_wait_button.setFocus(Qt.OtherFocusReason)
+
+    def _hide_shutdown_timeout(self):
+        if self._shutdown_surface is not None:
+            self._shutdown_surface.hide()
+
+    def _wait_for_shutdown_again(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if coordinator is None or coordinator.state != 'timed_out':
+            return
+        if (not self._shutdown_discard_confirmed
+                and not self.continuous_save.is_drained):
+            self.continuous_save.drain()
+        self._hide_shutdown_timeout()
+        coordinator.wait_again()
+
+    def _request_force_shutdown(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if coordinator is None or coordinator.state != 'timed_out':
+            return
+        save_unresolved = not self.continuous_save.is_drained
+        unsaved = bool(
+            not self._shutdown_discard_confirmed
+            and (self.dirty or save_unresolved
+                 or self.continuous_save.state == 'failed'))
+        if unsaved:
+            answer = QMessageBox.warning(
+                self, 'Force Quit with unsaved changes',
+                'The newest changes are not durably saved. Force Quit may '
+                'lose them. Quit anyway?',
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel)
+            if answer != QMessageBox.Yes:
+                self._shutdown_force_button.setFocus(Qt.OtherFocusReason)
+                return
+        coordinator.force_requested()
+        self._shutdown_force = True
+        self._video_close_save_pending = False
+        self._hide_shutdown_timeout()
+        self.close()
+
+    def _finish_async_shutdown(self, force=False):
+        if self._shutdown_finished:
+            return
+        self._shutdown_finished = True
+        self._dismiss_class_picker()
+        self._clear_video_runtime_setup()
+        self._plugin_document_ready = False
+        if hasattr(self, 'plugin_manager'):
+            self.plugin_manager.shutdown()
+        self.annotation_catalog.cancel()
+        if hasattr(self, 'sam_controller'):
+            self.sam_controller.cancel()
+        decoder = self._shutdown_decoder
+        self._shutdown_decoder = None
+        if force and decoder is None:
+            decoder = self._close_video_decoder(close_decoder=False)
+        all_done = self.task_coordinator.shutdown(wait_ms=0)
+        if decoder is not None and all_done:
+            decoder.close()
 
     def _finish_video_close_after_save(self):
         if not self._video_close_save_pending:
             return
         self._video_close_save_pending = False
-        QTimer.singleShot(0, self.close)
+        coordinator = self._shutdown_coordinator
+        if coordinator is not None:
+            coordinator.poll()
+        else:
+            QTimer.singleShot(0, self.close)
 
     def _shutdown_workers(self):
         self._dismiss_class_picker()
@@ -7364,7 +7601,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'full_gallery') and self.full_gallery:
             self.full_gallery.set_annotation_resolver(resolver)
         self.annotation_catalog._json_cache.invalidate(path)
-        if current_image:
+        if (current_image
+                and not self.task_coordinator.is_shutting_down):
             self.annotation_catalog.invalidate(
                 target_image, snapshot=self.dataset_snapshot)
 

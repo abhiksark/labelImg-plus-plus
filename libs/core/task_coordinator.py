@@ -129,6 +129,7 @@ class TaskCoordinator(QObject):
         self._generation = 0
         self._latest_by_key = {}
         self._shutting_down = False
+        self._shutdown_allowed_key_prefixes = ()
         self._completion = _CompletionSignals(self)
         self._completion.done.connect(self._on_done)
 
@@ -154,9 +155,28 @@ class TaskCoordinator(QObject):
             for name, lane in self._lanes.items()
         }
 
+    def active_jobs(self):
+        """Return stable, human-readable identities for every active job."""
+        values = []
+        for lane in self._lanes.values():
+            records = list(lane.pending) + list(lane.running.values())
+            for record in records:
+                values.append(str(
+                    record.handle.key or '%s job' % lane.name))
+        return tuple(sorted(set(values)))
+
+    def is_idle(self):
+        return all(
+            not lane.pending and not lane.running
+            for lane in self._lanes.values())
+
     def submit(self, lane, function, priority=JobPriority.BULK, key=None,
                latest=False, generation=None, on_discard=None):
-        if self._shutting_down:
+        allowed_during_shutdown = bool(
+            key is not None
+            and any(str(key).startswith(prefix)
+                    for prefix in self._shutdown_allowed_key_prefixes))
+        if self._shutting_down and not allowed_during_shutdown:
             raise RuntimeError('task coordinator is shutting down')
         if lane not in self._lanes:
             raise ValueError('unknown worker lane: %s' % lane)
@@ -191,17 +211,32 @@ class TaskCoordinator(QObject):
                     record.handle.cancel()
             self._drop_cancelled(lane)
 
-    def cancel_all(self):
+    def cancel_all(self, exclude_handles=()):
+        excluded = set(id(handle) for handle in exclude_handles
+                       if handle is not None)
         for lane in self._lanes.values():
             for record in lane.pending:
-                record.handle.cancel()
+                if id(record.handle) not in excluded:
+                    record.handle.cancel()
             for record in lane.running.values():
-                record.handle.cancel()
+                if id(record.handle) not in excluded:
+                    record.handle.cancel()
             self._drop_cancelled(lane)
-        self._latest_by_key.clear()
+        self._latest_by_key = {
+            key: handle for key, handle in self._latest_by_key.items()
+            if id(handle) in excluded
+        }
+
+    def begin_shutdown(self, exclude_handles=()):
+        """Stop new document work while the sole save stream drains."""
+        self._shutting_down = True
+        self._shutdown_allowed_key_prefixes = (
+            'save:', 'continuous-save:')
+        self.cancel_all(exclude_handles=exclude_handles)
 
     def shutdown(self, wait_ms=500):
         self._shutting_down = True
+        self._shutdown_allowed_key_prefixes = ()
         self.cancel_all()
         all_done = True
         for lane in self._lanes.values():

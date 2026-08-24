@@ -1,10 +1,13 @@
 import threading
 import time
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy, QTest
+from PyQt5.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_types import (
@@ -183,36 +186,123 @@ def test_image_video_mode_transitions_reconfigure_timeline_and_cache(
         window.close()
 
 
-def test_shutdown_waits_for_video_lane_before_closing_session_decoder(
-        tmp_path, make_video):
-    _app, window = get_main_app()
-    video = make_video(tmp_path / 'shutdown.mp4')
+def test_close_is_nonblocking_and_waits_for_video_lane_before_decoder_close():
+    app, window = get_main_app()
     started = threading.Event()
+    release = threading.Event()
     finished = threading.Event()
     closed = []
+    event = MagicMock()
     try:
-        assert window.open_video(video)
-        decoder = window.video_decoder
-        original_close = decoder.close
-
-        def cancellable_decode(cancelled=None):
+        def cancellable_decode(handle):
             started.set()
-            while cancelled is None or not cancelled():
+            while not handle.is_cancelled() and not release.is_set():
                 time.sleep(.001)
             finished.set()
-            return None
+        decoder = SimpleNamespace(
+            close=lambda: closed.append(finished.is_set()))
+        window.video_decoder = decoder
+        window.task_coordinator.submit(
+            'video', cancellable_decode, key='video decode')
+        assert started.wait(1)
 
-        def observed_close():
-            closed.append(finished.is_set())
-            return original_close()
+        before = time.monotonic()
+        with patch.object(window, 'close', return_value=True) as close:
+            window.closeEvent(event)
+            elapsed = time.monotonic() - before
 
-        with patch.object(decoder, 'next_frame', cancellable_decode), \
-                patch.object(decoder, 'close', observed_close):
-            window.request_next_video_frame()
-            assert started.wait(1)
-            window._shutdown_workers()
+            assert elapsed < .1
+            event.ignore.assert_called_once_with()
+            event.accept.assert_not_called()
+            assert _wait(app, lambda: close.called)
+
         assert finished.is_set()
         assert closed == [True]
+        assert window._shutdown_ready is True
     finally:
+        release.set()
+        window.dirty = False
+        window.close()
+
+
+def test_shutdown_timeout_surface_is_named_reused_and_keyboard_reachable():
+    app, window = get_main_app()
+    release = threading.Event()
+    started = threading.Event()
+    first_event = MagicMock()
+    later_event = MagicMock()
+
+    def stuck(_handle):
+        started.set()
+        release.wait(2)
+
+    try:
+        window.task_coordinator.submit('video', stuck, key='video decode')
+        assert started.wait(1)
+        with patch.object(window, 'close', return_value=True) as close:
+            window.closeEvent(first_event)
+            coordinator = window._shutdown_coordinator
+            coordinator._deadline_expired()
+            app.processEvents()
+            surface = window._shutdown_surface
+
+            assert coordinator.state == 'timed_out'
+            assert surface.isVisible()
+            assert surface.accessibleName() == 'Shutdown waiting'
+            assert 'video decode' in window._shutdown_remaining_label.text()
+            assert window._shutdown_wait_button.focusPolicy() == Qt.StrongFocus
+            assert window._shutdown_force_button.focusPolicy() == Qt.StrongFocus
+
+            window.closeEvent(later_event)
+            assert window._shutdown_coordinator is coordinator
+            assert window._shutdown_surface is surface
+            later_event.ignore.assert_called_once_with()
+
+            QTest.mouseClick(window._shutdown_wait_button, Qt.LeftButton)
+            assert coordinator.state == 'waiting'
+            coordinator._deadline_expired()
+            QTest.mouseClick(window._shutdown_force_button, Qt.LeftButton)
+            assert coordinator.state == 'force_requested'
+            assert close.called
+    finally:
+        release.set()
+        window.dirty = False
+        window.close()
+
+
+def test_force_quit_requires_second_confirmation_for_unsaved_work():
+    app, window = get_main_app()
+    release = threading.Event()
+    started = threading.Event()
+    event = MagicMock()
+
+    def stuck(_handle):
+        started.set()
+        release.wait(2)
+
+    try:
+        window.task_coordinator.submit('video', stuck, key='video decode')
+        assert started.wait(1)
+        window.dirty = True
+        with patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch.object(
+                window, 'close', return_value=True) as close, patch(
+                'labelImgPlusPlus.QMessageBox.warning',
+                side_effect=(QMessageBox.Cancel, QMessageBox.Yes)) as warning:
+            window.closeEvent(event)
+            window._shutdown_coordinator._deadline_expired()
+            app.processEvents()
+
+            QTest.mouseClick(window._shutdown_force_button, Qt.LeftButton)
+            assert window._shutdown_coordinator.state == 'timed_out'
+            assert not close.called
+
+            QTest.mouseClick(window._shutdown_force_button, Qt.LeftButton)
+            assert window._shutdown_coordinator.state == 'force_requested'
+            assert close.called
+            assert warning.call_count == 2
+    finally:
+        release.set()
         window.dirty = False
         window.close()

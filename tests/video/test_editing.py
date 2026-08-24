@@ -10,7 +10,8 @@ from labelImgPlusPlus import get_main_app
 from libs.core.video_model import VideoProjectModel
 from libs.core.video_project import initialize_project, load_project
 from libs.core.video_types import (
-    DocumentKind, VideoFingerprint, VideoFrameRef, VideoSessionSnapshot,
+    DocumentKind, ObservationRecord, PropagationBatch, PropagationRequest,
+    TrackGapRecord, VideoFingerprint, VideoFrameRef, VideoSessionSnapshot,
 )
 
 
@@ -462,7 +463,7 @@ def test_quit_save_waits_for_the_continuous_video_writer_to_drain(tmp_path):
             def observe_close():
                 close_observations.append((
                     window.continuous_save.state,
-                    window.video_model.durable_revision))
+                    load_project(project).revision))
                 return True
 
             with patch.object(
@@ -480,5 +481,78 @@ def test_quit_save_waits_for_the_continuous_video_writer_to_drain(tmp_path):
     finally:
         blocked.release.set()
         window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()
+
+
+def test_close_during_propagation_stages_review_and_drains_its_save(tmp_path):
+    app, window = get_main_app()
+    event = MagicMock()
+    close_observations = []
+    try:
+        project = _install_writable_video_document(
+            window, tmp_path, 'propagation-close')
+        track = _seed_track(window)
+        track = window.video_model.tracks[track.track_id]
+        seed = window.video_model.observations[
+            (track.track_id, window.current_video_frame_ref.pts)]
+        window.continuous_save.flush()
+        assert _wait(
+            app, lambda: (window.continuous_save.state == 'saved'
+                          and not window.video_model.dirty))
+        request = PropagationRequest(
+            request_id=41, generation=window._dataset_generation,
+            document_revision=window.video_model.revision,
+            source_path=window.video_snapshot.source_path,
+            fingerprint=window.video_snapshot.fingerprint,
+            stream_index=window.video_snapshot.stream_index,
+            time_base_num=window.video_snapshot.time_base_num,
+            time_base_den=window.video_snapshot.time_base_den,
+            start_pts=0, end_pts=2, current_pts=0, direction=1,
+            seeds=(seed,), manual_anchors=(seed,),
+            track_revisions=((track.track_id, track.revision),),
+            average_rate_num=12, average_rate_den=1)
+        handle = SimpleNamespace(cancel=MagicMock())
+        generated = ObservationRecord(
+            track.track_id, 1, [3, 4, 23, 24], source='tracker',
+            review_state='accepted', anchor=False,
+            revision=request.document_revision)
+        known_gap = TrackGapRecord(
+            track.track_id, 2, 2, 'occluded', 'fixture',
+            request.document_revision)
+        window._active_propagation_request = request
+        window._propagation_before_state = window.video_model.snapshot_state()
+        window._propagation_handle = handle
+        window._set_propagation_running(True)
+        window._on_propagation_batch(PropagationBatch(
+            request.request_id, request.generation, 1,
+            observations=(generated,), gaps=(known_gap,),
+            processed_frames=1, total_frames=2, active_tracks=1))
+
+        def observe_close():
+            durable = load_project(project)
+            propagated = next(
+                item for item in durable.observations if item.pts == 1)
+            close_observations.append((
+                window.continuous_save.state,
+                durable.revision,
+                propagated.review_state,
+                bool(durable.gaps)))
+            return True
+
+        with patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch.object(
+                window, 'close', side_effect=observe_close):
+            window.closeEvent(event)
+            event.ignore.assert_called_once_with()
+            assert _wait(app, lambda: bool(close_observations))
+
+        assert handle.cancel.called
+        assert close_observations == [(
+            'saved', request.document_revision + 1, 'pending', True)]
+        assert load_project(project).revision == request.document_revision + 1
+        assert window._shutdown_ready is True
+    finally:
         window.dirty = False
         window.close()
