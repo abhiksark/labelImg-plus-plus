@@ -37,7 +37,7 @@ dependencies = [
 sam = [
     "onnxruntime",
     "numpy",
-    "opencv-python-headless>=4.8,<6",
+    "opencv-python-headless>=4.11,<4.13",
 ]
 video = [
     "av>=12.3,<13; python_version == '3.8'",
@@ -45,7 +45,7 @@ video = [
     "av>=17.1,<18; python_version == '3.10'",
     "av>=18,<19; python_version >= '3.11'",
     "numpy",
-    "opencv-python-headless>=4.8,<6",
+    "opencv-python-headless>=4.11,<4.13",
 ]
 profile = [
     "psutil",

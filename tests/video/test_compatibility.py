@@ -12,7 +12,11 @@ def test_video_dependency_markers_cover_each_python_line():
     assert 'av>=15.1,<16; python_version == \'3.9\'' in metadata
     assert 'av>=17.1,<18; python_version == \'3.10\'' in metadata
     assert 'av>=18,<19; python_version >= \'3.11\'' in metadata
-    assert metadata.count('opencv-python-headless>=4.8,<6') == 2
+    safe_opencv = 'opencv-python-headless>=4.11,<4.13'
+    assert metadata.count(safe_opencv) == 2
+    assert 'opencv-python-headless>=4.8,<6' not in metadata
+    base_metadata = metadata.split('[project.optional-dependencies]', 1)[0]
+    assert 'opencv-python-headless' not in base_metadata
     lowered = metadata.lower()
     assert '"torch' not in lowered
     assert '"sam-2' not in lowered

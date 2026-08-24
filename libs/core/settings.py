@@ -70,10 +70,14 @@ def _decode(dct):
 
 class Settings(object):
     def __init__(self):
-        # By default, the home will be in the same folder as labelImg
-        home = os.path.expanduser("~")
         self.data = {}
-        self.path = os.path.join(home, '.labelImgSettings.json')
+        override = os.environ.get('LABELIMGPP_SETTINGS_PATH')
+        if override:
+            self.path = override
+        else:
+            # Preserve the existing per-user path for normal application runs.
+            home = os.path.expanduser("~")
+            self.path = os.path.join(home, '.labelImgSettings.json')
 
     def __setitem__(self, key, value):
         self.data[key] = value

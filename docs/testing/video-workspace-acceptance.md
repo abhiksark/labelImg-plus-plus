@@ -11,32 +11,66 @@ not changed. The copies and their SQLite projects were retained after the run.
 The run exercised full-frame fit, frame stepping, playback, three seek paths,
 exact-time validation, choose-once/draw-twice annotation, continuous save,
 verification, project reopen, propagation cancellation and review, responsive
-use, and a real 30-cycle OS-level soak (10 cycles per unique video). All app
-processes ended with status 0. No macOS “Python quit unexpectedly” dialog, new
-crash report, abandoned-worker warning, or shutdown timeout appeared.
+use, and a real 30-cycle OS-level soak (10 cycles per unique video). One early
+exploratory harness launch produced the known operator-induced diagnostic
+report disclosed below. Every later formal wrapper run ended with status 0;
+none produced a later report, abandoned-worker warning, or shutdown timeout.
 
 ## Environment and optional runtime
 
 - macOS 26.5.2 (25F84), Apple desktop session
 - Python 3.9.21
 - labelimgplusplus 4.0.0rc0, editable from this worktree
-- PyAV 15.1.0, NumPy 2.0.2, OpenCV 5.0.0, PyQt 5.15.11, Qt 5.15.14
+- PyAV 15.1.0, NumPy 2.0.2, OpenCV wheel 4.12.0.88 (module 4.12.0),
+  PyQt 5.15.11, Qt 5.15.14
 - Install command: `python -m pip install -e '.[video]'`
 - Install result: success from the package registries already configured for
   the environment; no dependency manifest was changed and video remains an
   optional extra.
 
-The previously skipped PyAV path became active after installation. Importing
-PyAV and OpenCV in the same macOS process consistently printed these two
-loader warnings:
+The previously skipped PyAV path became active after installation. The initial
+environment resolved OpenCV 5.0.0.93. Importing it with PyAV printed these two
+historical loader warnings:
 
 ```text
 Class AVFFrameReceiver is implemented in both .../av/.dylibs/libavdevice.61.3.100.dylib and .../cv2/.dylibs/libavdevice.61.3.100.dylib. This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
 Class AVFAudioReceiver is implemented in both .../av/.dylibs/libavdevice.61.3.100.dylib and .../cv2/.dylibs/libavdevice.61.3.100.dylib. This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
 ```
 
-This is a residual packaging/runtime warning, not an observed crash: every
-acceptance launch and clean quit returned status 0.
+Dependency investigation tested the PyAV 15.1 line against OpenCV 4.11, 4.12,
+4.13, 4.14, and 5.0 on macOS. OpenCV 4.11 and 4.12 produced zero duplicate-AVF
+warnings; 4.13, 4.14, and 5.0 bundled the conflicting `libavdevice` receiver
+classes. Both the `sam` and `video` optional extras are therefore bounded to
+`opencv-python-headless>=4.11,<4.13`; OpenCV remains absent from the base
+dependencies.
+
+The final environment was updated with
+`python -m pip install -e '.[video]' --upgrade`, resolving OpenCV 4.12.0.88.
+Both `import av, cv2, numpy` and `import cv2, av, numpy` completed with empty
+stderr and no `AVFFrameReceiver`/`AVFAudioReceiver` warning. PyAV decoded two
+1920×1080 frames from supplied V2, and OpenCV Farneback optical flow returned a
+finite `(1080, 1920, 2)` result. A separate acceptance copy then ran real app
+tracking at `4/288 frames · 10 active · 0 complete`, cancelled to 2,140 pending
+and 10 gaps, reached Saved, and quit with status 0 and empty stderr. The final
+tested runtime therefore mitigates the historical duplicate-library warning.
+
+### Known harness-induced diagnostic report
+
+`/Users/abhiksarkar/Library/Logs/DiagnosticReports/python3.9-2026-08-24-191620.ips`
+is a real report and is part of the audit record. Its header timestamp is
+2026-08-24 19:16:20 +0530; `captureTime` is
+2026-08-24 19:16:16.7952 +0530; PID is 52025. The raw launch session ties it
+to the operator sending Ctrl-C to the exploratory terminal process. Python
+raised `KeyboardInterrupt` while PyQt was executing a QWidget `eventFilter`;
+PyQt's exception path called `abort`, producing SIGABRT. The `.ips` main-thread
+stack corroborates `pyqt5_err_print` → `sipQWidget::eventFilter` →
+`QMessageLogger::fatal` → `abort`.
+
+This was a harness-induced SIGINT/PyQt abort, not a natural application close
+or user flow. It nevertheless occurred and must not be described as “no crash
+report.” The later uniquely wrapped formal runs began after this known report,
+quit naturally with status 0, and produced no newer Python/LabelImg diagnostic
+report when the directory was rechecked.
 
 ## Supplied sources
 
@@ -77,18 +111,30 @@ tests, and validating evidence files.
 | Sole-owner continuous-save status reaches `Saved` | Pass | Pass | Pass |
 | Verify current frame | Pass | Pass | Pass |
 | Close and reopen saved SQLite project | Pass | Pass | Pass |
-| Start propagation; use visible named Cancel action | Pass | Pass | Pass |
+| Start propagation; use visible named Cancel action | Pass | Pass (`2/288`, 20 active) | Pass |
+| Cancel result survives close/reopen | Pass | Pass (4,720 pending; 20 gaps) | Pass |
 | Pending review; named Accept, undo, named Reject | Pass (574) | Pass (81 accept; 206 reject) | Pass (382) |
 | 10 open/play/seek/close cycles | Pass | Pass | Pass |
 | Essentials at actual 800-pixel outer width | Pass | Pass | Pass |
 
-For V2, the real Cancel click arrived after the fast local tracker had already
-completed its 206-frame span; the control was visibly invoked, but there were
-no unresolved gaps. V1's earlier cancelled run retained 59 pending results,
-and V3 displayed live progress (`16/192 frames · 1 active · 0 complete`) before
-its visible Cancel action. Deterministic automation separately holds the
-worker until cancellation and asserts both pending observations and unresolved
-gaps, avoiding machine-speed dependence.
+The first V2 Cancel attempt arrived after a fast two-anchor run had already
+completed, so it was not counted as cancellation evidence. The corrective V2
+run added 20 manual `car` anchors through the real canvas, then activated the
+real named `Track all anchors` action without patching or slowing OpenCV. Fresh
+AX evidence while the request was active read
+`2/288 frames · 20 active · 0 complete · ETA 00:00:16.244`; the named `Cancel`
+button was visible and invoked at that point. The resulting review state read
+`4720 pending · 20 gaps · 0 failures`. After a natural status-0 quit, reopening
+the same SQLite project through the UI retained 4,720 pending observations and
+20 gaps. A read-only `load_project` check then confirmed 5,029 observations,
+4,720 pending observations at PTS 3000–707956, and 20 durable gaps at PTS
+707957–863946 with reason `cancelled` and revision 51.
+
+V1's earlier cancelled run retained 59 pending results, and V3 displayed live
+progress (`16/192 frames · 1 active · 0 complete`) before its visible Cancel
+action. Deterministic automation separately holds the worker until
+cancellation and asserts both pending observations and unresolved gaps,
+avoiding machine-speed dependence.
 
 The line edit's Qt validator rejects noncanonical letters before they enter the
 widget, so typing `invalid` through real OS key events cannot leave an invalid
@@ -216,4 +262,15 @@ bounded ten-cycle decoder/task shutdown soak.
 The initial RED proof was an absent test module (`pytest` collection exit 4).
 The added flow passes with the optional runtime enabled. The final focused,
 video/coordinator/command-bar, staged-snapshot, and full-repository results are
-recorded in the Task 7 implementer report.
+recorded in the Task 7 implementer report. The final full-repository run passed
+1,268 tests with 3 expected skips in 2,159.04 seconds.
+
+All pytest processes in the final verification used a unique session-scoped
+`LABELIMGPP_SETTINGS_PATH`; the production default remains
+`~/.labelImgSettings.json`, and `HOME` was not changed. Separate `Settings`
+instances can intentionally persist through that isolated session file while
+test teardown removes the temporary directory and restores the prior
+environment. The real user settings file remained unchanged across the full
+suite: SHA-256
+`c56cfbd61eab7a7884ec836a1909be39a85a993d4ea5442778dbecb93bd0bc9d`
+and macOS `mtime:ctime:size` `1787584575:1787584575:3165` before and after.

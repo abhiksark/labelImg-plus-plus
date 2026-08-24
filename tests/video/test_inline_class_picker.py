@@ -2,7 +2,7 @@ from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app
-from libs.core.annotation_workflow import AnnotationTool
+from libs.core.annotation_workflow import AnnotationTool, PromptPolicy
 from libs.core.sam_types import SamResult
 from libs.core.shape import Shape, ShapeType
 
@@ -21,6 +21,9 @@ def test_video_confirmation_keeps_rectangle_armed_and_reuses_class(
     video = make_video(tmp_path / 'picker.mp4')
     try:
         assert window.open_video(video)
+        window.active_class_control.confirm_each.setChecked(False)
+        assert window.workflow.snapshot.prompt_policy is \
+            PromptPolicy.REUSE_ACTIVE
         window.activate_box_tool()
         _finalise_rectangle(window)
         assert window.video_model.tracks == {}
@@ -54,6 +57,7 @@ def test_video_confirmation_keeps_rectangle_armed_and_reuses_class(
         assert window.video_model.tracks == {}
         assert window.video_model.observations == {}
     finally:
+        window.active_class_control.confirm_each.setChecked(False)
         window.dirty = False
         window.close()
         app.processEvents()
