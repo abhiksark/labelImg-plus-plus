@@ -1728,9 +1728,21 @@ class MainWindow(QMainWindow, WindowMixin):
             'saved': 'Saved',
             'failed': 'Save failed · Retry',
         }.get(state, 'Saving…')
+        read_only = (
+            self.document_kind == DocumentKind.VIDEO
+            and self.video_snapshot is not None
+            and self.video_snapshot.read_only)
+        if read_only:
+            copy = 'Read-only'
         if hasattr(self, 'label_save_status'):
-            self.label_save_status.setText('● ' + copy)
-            self.label_save_status.setToolTip(copy)
+            if read_only:
+                # Keep the save-status styler as the sole projection for the
+                # read-only semantic state; save callbacks must not overwrite
+                # it with their internal serializer state.
+                self._update_save_status_style(saved=True)
+            else:
+                self.label_save_status.setText('● ' + copy)
+                self.label_save_status.setToolTip(copy)
         command_bar = getattr(self, 'command_bar', None)
         if command_bar is not None:
             command_bar.save_button.setText(copy)

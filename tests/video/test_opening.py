@@ -322,7 +322,8 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
 
         assert window.video_snapshot.read_only is True
         assert window.canvas.locked is True
-        assert 'Read-only' in window.label_save_status.text()
+        assert window.label_save_status.text() == '● Read-only'
+        assert window.label_save_status.toolTip() == 'Read-only'
         assert not window.actions.verify.isEnabled()
         assert not window.actions.delete.isEnabled()
         assert not window.actions.videoAddKeyframe.isEnabled()
@@ -332,6 +333,7 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
         window.annotation_model.setData(index, 'changed', Qt.EditRole)
         window.copy_to_clipboard()
         window.set_dirty()
+        assert window.label_save_status.text() == '● Read-only'
 
         assert window.video_model.snapshot_state() == before
         index = window.annotation_model.index_for_identity('track-1')
@@ -339,6 +341,8 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
         assert not window.actions.pasteFromClipboard.isEnabled()
         assert window.dirty is False
         assert window.request_save_video_project() is None
+        assert window.label_save_status.text() == '● Read-only'
+        assert window.label_save_status.toolTip() == 'Read-only'
     finally:
         window.dirty = False
         window.close()

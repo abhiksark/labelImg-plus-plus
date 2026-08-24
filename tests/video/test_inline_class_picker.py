@@ -2,6 +2,7 @@ from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app
+from libs.core.annotation_workflow import AnnotationTool
 from libs.core.sam_types import SamResult
 from libs.core.shape import Shape, ShapeType
 
@@ -14,7 +15,7 @@ def _finalise_rectangle(window):
     window.canvas.finalise()
 
 
-def test_video_confirmation_creates_manual_anchor_and_undo_removes_track(
+def test_video_confirmation_keeps_rectangle_armed_and_reuses_class(
         tmp_path, make_video):
     app, window = get_main_app()
     video = make_video(tmp_path / 'picker.mp4')
@@ -33,9 +34,22 @@ def test_video_confirmation_creates_manual_anchor_and_undo_removes_track(
         observation = next(iter(window.video_model.observations.values()))
         assert observation.source == 'manual'
         assert observation.review_state == 'accepted'
-        # Confirming a box returns to Select, on video as on images.
-        assert window.actions.editMode.isChecked()
+        assert window.workflow.snapshot.active_class == 'car'
+        assert window.workflow.snapshot.active_tool is AnnotationTool.RECTANGLE
+        assert window.actions.create.isChecked()
+        assert window.canvas.mode == window.canvas.CREATE
+        assert window.class_picker.isHidden()
 
+        _finalise_rectangle(window)
+        app.processEvents()
+        assert window.class_picker.isHidden()
+        assert len(window.video_model.tracks) == 2
+        assert {track.label for track in window.video_model.tracks.values()} \
+            == {'car'}
+        assert window.workflow.snapshot.active_tool is AnnotationTool.RECTANGLE
+        assert window.canvas.mode == window.canvas.CREATE
+
+        window.undo_action()
         window.undo_action()
         assert window.video_model.tracks == {}
         assert window.video_model.observations == {}

@@ -10,6 +10,7 @@ from PyQt5.QtTest import QSignalSpy, QTest
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_model import VideoProjectModel
+from libs.core.video_project import load_project
 from libs.core.video_types import (
     DocumentKind, FrameStateRecord, ObservationRecord, PropagationBatch,
     PropagationRequest, PropagationResult, TrackGapRecord, TrackRecord,
@@ -744,7 +745,7 @@ def test_propagate_all_includes_rectangle_and_polygon_current_anchors(
         _close_window(app, window)
 
 
-def test_explicit_unavailable_sam2_keeps_canonical_model_unchanged(
+def test_explicit_unavailable_sam2_stages_failed_span_for_review(
         tmp_path, make_video):
     app, window = get_main_app()
     video = make_video(
@@ -754,7 +755,9 @@ def test_explicit_unavailable_sam2_keeps_canonical_model_unchanged(
         assert window.open_video(video)
         _seed(window)
         baseline = window.video_model.snapshot_state()
+        baseline_revision = window.video_model.revision
         baseline_undo = len(window.undo_stack)
+        project = window.video_snapshot.project_path
         window.video_propagation_backend = 'sam2'
         window.video_sam2_checkpoint = '/missing/model.pt'
         window.video_sam2_config = '/missing/model.yaml'
@@ -764,13 +767,25 @@ def test_explicit_unavailable_sam2_keeps_canonical_model_unchanged(
                     False, ('a working CUDA runtime is required',))):
             assert window.track_selected_forward() is not None
             assert _wait(app, lambda: window._propagation_handle is None)
-        assert window.video_model.snapshot_state() == baseline
-        assert len(window.undo_stack) == baseline_undo
+        assert window.video_model.observations == {
+            (item.track_id, item.pts): item for item in baseline.observations}
+        assert window.video_model.revision == baseline_revision + 1
+        assert len(window.undo_stack) == baseline_undo + 1
+        assert set(window.video_model.gaps) == {('track-1', 1, 12288)}
+        gap = window.video_model.gaps[('track-1', 1, 12288)]
+        assert gap.reason == 'failed'
+        assert gap.backend == 'sam2'
+        assert window._pending_propagation_failures == 1
+        assert '1 failures' in window.video_timeline.progress_label.text()
         assert not window._propagation_preview
         assert 'SAM 2 propagation is unavailable' \
             in window.statusBar().currentMessage()
         assert 'Select OpenCV or Auto' \
             in window.statusBar().currentMessage()
+        assert _wait(app, lambda: window.continuous_save.state == 'saved')
+        durable = load_project(project)
+        assert durable.revision == baseline_revision + 1
+        assert durable.gaps == (gap,)
     finally:
         _close_window(app, window)
 
