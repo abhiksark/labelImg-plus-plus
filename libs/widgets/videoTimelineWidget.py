@@ -7,7 +7,8 @@ import weakref
 try:
     from PyQt5.QtCore import QEvent, QPoint, Qt, QTimer, pyqtSignal
     from PyQt5.QtGui import (
-        QBrush, QColor, QKeySequence, QPainter, QPen, QPolygon,
+        QBrush, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap,
+        QPolygon,
     )
     from PyQt5.QtWidgets import (
         QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
@@ -19,10 +20,10 @@ except ImportError:
         QEvent, QPoint, QRegExp, Qt, QTimer, pyqtSignal,
     )
     from PyQt4.QtGui import (
-        QBrush, QColor, QComboBox, QHBoxLayout, QKeySequence, QLabel,
-        QLineEdit, QMenu, QPainter, QPen, QPolygon, QPushButton,
-        QRegExpValidator, QSizePolicy, QSlider, QStyle, QToolButton,
-        QVBoxLayout, QWidget,
+        QBrush, QColor, QComboBox, QHBoxLayout, QIcon, QKeySequence, QLabel,
+        QLineEdit, QMenu, QPainter, QPen, QPixmap, QPolygon, QPushButton,
+        QRegExpValidator, QSizePolicy, QSlider, QStyle, QToolButton, QVBoxLayout,
+        QWidget,
     )
     _QT5 = False
 
@@ -51,6 +52,20 @@ _MARKER_SPECS = (
     ('propagation', 'Propagation', 'hatched-span'),
     ('gap', 'Gaps', 'crossed-span'),
 )
+_MARKER_COLORS = {
+    'accepted': (45, 180, 90, 255),
+    'pending': (235, 165, 35, 255),
+    'verified': (125, 90, 220, 255),
+    'propagation': (70, 140, 220, 190),
+    'gap': (200, 75, 75, 190),
+}
+_PATTERN_NAMES = {
+    'solid-tick': 'solid tick',
+    'hollow-diamond': 'hollow diamond',
+    'bottom-triangle': 'bottom triangle',
+    'hatched-span': 'hatched span',
+    'crossed-span': 'crossed span',
+}
 
 
 @dataclass(frozen=True)
@@ -63,18 +78,29 @@ class TimelineMarkerGroup:
     ranges: tuple
 
 
-def _normalize_marker_range(value):
+def _marker_range(value):
     if isinstance(value, (tuple, list)) and len(value) == 2:
         start, end = value
     else:
         start = end = value
-    start = max(0, min(TIMELINE_MAX, int(start)))
-    end = max(0, min(TIMELINE_MAX, int(end)))
+    start = int(start)
+    end = int(end)
     return (min(start, end), max(start, end))
+
+
+def _normalize_marker_range(value):
+    start, end = _marker_range(value)
+    start = max(0, min(TIMELINE_MAX, start))
+    end = max(0, min(TIMELINE_MAX, end))
+    return (start, end)
 
 
 def _normalize_marker_ranges(values):
     return tuple(sorted(_normalize_marker_range(value) for value in values))
+
+
+def _marker_ranges(values):
+    return tuple(sorted(_marker_range(value) for value in values))
 
 
 def _marker_group_summary(group):
@@ -85,6 +111,42 @@ def _marker_group_summary(group):
     if kind == 'gap' and len(group.ranges) != 1:
         kind = 'gaps'
     return '%s %s, range %s' % (len(group.ranges), kind, range_text)
+
+
+def _draw_marker_treatment(painter, pattern, color, x, x_end, height):
+    if pattern in ('hatched-span', 'crossed-span'):
+        brush_style = (Qt.BDiagPattern
+                       if pattern == 'hatched-span' else Qt.CrossPattern)
+        painter.setPen(QPen(color, 1))
+        painter.setBrush(QBrush(color, brush_style))
+        painter.drawRect(x, 1, max(2, x_end - x), 5)
+    elif pattern == 'solid-tick':
+        painter.setPen(QPen(color, 2))
+        painter.drawLine(x, 0, x, 7)
+    elif pattern == 'hollow-diamond':
+        painter.setPen(QPen(color, 2))
+        painter.setBrush(QBrush(Qt.NoBrush))
+        painter.drawPolygon(QPolygon((
+            QPoint(x, 0), QPoint(x + 4, 4), QPoint(x, 8),
+            QPoint(x - 4, 4))))
+    elif pattern == 'bottom-triangle':
+        bottom = height - 1
+        painter.setPen(QPen(color, 1))
+        painter.setBrush(QBrush(color))
+        painter.drawPolygon(QPolygon((
+            QPoint(x - 4, bottom), QPoint(x + 4, bottom),
+            QPoint(x, bottom - 7))))
+
+
+def _marker_treatment_icon(kind, pattern):
+    pixmap = QPixmap(18, 12)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, False)
+    _draw_marker_treatment(
+        painter, pattern, QColor(*_MARKER_COLORS[kind]), 9, 15, 12)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def _timecode_validator(parent):
@@ -166,44 +228,13 @@ class _MarkerSlider(QSlider):
         left = 6
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        colors = {
-            'accepted': QColor(45, 180, 90),
-            'pending': QColor(235, 165, 35),
-            'verified': QColor(125, 90, 220),
-            'propagation': QColor(70, 140, 220, 190),
-            'gap': QColor(200, 75, 75, 190),
-        }
         for group in self._marker_groups:
-            color = colors[group.kind]
-            if group.pattern in ('hatched-span', 'crossed-span'):
-                brush_style = (Qt.BDiagPattern
-                               if group.pattern == 'hatched-span'
-                               else Qt.CrossPattern)
-                painter.setPen(QPen(color, 1))
-                painter.setBrush(QBrush(color, brush_style))
-                for start, end in group.ranges:
-                    x = left + int(start * width / TIMELINE_MAX)
-                    x_end = left + int(end * width / TIMELINE_MAX)
-                    painter.drawRect(x, 1, max(2, x_end - x), 5)
-                continue
+            color = QColor(*_MARKER_COLORS[group.kind])
             for start, _end in group.ranges:
                 x = left + int(start * width / TIMELINE_MAX)
-                if group.pattern == 'solid-tick':
-                    painter.setPen(QPen(color, 2))
-                    painter.drawLine(x, 0, x, 7)
-                elif group.pattern == 'hollow-diamond':
-                    painter.setPen(QPen(color, 2))
-                    painter.setBrush(QBrush(Qt.NoBrush))
-                    painter.drawPolygon(QPolygon((
-                        QPoint(x, 0), QPoint(x + 4, 4), QPoint(x, 8),
-                        QPoint(x - 4, 4))))
-                elif group.pattern == 'bottom-triangle':
-                    bottom = self.height() - 1
-                    painter.setPen(QPen(color, 1))
-                    painter.setBrush(QBrush(color))
-                    painter.drawPolygon(QPolygon((
-                        QPoint(x - 4, bottom), QPoint(x + 4, bottom),
-                        QPoint(x, bottom - 7))))
+                x_end = left + int(_end * width / TIMELINE_MAX)
+                _draw_marker_treatment(
+                    painter, group.pattern, color, x, x_end, self.height())
         painter.end()
 
 
@@ -231,6 +262,8 @@ class VideoTimelineWidget(QWidget):
         self._projecting_position = False
         self._pending_seek_value = None
         self._displayed_timecode = '00:00:00.000'
+        self._displayed_pts = None
+        self._marker_pts_by_kind = {}
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(50)
@@ -436,6 +469,7 @@ class VideoTimelineWidget(QWidget):
             self.slider.setValue(0)
             self.slider.blockSignals(blocked)
             self._displayed_timecode = '00:00:00.000'
+            self._displayed_pts = None
             self.time_edit.setText(self._displayed_timecode)
             self.position_label.setText(
                 'Frame ~— · %s' % self._displayed_timecode)
@@ -465,48 +499,78 @@ class VideoTimelineWidget(QWidget):
 
     def set_markers(self, spans=(), accepted=(), pending=(), verified=(),
                     propagation=(), gaps=()):
+        exact_by_kind = {
+            'accepted': _marker_ranges(accepted),
+            'pending': _marker_ranges(pending),
+            'verified': _marker_ranges(verified),
+            'propagation': _marker_ranges(
+                tuple(spans) + tuple(propagation)),
+            'gap': _marker_ranges(gaps),
+        }
+        self._marker_pts_by_kind = exact_by_kind
         self.slider.set_markers(
             propagation=tuple(
                 self._pts_to_normalized_range(item)
-                for item in tuple(spans) + tuple(propagation)),
-            accepted=tuple(self._pts_to_normalized(item) for item in accepted),
-            pending=tuple(self._pts_to_normalized(item) for item in pending),
-            verified=tuple(self._pts_to_normalized(item) for item in verified),
-            gaps=tuple(self._pts_to_normalized_range(item) for item in gaps))
+                for item in exact_by_kind['propagation']),
+            accepted=tuple(
+                self._pts_to_normalized_range(item)
+                for item in exact_by_kind['accepted']),
+            pending=tuple(
+                self._pts_to_normalized_range(item)
+                for item in exact_by_kind['pending']),
+            verified=tuple(
+                self._pts_to_normalized_range(item)
+                for item in exact_by_kind['verified']),
+            gaps=tuple(
+                self._pts_to_normalized_range(item)
+                for item in exact_by_kind['gap']))
         self._rebuild_legend()
 
     def _rebuild_legend(self):
         self.legend_menu.clear()
         self._legend_actions = {}
         summary = self.slider.accessible_marker_summary()
-        self.legend_button.setAccessibleDescription(summary)
-        self.legend_button.setToolTip(summary)
-        for group in self.slider.marker_groups():
+        groups = self.slider.marker_groups()
+        pattern_summary = '; '.join(
+            '%s uses %s' % (group.label, _PATTERN_NAMES[group.pattern])
+            for group in groups)
+        description = (
+            '%s. %s' % (summary, pattern_summary)
+            if pattern_summary else summary)
+        self.legend_button.setAccessibleDescription(description)
+        self.legend_button.setToolTip(description)
+        for group in groups:
+            pattern_name = _PATTERN_NAMES[group.pattern]
+            group_summary = _marker_group_summary(group)
             action = self.legend_menu.addAction(
-                '%s: %s' % (group.label, _marker_group_summary(group)))
+                '%s — %s: %s' % (
+                    group.label, pattern_name, group_summary))
             action.setData(group.kind)
-            action.setToolTip(_marker_group_summary(group))
+            action.setIcon(_marker_treatment_icon(group.kind, group.pattern))
+            action.setIconVisibleInMenu(True)
+            action.setToolTip('%s uses %s; %s' % (
+                group.label, pattern_name, group_summary))
             action.triggered.connect(
                 lambda _checked=False, kind=group.kind:
                 self._seek_next_marker(kind))
             self._legend_actions[group.kind] = action
 
     def _seek_next_marker(self, kind):
-        group = next(
-            (item for item in self.slider.marker_groups()
-             if item.kind == kind), None)
-        if group is None or self._snapshot is None:
+        ranges = self._marker_pts_by_kind.get(kind, ())
+        if (not ranges or self._snapshot is None
+                or self._displayed_pts is None):
             return
-        starts = tuple(item[0] for item in group.ranges)
-        current = self.slider.value()
+        starts = tuple(item[0] for item in ranges)
+        current = self._displayed_pts
         value = next((item for item in starts if item > current), starts[0])
         self._debounce.stop()
         self._pending_seek_value = None
-        self._emit_normalized_seek(value)
+        self._emit_pts_seek(value)
 
     def set_current_frame(self, frame_ref):
         if self._snapshot is None:
             return
+        self._displayed_pts = int(frame_ref.pts)
         value = self._pts_to_normalized(frame_ref.pts)
         self._projecting_position = True
         try:
@@ -645,6 +709,13 @@ class VideoTimelineWidget(QWidget):
     def _emit_normalized_seek(self, value):
         if self._snapshot is not None:
             self.seekRequested.emit(self._normalized_to_ref(value))
+
+    def _emit_pts_seek(self, pts):
+        snapshot = self._snapshot
+        if snapshot is not None:
+            self.seekRequested.emit(VideoFrameRef(
+                snapshot.fingerprint, snapshot.stream_index, int(pts),
+                snapshot.time_base_num, snapshot.time_base_den))
 
     def restore_time_editor(self):
         self.time_edit.setText(self._displayed_timecode)

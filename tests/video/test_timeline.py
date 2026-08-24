@@ -305,8 +305,8 @@ def test_module_constructs_through_true_pyqt4_fallback(monkeypatch):
     for name in ('QEvent', 'QPoint', 'QRegExp', 'Qt', 'QTimer', 'pyqtSignal'):
         setattr(qt_core, name, getattr(QtCore, name))
     for name in (
-            'QBrush', 'QColor', 'QPainter', 'QPen', 'QPolygon',
-            'QRegExpValidator',
+            'QBrush', 'QColor', 'QIcon', 'QPainter', 'QPen', 'QPixmap',
+            'QPolygon', 'QRegExpValidator',
             'QComboBox', 'QHBoxLayout', 'QKeySequence', 'QLabel', 'QLineEdit',
             'QMenu', 'QPushButton', 'QSizePolicy', 'QSlider', 'QStyle',
             'QToolButton', 'QVBoxLayout', 'QWidget'):

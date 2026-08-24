@@ -15,6 +15,16 @@ from libs.widgets import videoTimelineWidget as timeline
 _APP = QApplication.instance() or QApplication([])
 
 
+def _icon_bytes(action):
+    image = action.icon().pixmap(18, 12).toImage().convertToFormat(
+        QImage.Format_ARGB32)
+    byte_size = (image.sizeInBytes() if hasattr(image, 'sizeInBytes')
+                 else image.byteCount())
+    bits = image.bits()
+    bits.setsize(byte_size)
+    return bytes(bits)
+
+
 @pytest.fixture
 def video_snapshot():
     fingerprint = VideoFingerprint(1024, 123, 'marker-fixture')
@@ -157,5 +167,132 @@ def test_legend_wraps_to_the_first_marker_without_queued_slider_feedback(
 
         assert len(seeks) == 1
         assert seeks[0][0].pts == 1900
+    finally:
+        widget.close()
+
+
+def test_legend_preserves_exact_pts_for_every_kind_above_slider_precision(
+        video_snapshot):
+    snapshot = replace(video_snapshot, duration_pts=10 ** 12)
+    widget = timeline.VideoTimelineWidget()
+    try:
+        widget.set_session(snapshot)
+        widget.set_markers(
+            accepted=(123_456_789,),
+            pending=(223_456_789,),
+            verified=(323_456_789,),
+            propagation=((423_456_999, 423_456_789),),
+            gaps=((523_456_789, 523_456_999),))
+        current = replace(snapshot.initial_frame.frame_ref, pts=1000)
+        expected_pts = {
+            'accepted': 123_456_789,
+            'pending': 223_456_789,
+            'verified': 323_456_789,
+            'propagation': 423_456_789,
+            'gap': 523_456_789,
+        }
+        seeks = QSignalSpy(widget.seekRequested)
+
+        for index, action in enumerate(widget.legend_menu.actions(), 1):
+            widget.set_current_frame(current)
+            action.trigger()
+            assert len(seeks) == index
+            assert seeks[-1][0] == VideoFrameRef(
+                snapshot.fingerprint, snapshot.stream_index,
+                expected_pts[action.data()], snapshot.time_base_num,
+                snapshot.time_base_den)
+    finally:
+        widget.close()
+
+
+def test_legend_orders_exact_pts_that_collide_on_the_normalized_slider(
+        video_snapshot):
+    snapshot = replace(video_snapshot, duration_pts=2_000_001)
+    first_pts = int(snapshot.start_pts) + 1_000_000
+    second_pts = first_pts + 1
+    widget = timeline.VideoTimelineWidget()
+    try:
+        widget.set_session(snapshot)
+        widget.set_markers(accepted=(first_pts, second_pts))
+        assert widget._pts_to_normalized(first_pts) == \
+            widget._pts_to_normalized(second_pts)
+        widget.set_current_frame(
+            replace(snapshot.initial_frame.frame_ref, pts=first_pts))
+        seeks = QSignalSpy(widget.seekRequested)
+
+        widget.legend_menu.actions()[0].trigger()
+
+        assert len(seeks) == 1
+        assert seeks[0][0].pts == second_pts
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize('duration_pts', [None, 0])
+def test_legend_uses_exact_pts_when_duration_is_unknown_or_zero(
+        video_snapshot, duration_pts):
+    snapshot = replace(video_snapshot, duration_pts=duration_pts)
+    widget = timeline.VideoTimelineWidget()
+    try:
+        widget.set_session(snapshot)
+        widget.set_markers(accepted=(1900, 2900))
+        widget.set_current_frame(
+            replace(snapshot.initial_frame.frame_ref, pts=1400))
+        seeks = QSignalSpy(widget.seekRequested)
+
+        widget.legend_menu.actions()[0].trigger()
+
+        assert len(seeks) == 1
+        assert seeks[0][0].pts == 1900
+    finally:
+        widget.close()
+
+
+def test_legend_exact_pts_wrap_after_the_last_marker(video_snapshot):
+    snapshot = replace(video_snapshot, duration_pts=10 ** 12)
+    widget = timeline.VideoTimelineWidget()
+    try:
+        widget.set_session(snapshot)
+        widget.set_markers(accepted=(123_456_789, 123_456_799))
+        widget.set_current_frame(replace(
+            snapshot.initial_frame.frame_ref, pts=123_456_800))
+        seeks = QSignalSpy(widget.seekRequested)
+
+        widget.legend_menu.actions()[0].trigger()
+
+        assert len(seeks) == 1
+        assert seeks[0][0].pts == 123_456_789
+    finally:
+        widget.close()
+
+
+def test_legend_visibly_and_accessibly_maps_every_marker_pattern(
+        video_snapshot):
+    widget = timeline.VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        widget.set_markers(
+            accepted=(1900,), pending=(2100,), verified=(2300,),
+            propagation=((2500, 2700),), gaps=((3100, 3300),))
+        expected = {
+            'accepted': ('Accepted', 'solid tick'),
+            'pending': ('Pending', 'hollow diamond'),
+            'verified': ('Verified', 'bottom triangle'),
+            'propagation': ('Propagation', 'hatched span'),
+            'gap': ('Gaps', 'crossed span'),
+        }
+        icons = []
+
+        for action in widget.legend_menu.actions():
+            label, pattern = expected[action.data()]
+            assert not action.icon().isNull()
+            assert pattern in action.text().lower()
+            assert pattern in action.toolTip().lower()
+            assert '%s uses %s' % (label, pattern) in \
+                widget.legend_button.accessibleDescription()
+            icons.append(_icon_bytes(action))
+
+        assert len(icons) == 5
+        assert len(set(icons)) == 5
     finally:
         widget.close()
