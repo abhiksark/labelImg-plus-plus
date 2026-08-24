@@ -2001,7 +2001,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # Replacement/reset teardown has already decided to abandon this
             # document. A close workflow can call the public staging
             # cancellation before teardown when it must preserve review work.
-            self.cancel_video_propagation(stage=False)
+            self._abandon_video_propagation()
         if hasattr(self, '_regeneration_runs'):
             self._cancel_all_regeneration()
         if hasattr(self, '_tracking_handle'):
@@ -4420,8 +4420,14 @@ class MainWindow(QMainWindow, WindowMixin):
             generation=self._dataset_generation)
         self._propagation_handle = handle
         handle.progress.connect(self._on_propagation_batch)
-        handle.result.connect(self._on_propagation_result)
-        handle.error.connect(self._on_propagation_error)
+        handle.result.connect(
+            lambda result, origin_handle=handle, origin_request=request:
+            self._on_propagation_result(
+                result, origin_handle, origin_request))
+        handle.error.connect(
+            lambda message, origin_handle=handle, origin_request=request:
+            self._on_propagation_error(
+                message, origin_handle, origin_request))
         handle.finished.connect(
             lambda current=handle: self._on_propagation_finished(current))
         self._set_propagation_running(True)
@@ -4475,29 +4481,37 @@ class MainWindow(QMainWindow, WindowMixin):
             batch.eta_seconds, len(self._propagation_preview_gaps),
             running=True)
 
-    def _on_propagation_result(self, result):
+    def _propagation_callback_is_current(self, handle, request):
+        return (
+            self._propagation_handle is handle
+            and self._active_propagation_request is request)
+
+    def _on_propagation_result(self, result, handle, request):
+        if not self._propagation_callback_is_current(handle, request):
+            return
         if not self._propagation_is_current(result):
             self.cancel_video_propagation()
             return
-        request = self._active_propagation_request
         merged = self._merged_propagation_result(request, result=result)
         state = self._take_propagation_state()
         self._stage_pending_propagation(
             merged, state['before'], 'Stage propagated video results',
             'Propagation complete')
 
-    def _on_propagation_error(self, message):
-        request = self._active_propagation_request
-        if request is not None and (
-                self._propagation_preview or self._propagation_preview_gaps):
-            merged = self._merged_propagation_result(
-                request, unresolved=True, unresolved_reason='failed')
-            state = self._take_propagation_state()
-            self._stage_pending_propagation(
-                merged, state['before'], 'Stage interrupted video results',
-                'Propagation interrupted')
-        else:
-            self._clear_propagation_state()
+    def _on_propagation_error(self, message, handle, request):
+        if not self._propagation_callback_is_current(handle, request):
+            return
+        message = str(message)
+        merged = replace(
+            self._merged_propagation_result(
+                request, unresolved=True, unresolved_reason='failed'),
+            failures=tuple(
+                (track_id, message)
+                for track_id, _revision in request.track_revisions))
+        state = self._take_propagation_state()
+        self._stage_pending_propagation(
+            merged, state['before'], 'Stage interrupted video results',
+            'Propagation interrupted')
         self.status('Video propagation failed: ' + message, delay=10000)
 
     def _on_propagation_finished(self, handle):
@@ -4662,12 +4676,18 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.video_snapshot is not None:
             self._refresh_video_timeline_markers()
 
-    def cancel_video_propagation(self, stage=True):
+    def cancel_video_propagation(self, _checked=False):
         handle = getattr(self, '_propagation_handle', None)
         if handle is not None:
             handle.cancel()
-            if stage:
-                return self._finalize_cancelled_propagation(handle)
+            return self._finalize_cancelled_propagation(handle)
+        self._clear_propagation_state()
+        return False
+
+    def _abandon_video_propagation(self):
+        handle = getattr(self, '_propagation_handle', None)
+        if handle is not None:
+            handle.cancel()
             self._clear_propagation_state()
             return True
         self._clear_propagation_state()

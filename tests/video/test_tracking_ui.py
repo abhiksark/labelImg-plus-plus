@@ -3,7 +3,10 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
+from PyQt5.QtTest import QSignalSpy, QTest
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_model import VideoProjectModel
@@ -95,9 +98,9 @@ def _install_video_seam(window, tmp_path, duration_pts=100):
     return track, seed
 
 
-def _arm_propagation(window, track, seed, directions=(-1, 1)):
+def _arm_propagation(window, track, seed, directions=(-1, 1), request_id=17):
     request = PropagationRequest(
-        request_id=17, generation=window._dataset_generation,
+        request_id=request_id, generation=window._dataset_generation,
         document_revision=window.video_model.revision,
         source_path=window.video_snapshot.source_path,
         fingerprint=window.video_snapshot.fingerprint,
@@ -141,10 +144,12 @@ def test_final_propagation_is_pending_with_explicit_atomic_review_without_av(
             observations=(generated,), processed_frames=1,
             total_frames=5, active_tracks=1))
 
-        window._on_propagation_result(PropagationResult(
-            request.request_id, request.generation,
-            request.document_revision, observations=(final_generated,),
-            gaps=(gap,)))
+        window._on_propagation_result(
+            PropagationResult(
+                request.request_id, request.generation,
+                request.document_revision, observations=(final_generated,),
+                gaps=(gap,)),
+            window._propagation_handle, request)
 
         staged = window.video_model.observations[(track.track_id, 60)]
         assert staged.review_state == 'pending'
@@ -225,6 +230,69 @@ def test_cancel_stages_preview_pending_and_marks_only_unresolved_tail_without_av
         assert len(window.undo_stack) == baseline_undo + 1
         assert window._video_editable()
         assert window.continuous_save.state == 'pending'
+    finally:
+        window.save_changes_automatically.setChecked(True)
+        _close_window(app, window)
+
+
+@pytest.mark.parametrize('activation', ('wide-button', 'compact-menu'))
+def test_user_cancel_action_always_stages_partial_run_without_av(
+        tmp_path, activation):
+    app, window = get_main_app()
+    try:
+        track, seed = _install_video_seam(window, tmp_path)
+        request = _arm_propagation(window, track, seed, directions=(1,))
+        generated = ObservationRecord(
+            track.track_id, 60, [17, 14, 53, 50], source='tracker',
+            review_state='accepted', anchor=False,
+            revision=request.document_revision)
+        known_gap = TrackGapRecord(
+            track.track_id, 61, 62, 'occluded', 'opencv',
+            request.document_revision)
+        window._on_propagation_batch(PropagationBatch(
+            request.request_id, request.generation, 1,
+            observations=(generated,), gaps=(known_gap,),
+            processed_frames=1, total_frames=5, active_tracks=1))
+        baseline_revision = window.video_model.revision
+        baseline_undo = len(window.undo_stack)
+        save_states = QSignalSpy(window.continuous_save.stateChanged)
+        window.workspace_pages.set_page('canvas')
+        window.workspace_pages.set_video_visible(True)
+
+        if activation == 'wide-button':
+            window.video_timeline._update_layout_mode(2000)
+            app.processEvents()
+            assert window.video_timeline.layout_mode == 'wide'
+            assert window.video_timeline.cancel_propagation_button.isVisible()
+            QTest.mouseClick(
+                window.video_timeline.cancel_propagation_button,
+                Qt.LeftButton)
+        else:
+            window.video_timeline._update_layout_mode(420)
+            app.processEvents()
+            assert window.video_timeline.layout_mode == 'compact'
+            assert window.video_timeline.track_button.isVisible()
+            assert window.actions.videoCancelPropagation \
+                in window.video_timeline.track_menu.actions()
+            window.actions.videoCancelPropagation.trigger()
+
+        assert window._propagation_handle is None
+        assert window._active_propagation_request is None
+        assert not window._propagation_preview
+        assert not window.canvas.propagation_preview_shapes
+        assert window.video_model.observations[
+            (track.track_id, 60)].review_state == 'pending'
+        assert set(window.video_model.gaps) == {
+            (track.track_id, 61, 62),
+            (track.track_id, 63, 100),
+        }
+        assert window.video_model.revision == baseline_revision + 1
+        assert len(window.undo_stack) == baseline_undo + 1
+        assert window.continuous_save.state == 'pending'
+        assert [values[0] for values in save_states] == ['pending']
+        assert window.video_timeline.slider.pending
+        assert window.video_timeline.slider.gaps
+        assert window._video_editable()
     finally:
         window.save_changes_automatically.setChecked(True)
         _close_window(app, window)
@@ -328,9 +396,11 @@ def test_invalid_final_payload_clears_lifecycle_without_partial_staging(
             review_state='accepted', anchor=True,
             revision=request.document_revision)
 
-        window._on_propagation_result(PropagationResult(
-            request.request_id, request.generation,
-            request.document_revision, observations=(invalid,)))
+        window._on_propagation_result(
+            PropagationResult(
+                request.request_id, request.generation,
+                request.document_revision, observations=(invalid,)),
+            window._propagation_handle, request)
 
         assert window.video_model.snapshot_state() == baseline
         assert window._propagation_handle is None
@@ -357,7 +427,9 @@ def test_worker_error_after_gap_batch_stages_truthful_failure_ranges_without_av(
             request.request_id, request.generation, 1, gaps=(known_gap,),
             processed_frames=1, total_frames=5, active_tracks=1))
 
-        window._on_propagation_error('decoder failed after progress')
+        window._on_propagation_error(
+            'decoder failed after progress',
+            window._propagation_handle, request)
 
         assert window._propagation_handle is None
         assert window._active_propagation_request is None
@@ -370,7 +442,89 @@ def test_worker_error_after_gap_batch_stages_truthful_failure_ranges_without_av(
             item.source == 'tracker'
             for item in window.video_model.observations.values())
         assert window._video_editable()
+        assert window._pending_propagation_failures == 1
     finally:
+        window.save_changes_automatically.setChecked(True)
+        _close_window(app, window)
+
+
+@pytest.mark.parametrize('outcome', ('result', 'error'))
+def test_stale_worker_terminal_callback_is_noop_for_new_run_without_av(
+        tmp_path, outcome):
+    app, window = get_main_app()
+    started = threading.Event()
+    release = threading.Event()
+
+    def delayed(_backend, request, _direction, _cancelled, _emit_batch):
+        started.set()
+        release.wait(8)
+        if outcome == 'error':
+            raise RuntimeError('stale worker A failed')
+        stale = ObservationRecord(
+            request.seeds[0].track_id, 55, [17, 14, 53, 50],
+            source='tracker', review_state='accepted', anchor=False,
+            revision=request.document_revision)
+        return PropagationResult(
+            request.request_id, request.generation,
+            request.document_revision, observations=(stale,))
+
+    try:
+        track, seed = _install_video_seam(window, tmp_path)
+        with patch(
+                'labelImgPlusPlus.ConfiguredPropagationBackend.propagate',
+                delayed):
+            a_handle = window._start_video_propagation(
+                (seed,), (1,))
+            assert a_handle is not None
+            assert _wait(app, started.is_set)
+            a_request = window._active_propagation_request
+
+            b_request = _arm_propagation(
+                window, track, seed, directions=(1,),
+                request_id=a_request.request_id + 1000)
+            b_handle = window._propagation_handle
+            b_observation = ObservationRecord(
+                track.track_id, 65, [18, 14, 54, 50], source='tracker',
+                review_state='accepted', anchor=False,
+                revision=b_request.document_revision)
+            b_gap = TrackGapRecord(
+                track.track_id, 66, 67, 'occluded', 'opencv',
+                b_request.document_revision)
+            window._on_propagation_batch(PropagationBatch(
+                b_request.request_id, b_request.generation, 1,
+                observations=(b_observation,), gaps=(b_gap,),
+                processed_frames=1, total_frames=5, active_tracks=1))
+
+            baseline_model = window.video_model.snapshot_state()
+            baseline_revision = window.video_model.revision
+            baseline_undo = len(window.undo_stack)
+            baseline_save_state = window.continuous_save.state
+            baseline_preview = dict(window._propagation_preview)
+            baseline_preview_gaps = dict(window._propagation_preview_gaps)
+            baseline_markers = tuple(
+                window.video_timeline.slider.marker_groups())
+            save_states = QSignalSpy(window.continuous_save.stateChanged)
+            delivered = threading.Event()
+            a_handle.finished.connect(delivered.set)
+
+            release.set()
+            assert _wait(app, delivered.is_set)
+
+        assert window._propagation_handle is b_handle
+        assert window._active_propagation_request is b_request
+        assert window._propagation_preview == baseline_preview
+        assert window._propagation_preview_gaps == baseline_preview_gaps
+        assert window.video_model.snapshot_state() == baseline_model
+        assert window.video_model.revision == baseline_revision
+        assert len(window.undo_stack) == baseline_undo
+        assert window.continuous_save.state == baseline_save_state
+        assert not save_states
+        assert tuple(window.video_timeline.slider.marker_groups()) \
+            == baseline_markers
+        assert window.video_timeline._propagation_running
+    finally:
+        release.set()
+        window._close_video_decoder(close_decoder=False)
         window.save_changes_automatically.setChecked(True)
         _close_window(app, window)
 
@@ -662,26 +816,47 @@ def test_document_close_cancels_and_clears_preview(tmp_path, make_video):
         _close_window(app, window)
 
 
-def test_backend_infrastructure_failure_leaves_model_and_gaps_unchanged(
-        tmp_path, make_video):
+def test_worker_error_before_first_batch_stages_entire_failed_request_without_av(
+        tmp_path):
     app, window = get_main_app()
-    video = make_video(
-        tmp_path / 'broken.mp4', frames=18, width=128, height=96,
-        tracking_stress=True)
-
-    def fail(_backend, _request, _direction, _cancelled, _emit):
+    def fail(_backend, _request, _direction, _cancelled, _emit_batch):
         raise RuntimeError('decoder infrastructure failed')
 
     try:
-        assert window.open_video(video)
-        _seed(window)
-        baseline = window.video_model.snapshot_state()
-        with patch(
-                'labelImgPlusPlus.OpenCVPropagationBackend.propagate', fail):
-            assert window.track_selected_forward() is not None
-            assert _wait(app, lambda: window._propagation_handle is None)
-        assert window.video_model.snapshot_state() == baseline
+        track, seed = _install_video_seam(window, tmp_path)
+        baseline_revision = window.video_model.revision
+        baseline_undo = len(window.undo_stack)
+        save_states = QSignalSpy(window.continuous_save.stateChanged)
+        with patch.object(
+                window.video_model, 'stage_propagation_result',
+                wraps=window.video_model.stage_propagation_result) as stage:
+            with patch(
+                    'labelImgPlusPlus.ConfiguredPropagationBackend.propagate',
+                    fail):
+                assert window._start_video_propagation(
+                    (seed,), (1,)) is not None
+                assert _wait(app, lambda: window._propagation_handle is None)
+        assert window._active_propagation_request is None
         assert not window._propagation_preview
-        assert not window.video_model.gaps
+        assert window.video_model.revision == baseline_revision + 1
+        assert len(window.undo_stack) == baseline_undo + 1
+        assert not any(
+            item.source == 'tracker'
+            for item in window.video_model.observations.values())
+        assert set(window.video_model.gaps) == {
+            (track.track_id, 51, 100),
+        }
+        gap = window.video_model.gaps[(track.track_id, 51, 100)]
+        assert gap.reason == 'failed'
+        assert gap.track_id == track.track_id
+        assert stage.call_count == 1
+        assert stage.call_args.args[0].failures == (
+            (track.track_id, 'decoder infrastructure failed'),)
+        assert window._pending_propagation_failures == 1
+        assert '1 failures' in window.video_timeline.progress_label.text()
+        assert window.continuous_save.state == 'pending'
+        assert [values[0] for values in save_states] == ['pending']
+        assert window._video_editable()
     finally:
+        window.save_changes_automatically.setChecked(True)
         _close_window(app, window)
