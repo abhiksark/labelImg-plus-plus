@@ -1,8 +1,11 @@
 import builtins
 from dataclasses import FrozenInstanceError, replace
 import importlib.util
+import sys
+import types
 
 import pytest
+from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy
@@ -69,7 +72,50 @@ def test_timecode_editor_validator_matches_canonical_contract():
         widget.close()
 
 
-def test_timecode_validator_uses_qregexp_fallback(monkeypatch):
+def test_module_constructs_through_true_pyqt4_fallback(monkeypatch):
+    qt4 = types.ModuleType('PyQt4')
+    qt4.__path__ = []
+    qt_core = types.ModuleType('PyQt4.QtCore')
+    qt_gui = types.ModuleType('PyQt4.QtGui')
+    for name in ('QEvent', 'QRegExp', 'Qt', 'QTimer', 'pyqtSignal'):
+        setattr(qt_core, name, getattr(QtCore, name))
+    for name in (
+            'QColor', 'QPainter', 'QPen', 'QRegExpValidator',
+            'QComboBox', 'QHBoxLayout', 'QLabel', 'QLineEdit',
+            'QPushButton', 'QSlider', 'QStyle', 'QToolButton',
+            'QVBoxLayout', 'QWidget'):
+        source = QtGui if hasattr(QtGui, name) else QtWidgets
+        setattr(qt_gui, name, getattr(source, name))
+    qt4.QtCore = qt_core
+    qt4.QtGui = qt_gui
+
+    real_import = builtins.__import__
+
+    def import_without_pyqt5(name, *args, **kwargs):
+        if name.startswith('PyQt5'):
+            raise ImportError('exercise the supported PyQt4 branch')
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as isolated:
+        isolated.setitem(sys.modules, 'PyQt4', qt4)
+        isolated.setitem(sys.modules, 'PyQt4.QtCore', qt_core)
+        isolated.setitem(sys.modules, 'PyQt4.QtGui', qt_gui)
+        isolated.setattr(builtins, '__import__', import_without_pyqt5)
+        spec = importlib.util.spec_from_file_location(
+            'video_timeline_pyqt4_fallback', timeline_module.__file__)
+        fallback = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fallback)
+        widget = fallback.VideoTimelineWidget()
+        try:
+            widget.time_edit.setText('0:00:02.000')
+            assert widget.time_edit.hasAcceptableInput() is False
+            widget.time_edit.setText('00:00:02.000')
+            assert widget.time_edit.hasAcceptableInput() is True
+        finally:
+            widget.close()
+
+
+def test_module_constructs_with_legacy_pyqt5_validator(monkeypatch):
     real_import = builtins.__import__
 
     def import_without_regular_expression(
@@ -80,21 +126,21 @@ def test_timecode_validator_uses_qregexp_fallback(monkeypatch):
             raise ImportError('QRegularExpression is unavailable')
         return real_import(name, globals, locals, fromlist, level)
 
-    monkeypatch.setattr(
-        builtins, '__import__', import_without_regular_expression)
-    spec = importlib.util.spec_from_file_location(
-        'video_timeline_qregexp_fallback', timeline_module.__file__)
-    fallback = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fallback)
-
-    widget = fallback.VideoTimelineWidget()
-    try:
-        widget.time_edit.setText('0:00:02.000')
-        assert widget.time_edit.hasAcceptableInput() is False
-        widget.time_edit.setText('00:00:02.000')
-        assert widget.time_edit.hasAcceptableInput() is True
-    finally:
-        widget.close()
+    with monkeypatch.context() as isolated:
+        isolated.setattr(
+            builtins, '__import__', import_without_regular_expression)
+        spec = importlib.util.spec_from_file_location(
+            'video_timeline_legacy_pyqt5', timeline_module.__file__)
+        fallback = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fallback)
+        widget = fallback.VideoTimelineWidget()
+        try:
+            widget.time_edit.setText('0:00:02.000')
+            assert widget.time_edit.hasAcceptableInput() is False
+            widget.time_edit.setText('00:00:02.000')
+            assert widget.time_edit.hasAcceptableInput() is True
+        finally:
+            widget.close()
 
 
 def test_accessibility_style_value_change_emits_seek(video_snapshot):
@@ -135,6 +181,45 @@ def test_mouse_release_cancels_debounce_and_emits_one_final_seek(
         widget._slider_released()
         QTest.qWait(75)
         assert len(spy) == 1
+    finally:
+        widget.close()
+
+
+def test_mouse_release_preserves_user_value_across_internal_projection(
+        video_snapshot):
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        spy = QSignalSpy(widget.seekRequested)
+        widget._slider_pressed()
+        widget.slider.setValue(TIMELINE_MAX // 2)
+        widget.set_current_frame(video_snapshot.initial_frame.frame_ref)
+
+        widget._slider_released()
+        QTest.qWait(75)
+
+        assert len(spy) == 1
+        assert spy[0][0].pts == 5900
+    finally:
+        widget.close()
+
+
+def test_mouse_release_does_not_duplicate_debounced_value_after_projection(
+        video_snapshot):
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        spy = QSignalSpy(widget.seekRequested)
+        widget._slider_pressed()
+        widget.slider.setValue(TIMELINE_MAX // 2)
+        assert spy.wait(100)
+        widget.set_current_frame(video_snapshot.initial_frame.frame_ref)
+
+        widget._slider_released()
+        QTest.qWait(75)
+
+        assert len(spy) == 1
+        assert spy[0][0].pts == 5900
     finally:
         widget.close()
 
@@ -187,8 +272,11 @@ def test_timecode_invalid_return_emits_error_without_seek_or_rewrite(
     try:
         widget.set_session(video_snapshot)
         widget.show()
+        widget.activateWindow()
         widget.time_edit.setFocus(Qt.OtherFocusReason)
         widget.time_edit.setText(value)
+        QApplication.processEvents()
+        assert widget.time_edit.hasFocus()
         errors = QSignalSpy(widget.timeInputError)
         seeks = QSignalSpy(widget.seekRequested)
 
@@ -225,6 +313,79 @@ def test_timecode_out_of_range_return_emits_error_without_seek_or_rewrite(
         assert len(seeks) == 0
         assert widget.time_edit.text() == invalid
         assert widget.time_edit.hasFocus()
+    finally:
+        widget.close()
+
+
+def test_timecode_huge_canonical_hours_stay_in_error_only_path(
+        video_snapshot):
+    value = '%s:00:00.000' % ('9' * 400)
+    with pytest.raises(ValueError):
+        parse_timecode(value)
+
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        widget.show()
+        widget.activateWindow()
+        widget.time_edit.setFocus(Qt.OtherFocusReason)
+        widget.time_edit.setText(value)
+        QApplication.processEvents()
+        assert widget.time_edit.hasFocus()
+        errors = QSignalSpy(widget.timeInputError)
+        seeks = QSignalSpy(widget.seekRequested)
+
+        QTest.keyClick(widget.time_edit, Qt.Key_Return)
+        QApplication.processEvents()
+
+        assert len(errors) == 1
+        assert len(seeks) == 0
+        assert widget.time_edit.text() == value
+        assert widget.time_edit.hasFocus()
+    finally:
+        widget.close()
+
+
+def test_projection_after_invalid_return_preserves_text_until_escape(
+        video_snapshot):
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        widget.time_edit.setText('invalid')
+        errors = QSignalSpy(widget.timeInputError)
+        widget._emit_time_seek()
+        assert len(errors) == 1
+
+        projected = replace(
+            video_snapshot.initial_frame.frame_ref, pts=5900)
+        widget.set_current_frame(projected)
+
+        assert widget.time_edit.text() == 'invalid'
+        focus_returns = QSignalSpy(widget.focusReturnRequested)
+        QTest.keyClick(widget.time_edit, Qt.Key_Escape)
+        assert widget.time_edit.text() == '00:00:05.000'
+        assert len(focus_returns) == 1
+    finally:
+        widget.close()
+
+
+def test_projection_while_editing_preserves_text_and_updates_escape_target(
+        video_snapshot):
+    widget = VideoTimelineWidget()
+    try:
+        widget.set_session(video_snapshot)
+        widget.time_edit.setText('00:00:04')
+        widget.time_edit.setModified(True)
+
+        projected = replace(
+            video_snapshot.initial_frame.frame_ref, pts=6900)
+        widget.set_current_frame(projected)
+
+        assert widget.time_edit.text() == '00:00:04'
+        focus_returns = QSignalSpy(widget.focusReturnRequested)
+        QTest.keyClick(widget.time_edit, Qt.Key_Escape)
+        assert widget.time_edit.text() == '00:00:06.000'
+        assert len(focus_returns) == 1
     finally:
         widget.close()
 

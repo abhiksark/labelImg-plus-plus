@@ -2,20 +2,33 @@
 
 import re
 
-from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
-from PyQt5.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
-    QStyle, QToolButton, QVBoxLayout, QWidget,
-)
-
 try:
-    from PyQt5.QtCore import QRegularExpression
-    from PyQt5.QtGui import QRegularExpressionValidator
-    _REGULAR_EXPRESSION_VALIDATOR = True
+    from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
+    from PyQt5.QtGui import QColor, QPainter, QPen
+    from PyQt5.QtWidgets import (
+        QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
+        QStyle, QToolButton, QVBoxLayout, QWidget,
+    )
+    _QT5 = True
 except ImportError:
-    from PyQt5.QtCore import QRegExp
-    from PyQt5.QtGui import QRegExpValidator
+    from PyQt4.QtCore import QEvent, QRegExp, Qt, QTimer, pyqtSignal
+    from PyQt4.QtGui import (
+        QColor, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPainter, QPen,
+        QPushButton, QRegExpValidator, QSlider, QStyle, QToolButton,
+        QVBoxLayout, QWidget,
+    )
+    _QT5 = False
+
+if _QT5:
+    try:
+        from PyQt5.QtCore import QRegularExpression
+        from PyQt5.QtGui import QRegularExpressionValidator
+        _REGULAR_EXPRESSION_VALIDATOR = True
+    except ImportError:
+        from PyQt5.QtCore import QRegExp
+        from PyQt5.QtGui import QRegExpValidator
+        _REGULAR_EXPRESSION_VALIDATOR = False
+else:
     _REGULAR_EXPRESSION_VALIDATOR = False
 
 from libs.core.video_types import VideoFrameRef
@@ -46,7 +59,12 @@ def parse_timecode(value):
     if match is None:
         raise ValueError('Use HH:MM:SS.mmm')
     hours, minutes, seconds, millis = map(int, match.groups())
-    return hours * 3600 + minutes * 60 + seconds + millis / 1000.0
+    total_millis = (
+        ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis)
+    try:
+        return total_millis / 1000.0
+    except OverflowError:
+        raise ValueError('Timecode is outside the supported range')
 
 
 class _MarkerSlider(QSlider):
@@ -104,6 +122,8 @@ class VideoTimelineWidget(QWidget):
         super().__init__(parent)
         self._snapshot = None
         self._dragging = False
+        self._drag_seek_value = None
+        self._drag_emitted_value = None
         self._playing = False
         self._projecting_position = False
         self._pending_seek_value = None
@@ -219,6 +239,9 @@ class VideoTimelineWidget(QWidget):
 
     def set_session(self, snapshot):
         self._debounce.stop()
+        self._dragging = False
+        self._drag_seek_value = None
+        self._drag_emitted_value = None
         self._pending_seek_value = None
         self._snapshot = snapshot
         self.setEnabled(snapshot is not None)
@@ -230,6 +253,7 @@ class VideoTimelineWidget(QWidget):
             self.time_edit.setText(self._displayed_timecode)
             self.position_label.setText('PTS — · Frame ~—')
             return
+        self.time_edit.setModified(False)
         self.set_current_frame(snapshot.initial_frame.frame_ref)
 
     def set_playing(self, playing):
@@ -258,7 +282,8 @@ class VideoTimelineWidget(QWidget):
         seconds = (frame_ref.pts - start_pts) * \
             self._snapshot.time_base_num / self._snapshot.time_base_den
         self._displayed_timecode = format_timecode(seconds)
-        self.time_edit.setText(self._displayed_timecode)
+        if not self.time_edit.isModified():
+            self.time_edit.setText(self._displayed_timecode)
         rate_num = self._snapshot.average_rate_num
         rate_den = self._snapshot.average_rate_den
         approximate = (
@@ -293,17 +318,31 @@ class VideoTimelineWidget(QWidget):
 
     def _slider_pressed(self):
         self._dragging = True
+        self._drag_seek_value = self.slider.value()
+        self._drag_emitted_value = None
 
     def _slider_released(self):
-        self._dragging = False
         self._debounce.stop()
-        self._pending_seek_value = self.slider.value()
-        self._emit_slider_seek()
+        dragging = self._dragging
+        value = (self._drag_seek_value if dragging
+                 else self._pending_seek_value)
+        if value is None:
+            value = self.slider.value()
+        already_emitted = (
+            dragging and self._drag_emitted_value == value)
+        self._dragging = False
+        self._drag_seek_value = None
+        self._drag_emitted_value = None
+        self._pending_seek_value = None if already_emitted else value
+        if not already_emitted:
+            self._emit_slider_seek()
 
     def _slider_changed(self, value):
         if self._projecting_position:
             return
         self._pending_seek_value = int(value)
+        if self._dragging:
+            self._drag_seek_value = int(value)
         self._debounce.start()
 
     def _emit_slider_seek(self):
@@ -312,6 +351,8 @@ class VideoTimelineWidget(QWidget):
         if self._snapshot is not None and value is not None:
             self.seekRequested.emit(
                 self._normalized_to_ref(value))
+            if self._dragging:
+                self._drag_emitted_value = value
 
     def restore_time_editor(self):
         self.time_edit.setText(self._displayed_timecode)
@@ -330,11 +371,14 @@ class VideoTimelineWidget(QWidget):
                         'Time must be within 00:00:00.000 and %s'
                         % format_timecode(duration))
         except ValueError as exc:
+            self.time_edit.setModified(True)
             self.timeInputError.emit(str(exc))
             return
+        self.time_edit.setModified(False)
         pts = int(self._snapshot.start_pts or 0) + int(round(
             seconds * self._snapshot.time_base_den /
             self._snapshot.time_base_num))
         self.seekRequested.emit(VideoFrameRef(
             self._snapshot.fingerprint, self._snapshot.stream_index, pts,
             self._snapshot.time_base_num, self._snapshot.time_base_den))
+        self.focusReturnRequested.emit()

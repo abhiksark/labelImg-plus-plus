@@ -3,10 +3,13 @@ import time
 from unittest.mock import patch
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy, QTest
 
 from labelImgPlusPlus import DocumentKind, get_main_app
-from libs.core.video_types import VideoFrameRef
+from libs.core.video_types import (
+    VideoFingerprint, VideoFrameRef, VideoFrameResult, VideoSessionSnapshot,
+)
 
 
 def _wait(app, predicate, timeout=5):
@@ -24,6 +27,20 @@ def _ref(window, pts):
     return VideoFrameRef(
         snapshot.fingerprint, snapshot.stream_index, pts,
         snapshot.time_base_num, snapshot.time_base_den)
+
+
+def _timeline_snapshot():
+    fingerprint = VideoFingerprint(1024, 123, 'navigation-timeline')
+    frame_ref = VideoFrameRef(fingerprint, 0, 3400, 1, 1000)
+    image = QImage(96, 64, QImage.Format_RGB32)
+    byte_size = (image.sizeInBytes() if hasattr(image, 'sizeInBytes')
+                 else image.byteCount())
+    first = VideoFrameResult(
+        frame_ref, image, 96, 64, 96, 64, 0,
+        byte_size, 'navigation-timeline:0:3400')
+    return VideoSessionSnapshot(
+        'navigation-timeline.mp4', None, fingerprint, 0, 1, 1000,
+        96, 64, 0, 'fixture', 10_000, 900, 12, 1, 0, first)
 
 
 def test_frame_step_and_previous_use_pts_not_frame_index(
@@ -81,6 +98,33 @@ def test_escape_from_exact_time_restores_display_and_canvas_focus():
         assert _wait(app, window.canvas.hasFocus)
         assert timeline.time_edit.text() == displayed
         assert len(focus_returns) == 1
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_valid_exact_time_seeks_then_restores_canvas_focus():
+    app, window = get_main_app()
+    try:
+        window.workspace_pages.set_page('canvas')
+        timeline = window.video_timeline
+        timeline.set_session(_timeline_snapshot())
+        timeline.show()
+        events = []
+        timeline.seekRequested.connect(
+            lambda _frame_ref: events.append('seek'))
+        timeline.focusReturnRequested.connect(
+            lambda: events.append('focus'))
+        seeks = QSignalSpy(timeline.seekRequested)
+        timeline.time_edit.setText('00:00:02.345')
+        timeline.time_edit.setFocus(Qt.OtherFocusReason)
+
+        QTest.keyClick(timeline.time_edit, Qt.Key_Return)
+
+        assert _wait(app, window.canvas.hasFocus)
+        assert events == ['seek', 'focus']
+        assert len(seeks) == 1
+        assert seeks[0][0].pts == 3245
     finally:
         window.dirty = False
         window.close()
