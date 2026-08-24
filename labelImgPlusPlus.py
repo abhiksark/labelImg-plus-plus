@@ -1182,6 +1182,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
             video_cancel_propagation)
+        self.video_timeline.set_playback_action(video_play_pause)
         self.workspace_pages.sam_output_toggle.set_mode(self.sam_output_mode)
         self.workspace_pages.sam_output_toggle.modeChanged.connect(
             self._set_sam_output_mode)

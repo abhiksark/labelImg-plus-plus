@@ -172,6 +172,7 @@ class CommandBar(QWidget):
         if self._document_navigation_is_video:
             labels = ('Previous document', 'Next document')
             tooltips = labels
+            status_tips = labels
             accessible = labels
         else:
             labels = (
@@ -180,12 +181,16 @@ class CommandBar(QWidget):
             tooltips = (
                 self.previous_button.defaultAction().toolTip(),
                 self.next_button.defaultAction().toolTip())
+            status_tips = (
+                self.previous_button.defaultAction().statusTip(),
+                self.next_button.defaultAction().statusTip())
             accessible = ('Previous', 'Next')
-        for button, text, tooltip, name in zip(
+        for button, text, tooltip, status_tip, name in zip(
                 (self.previous_button, self.next_button),
-                labels, tooltips, accessible):
+                labels, tooltips, status_tips, accessible):
             button.setText(text)
             button.setToolTip(tooltip)
+            button.setStatusTip(status_tip)
             button.setAccessibleName(name)
 
     def set_position(self, text):

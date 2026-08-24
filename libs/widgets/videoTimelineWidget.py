@@ -4,7 +4,7 @@ import re
 
 try:
     from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
-    from PyQt5.QtGui import QColor, QPainter, QPen
+    from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen
     from PyQt5.QtWidgets import (
         QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
         QSizePolicy, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
@@ -13,9 +13,9 @@ try:
 except ImportError:
     from PyQt4.QtCore import QEvent, QRegExp, Qt, QTimer, pyqtSignal
     from PyQt4.QtGui import (
-        QColor, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPainter, QPen,
-        QMenu, QPushButton, QRegExpValidator, QSizePolicy, QSlider, QStyle,
-        QToolButton, QVBoxLayout, QWidget,
+        QColor, QComboBox, QHBoxLayout, QKeySequence, QLabel, QLineEdit,
+        QMenu, QPainter, QPen, QPushButton, QRegExpValidator, QSizePolicy,
+        QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
     )
     _QT5 = False
 
@@ -125,6 +125,7 @@ class VideoTimelineWidget(QWidget):
         self._drag_seek_value = None
         self._drag_emitted_value = None
         self._playing = False
+        self._playback_action = None
         self._propagation_running = False
         self._projecting_position = False
         self._pending_seek_value = None
@@ -196,6 +197,7 @@ class VideoTimelineWidget(QWidget):
         self.cancel_propagation_button.hide()
         self.slider = _MarkerSlider()
         self.slider.setRange(0, TIMELINE_MAX)
+        self.slider.setMinimumHeight(32)
 
         transport = QHBoxLayout()
         transport.setContentsMargins(4, 0, 4, 2)
@@ -258,6 +260,18 @@ class VideoTimelineWidget(QWidget):
         self.track_menu.addAction(cancel_action)
         self._update_layout_mode(self.width())
 
+    def set_playback_action(self, action):
+        if self._playback_action is not None:
+            try:
+                self._playback_action.changed.disconnect(
+                    self._sync_play_button)
+            except (RuntimeError, TypeError):
+                pass
+        self._playback_action = action
+        if action is not None:
+            action.changed.connect(self._sync_play_button)
+        self._sync_play_button()
+
     def set_propagation_progress(self, processed, total, active, completed,
                                  eta_seconds, failures, running=True):
         self._propagation_running = bool(running)
@@ -296,12 +310,21 @@ class VideoTimelineWidget(QWidget):
 
     def set_playing(self, playing):
         self._playing = bool(playing)
+        self._sync_play_button()
+
+    def _sync_play_button(self):
         verb = 'Pause' if self._playing else 'Play'
         icon = (QStyle.SP_MediaPause if self._playing
                 else QStyle.SP_MediaPlay)
+        name = '%s video' % verb
+        shortcut = (
+            self._playback_action.shortcut().toString(
+                QKeySequence.NativeText)
+            if self._playback_action is not None else '')
         self.play_button.setIcon(self.style().standardIcon(icon))
-        self.play_button.setAccessibleName('%s video' % verb)
-        self.play_button.setToolTip('%s video (Ctrl+Space)' % verb)
+        self.play_button.setAccessibleName(name)
+        self.play_button.setToolTip(
+            '%s (%s)' % (name, shortcut) if shortcut else name)
         self.play_button.setChecked(self._playing)
 
     def set_markers(self, spans=(), accepted=(), pending=(), verified=()):

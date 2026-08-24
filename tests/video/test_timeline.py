@@ -7,10 +7,10 @@ import types
 import pytest
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImage
+from PyQt5.QtGui import QImage, QKeySequence
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QAction, QApplication, QStyle
+from PyQt5.QtWidgets import QAction, QApplication, QStyle, QStyleFactory
 
 from libs.core.video_decoder import VideoDecoderSession
 from libs.core.video_types import (
@@ -20,6 +20,7 @@ from libs.widgets.videoTimelineWidget import (
     TIMELINE_MAX, VideoTimelineWidget, format_timecode, parse_timecode,
 )
 from libs.widgets import videoTimelineWidget as timeline_module
+from libs.utils.styles import get_combined_style
 
 
 _APP = QApplication.instance() or QApplication([])
@@ -42,10 +43,15 @@ def video_snapshot():
 
 def test_play_button_names_and_depicts_the_current_action():
     widget = VideoTimelineWidget()
+    playback = QAction('Play/Pause Video', widget)
+    playback.setShortcut(QKeySequence('Alt+P'))
     try:
+        widget.set_playback_action(playback)
+        shortcut = playback.shortcut().toString(QKeySequence.NativeText)
         widget.set_playing(False)
         assert widget.play_button.accessibleName() == 'Play video'
-        assert widget.play_button.toolTip() == 'Play video (Ctrl+Space)'
+        assert widget.play_button.toolTip() == \
+            'Play video (%s)' % shortcut
         assert widget.play_button.isChecked() is False
         assert widget.play_button.icon().pixmap(16, 16).toImage() == \
             widget.style().standardIcon(
@@ -53,11 +59,34 @@ def test_play_button_names_and_depicts_the_current_action():
 
         widget.set_playing(True)
         assert widget.play_button.accessibleName() == 'Pause video'
-        assert widget.play_button.toolTip() == 'Pause video (Ctrl+Space)'
+        assert widget.play_button.toolTip() == \
+            'Pause video (%s)' % shortcut
         assert widget.play_button.isChecked() is True
         assert widget.play_button.icon().pixmap(16, 16).toImage() == \
             widget.style().standardIcon(
                 QStyle.SP_MediaPause).pixmap(16, 16).toImage()
+    finally:
+        widget.close()
+
+
+def test_play_tooltip_tracks_live_native_action_shortcut_without_copying_it():
+    widget = VideoTimelineWidget()
+    playback = QAction('Play/Pause Video', widget)
+    playback.setShortcut(QKeySequence('Ctrl+Space'))
+    try:
+        widget.set_playback_action(playback)
+        widget.set_playing(True)
+        assert widget.play_button.shortcut().isEmpty()
+        assert playback.shortcut() == QKeySequence('Ctrl+Space')
+
+        playback.setShortcut(QKeySequence('Meta+Shift+P'))
+        QApplication.processEvents()
+        native = playback.shortcut().toString(QKeySequence.NativeText)
+        assert widget.play_button.toolTip() == \
+            'Pause video (%s)' % native
+        assert playback.shortcut().toString(QKeySequence.PortableText) == \
+            'Meta+Shift+P'
+        assert widget.play_button.shortcut().isEmpty()
     finally:
         widget.close()
 
@@ -95,6 +124,27 @@ def test_compact_timeline_keeps_essential_controls_visible():
             widget.propagate_selected_button,
             widget.cancel_propagation_button,
         ))
+    finally:
+        widget.close()
+
+
+def test_seek_slider_has_a_32_pixel_pointer_target_with_production_style():
+    widget = VideoTimelineWidget()
+    production_style = QStyleFactory.create('Fusion')
+    widget.setStyle(production_style)
+    widget.setStyleSheet(get_combined_style())
+    try:
+        widget.resize(748, 96)
+        widget.show()
+        QApplication.processEvents()
+
+        target = widget.slider.rect()
+        assert target.width() >= 32
+        assert target.height() >= 32
+        assert widget.slider.minimumHeight() >= 32
+        assert widget.slider.geometry().bottom() < \
+            widget.play_button.geometry().top()
+        assert widget.layout_mode == 'compact'
     finally:
         widget.close()
 
@@ -179,7 +229,7 @@ def test_module_constructs_through_true_pyqt4_fallback(monkeypatch):
         setattr(qt_core, name, getattr(QtCore, name))
     for name in (
             'QColor', 'QPainter', 'QPen', 'QRegExpValidator',
-            'QComboBox', 'QHBoxLayout', 'QLabel', 'QLineEdit',
+            'QComboBox', 'QHBoxLayout', 'QKeySequence', 'QLabel', 'QLineEdit',
             'QMenu', 'QPushButton', 'QSizePolicy', 'QSlider', 'QStyle',
             'QToolButton', 'QVBoxLayout', 'QWidget'):
         source = QtGui if hasattr(QtGui, name) else QtWidgets

@@ -5,6 +5,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QAction
 
 from labelImgPlusPlus import get_main_app
@@ -139,6 +140,8 @@ def test_video_command_bar_names_document_navigation_without_image_nouns():
         assert next_button.accessibleName() == 'Next document'
         assert previous.text() == 'Previous document'
         assert next_button.text() == 'Next document'
+        assert previous.statusTip() == 'Previous document'
+        assert next_button.statusTip() == 'Next document'
         exposed_text = ' '.join((
             previous.accessibleName(), previous.text(), previous.toolTip(),
             next_button.accessibleName(), next_button.text(),
@@ -151,8 +154,29 @@ def test_video_command_bar_names_document_navigation_without_image_nouns():
         _app.processEvents()
         assert previous.text() == 'Previous document'
         assert next_button.text() == 'Next document'
+        assert previous.statusTip() == 'Previous document'
+        assert next_button.statusTip() == 'Next document'
         assert 'image' not in ' '.join((
-            previous.toolTip(), next_button.toolTip())).lower()
+            previous.toolTip(), previous.statusTip(),
+            next_button.toolTip(), next_button.statusTip())).lower()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_timeline_uses_the_authoritative_playback_action_shortcut():
+    app, window = get_main_app([])
+    try:
+        action = window.actions.videoPlayPause
+        action.setShortcut(QKeySequence('Meta+Shift+P'))
+        app.processEvents()
+
+        native = action.shortcut().toString(QKeySequence.NativeText)
+        assert window.video_timeline.play_button.toolTip() == \
+            'Play video (%s)' % native
+        assert window.video_timeline.play_button.shortcut().isEmpty()
+        assert action.shortcut().toString(QKeySequence.PortableText) == \
+            'Meta+Shift+P'
     finally:
         window.dirty = False
         window.close()
