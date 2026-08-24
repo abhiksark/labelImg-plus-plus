@@ -87,6 +87,20 @@ def test_wait_again_restarts_one_bounded_interval_and_force_stops_it():
     assert not shutdown._deadline.isActive()
 
 
+def test_cancel_stops_a_timed_out_coordinator_without_restarting_it():
+    source = FakeActivity(('Saving newest revision',))
+    shutdown = ShutdownCoordinator(source, timeout_ms=5000)
+
+    shutdown.begin()
+    shutdown._deadline_expired()
+    shutdown.cancel()
+    shutdown.wait_again()
+
+    assert shutdown.state == 'cancelled'
+    assert not shutdown._poll_timer.isActive()
+    assert not shutdown._deadline.isActive()
+
+
 def test_task_coordinator_reports_stable_pending_and_running_job_names():
     coordinator = TaskCoordinator(logical_cpus=1)
     gates = {
@@ -163,10 +177,11 @@ def test_task_cancellation_can_preserve_the_sole_active_save_owner():
         coordinator.shutdown()
 
 
-def test_begin_shutdown_rejects_new_document_work_but_allows_save_drain():
+def test_begin_shutdown_allows_only_the_exact_owned_background_save_drain():
     coordinator = TaskCoordinator(logical_cpus=1)
     gate = threading.Event()
     started = threading.Event()
+    owner = object()
 
     def save(_handle):
         started.set()
@@ -177,17 +192,66 @@ def test_begin_shutdown_rejects_new_document_work_but_allows_save_drain():
             'background', save, key='save:image.png')
         assert started.wait(1)
 
-        coordinator.begin_shutdown(exclude_handles=(active_save,))
+        permit = coordinator.begin_shutdown(
+            exclude_handles=(active_save,),
+            save_identity=('save:image.png', coordinator.generation),
+            save_owner=owner)
 
         assert coordinator.is_shutting_down is True
         assert active_save.is_cancelled() is False
         with pytest.raises(RuntimeError):
             coordinator.submit(
                 'interactive', lambda _handle: None, key='image load')
+        rejected = (
+            ('background', 'save:other.png', coordinator.generation,
+             permit, owner),
+            ('background', 'continuous-save:project.sqlite',
+             coordinator.generation, permit, owner),
+            ('interactive', 'save:image.png', coordinator.generation,
+             permit, owner),
+            ('background', 'save:image.png', coordinator.generation + 1,
+             permit, owner),
+            ('background', 'save:image.png', coordinator.generation,
+             permit, object()),
+            ('background', 'save:image.png', coordinator.generation,
+             object(), owner),
+            ('background', 'save:image.png', coordinator.generation,
+             None, owner),
+        )
+        for lane, key, generation, candidate_permit, candidate_owner in rejected:
+            with pytest.raises(RuntimeError):
+                coordinator.submit(
+                    lane, lambda _handle: None, key=key,
+                    generation=generation,
+                    shutdown_permit=candidate_permit,
+                    shutdown_owner=candidate_owner)
         chained = coordinator.submit(
             'background', lambda _handle: None,
-            key='save:image.png', latest=True)
+            key='save:image.png', latest=True,
+            generation=coordinator.generation,
+            shutdown_permit=permit, shutdown_owner=owner)
         assert chained.is_cancelled() is False
     finally:
         gate.set()
         coordinator.shutdown()
+
+
+def test_abort_shutdown_revokes_the_save_permit_and_reopens_normal_work():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    owner = object()
+    permit = coordinator.begin_shutdown(
+        save_identity=('save:image.png', coordinator.generation),
+        save_owner=owner)
+
+    coordinator.abort_shutdown()
+
+    assert coordinator.is_shutting_down is False
+    normal = coordinator.submit(
+        'interactive', lambda _handle: None, key='image load')
+    with pytest.raises(RuntimeError):
+        coordinator.submit(
+            'background', lambda _handle: None, key='save:image.png',
+            generation=coordinator.generation,
+            shutdown_permit=permit, shutdown_owner=owner)
+    assert normal.is_cancelled() is False
+    coordinator.shutdown()

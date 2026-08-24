@@ -3,7 +3,9 @@ import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QInputDialog, QMessageBox
 
 from labelImgPlusPlus import get_main_app
@@ -71,6 +73,20 @@ class _BlockingFirstSave(object):
         finally:
             with self._lock:
                 self._active -= 1
+
+
+class _ToggleFailingSave(object):
+    def __init__(self, writer):
+        self.writer = writer
+        self.fail = True
+        self.attempts = 0
+
+    def __call__(self, request, cancelled=None, begin_commit=None):
+        self.attempts += 1
+        if self.fail:
+            return None
+        return self.writer(
+            request, cancelled=cancelled, begin_commit=begin_commit)
 
 
 def _install_writable_video_document(window, tmp_path, name):
@@ -422,7 +438,12 @@ def test_close_with_save_ignores_first_event_until_async_commit_finishes(
             event.ignore.assert_called_once_with()
             event.accept.assert_not_called()
             assert window._video_close_save_pending is True
-            assert window.task_coordinator.is_shutting_down is False
+            assert window.task_coordinator.is_shutting_down is True
+            with pytest.raises(RuntimeError):
+                window.task_coordinator.submit(
+                    'background', lambda _handle: None,
+                    key='continuous-save:unrelated.sqlite',
+                    generation=window._dataset_generation)
 
             gate.set()
             assert _wait(app, lambda: close.called)
@@ -431,6 +452,185 @@ def test_close_with_save_ignores_first_event_until_async_commit_finishes(
     finally:
         gate.set()
         window.dirty = False
+        window.close()
+
+
+def test_failed_save_timeout_save_button_explicitly_retries_and_closes(
+        tmp_path):
+    app, window = get_main_app()
+    from libs.core.video_project import save_project_delta
+    writer = _ToggleFailingSave(save_project_delta)
+    event = MagicMock()
+    try:
+        _install_writable_video_document(window, tmp_path, 'failed-save-retry')
+        with patch('labelImgPlusPlus.save_project_delta', writer), patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch.object(
+                window, 'close', return_value=True) as close:
+            _seed_track(window)
+            window.continuous_save.flush()
+            assert _wait(
+                app, lambda: window.continuous_save.state == 'failed')
+
+            window.closeEvent(event)
+            assert _wait(
+                app, lambda: (window.continuous_save.state == 'failed'
+                              and window.task_coordinator.is_idle()))
+            assert writer.attempts == 1
+            window._shutdown_coordinator._deadline_expired()
+            app.processEvents()
+
+            assert window._shutdown_save_button.isVisible()
+            assert window._shutdown_discard_button.isVisible()
+            assert window._shutdown_cancel_button.isVisible()
+            assert not window._shutdown_wait_button.isVisible()
+            writer.fail = False
+            QTest.mouseClick(window._shutdown_save_button, Qt.LeftButton)
+
+            assert window._shutdown_coordinator.state == 'waiting'
+            assert _wait(app, lambda: close.called)
+            assert writer.attempts == 2
+            assert window.continuous_save.state == 'saved'
+    finally:
+        window.dirty = False
+        window._shutdown_force = True
+        window.close()
+
+
+def test_failed_save_timeout_cancel_restores_editing_and_can_close_again(
+        tmp_path):
+    app, window = get_main_app()
+    from libs.core.video_project import save_project_delta
+    writer = _ToggleFailingSave(save_project_delta)
+    event = MagicMock()
+    try:
+        _install_writable_video_document(window, tmp_path, 'failed-save-cancel')
+        with patch('labelImgPlusPlus.save_project_delta', writer), patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch.object(
+                window, 'close', return_value=True) as close:
+            _seed_track(window)
+            window.workspace_pages.set_page('canvas')
+            window.show()
+            app.processEvents()
+            window.canvas.setFocus(Qt.OtherFocusReason)
+            assert _wait(app, window.canvas.hasFocus)
+            window.continuous_save.flush()
+            assert _wait(
+                app, lambda: window.continuous_save.state == 'failed')
+            failed_revision = window.video_model.revision
+
+            window.closeEvent(event)
+            assert _wait(
+                app, lambda: (window.continuous_save.state == 'failed'
+                              and window.task_coordinator.is_idle()))
+            old_coordinator = window._shutdown_coordinator
+            old_coordinator._deadline_expired()
+            app.processEvents()
+            QTest.mouseClick(window._shutdown_cancel_button, Qt.LeftButton)
+
+            assert old_coordinator.state == 'cancelled'
+            assert window._shutdown_coordinator is None
+            assert window.task_coordinator.is_shutting_down is False
+            assert window._plugin_document_ready is True
+            assert window.workspace_pages.isEnabled()
+            assert window.actions.open.isEnabled()
+            assert window.video_model.revision == failed_revision
+            assert window.video_model.dirty is True
+            assert window.dirty is True
+            assert window.continuous_save.state == 'failed'
+            assert _wait(app, window.canvas.hasFocus)
+            resumed = window.task_coordinator.submit(
+                'interactive', lambda _handle: None, key='resumed edit')
+            assert resumed.is_cancelled() is False
+            assert _wait(app, window.task_coordinator.is_idle)
+
+            writer.fail = False
+            window.continuous_save.retry()
+            assert _wait(
+                app, lambda: window.continuous_save.state == 'saved')
+            second_event = MagicMock()
+            window.closeEvent(second_event)
+            assert window._shutdown_coordinator is not old_coordinator
+            second_event.ignore.assert_called_once_with()
+            assert _wait(app, lambda: close.called)
+    finally:
+        window.dirty = False
+        window._shutdown_force = True
+        window.close()
+
+
+def test_failed_save_timeout_discard_button_continues_shutdown(tmp_path):
+    app, window = get_main_app()
+    from libs.core.video_project import save_project_delta
+    writer = _ToggleFailingSave(save_project_delta)
+    event = MagicMock()
+    try:
+        _install_writable_video_document(window, tmp_path, 'failed-save-discard')
+        with patch('labelImgPlusPlus.save_project_delta', writer), patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch.object(
+                window, 'close', return_value=True) as close:
+            _seed_track(window)
+            window.continuous_save.flush()
+            assert _wait(
+                app, lambda: window.continuous_save.state == 'failed')
+
+            window.closeEvent(event)
+            assert _wait(
+                app, lambda: (window.continuous_save.state == 'failed'
+                              and window.task_coordinator.is_idle()))
+            window._shutdown_coordinator._deadline_expired()
+            app.processEvents()
+            QTest.mouseClick(window._shutdown_discard_button, Qt.LeftButton)
+
+            assert window._shutdown_discard_confirmed is True
+            assert window.continuous_save.is_drained
+            assert _wait(app, lambda: close.called)
+    finally:
+        window.dirty = False
+        window._shutdown_force = True
+        window.close()
+
+
+def test_discard_keeps_in_flight_save_named_and_force_still_confirms(
+        tmp_path):
+    app, window = get_main_app()
+    from libs.core.video_project import save_project_delta
+    blocked = _BlockingFirstSave(save_project_delta)
+    event = MagicMock()
+    try:
+        _install_writable_video_document(window, tmp_path, 'discard-in-flight')
+        with patch('labelImgPlusPlus.save_project_delta', blocked), patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.No), patch.object(
+                window, 'close', return_value=True) as close, patch(
+                'labelImgPlusPlus.QMessageBox.warning',
+                return_value=QMessageBox.Cancel) as warning:
+            _seed_track(window)
+            window.continuous_save.flush()
+            assert blocked.started.wait(2)
+
+            window.closeEvent(event)
+            window._shutdown_coordinator._deadline_expired()
+            app.processEvents()
+
+            remaining = window._shutdown_remaining_label.text()
+            assert 'Saving newest revision' in remaining
+            assert 'Unknown work' not in remaining
+            QTest.mouseClick(window._shutdown_force_button, Qt.LeftButton)
+            assert warning.call_count == 1
+            assert window._shutdown_coordinator.state == 'timed_out'
+            assert not close.called
+
+            QTest.mouseClick(window._shutdown_wait_button, Qt.LeftButton)
+            assert window._shutdown_coordinator.state == 'waiting'
+            blocked.release.set()
+            assert _wait(app, lambda: close.called)
+    finally:
+        blocked.release.set()
+        window.dirty = False
+        window._shutdown_force = True
         window.close()
 
 

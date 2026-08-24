@@ -108,6 +108,12 @@ class _Lane:
         self.running = {}
 
 
+class _ShutdownSubmissionPermit(object):
+    """Opaque capability for one exact save stream during shutdown."""
+
+    __slots__ = ()
+
+
 class TaskCoordinator(QObject):
     """Own application worker capacity and apply latest-request-wins policy."""
 
@@ -129,7 +135,7 @@ class TaskCoordinator(QObject):
         self._generation = 0
         self._latest_by_key = {}
         self._shutting_down = False
-        self._shutdown_allowed_key_prefixes = ()
+        self._shutdown_submission = None
         self._completion = _CompletionSignals(self)
         self._completion.done.connect(self._on_done)
 
@@ -155,15 +161,28 @@ class TaskCoordinator(QObject):
             for name, lane in self._lanes.items()
         }
 
-    def active_jobs(self):
+    def active_jobs(self, exclude_handles=()):
         """Return stable, human-readable identities for every active job."""
+        excluded = set(id(handle) for handle in exclude_handles
+                       if handle is not None)
         values = []
         for lane in self._lanes.values():
             records = list(lane.pending) + list(lane.running.values())
             for record in records:
+                if id(record.handle) in excluded:
+                    continue
                 values.append(str(
                     record.handle.key or '%s job' % lane.name))
         return tuple(sorted(set(values)))
+
+    def has_active_handle(self, handle):
+        if handle is None:
+            return False
+        return any(
+            any(record.handle is handle for record in lane.pending)
+            or any(record.handle is handle
+                   for record in lane.running.values())
+            for lane in self._lanes.values())
 
     def is_idle(self):
         return all(
@@ -171,17 +190,27 @@ class TaskCoordinator(QObject):
             for lane in self._lanes.values())
 
     def submit(self, lane, function, priority=JobPriority.BULK, key=None,
-               latest=False, generation=None, on_discard=None):
-        allowed_during_shutdown = bool(
-            key is not None
-            and any(str(key).startswith(prefix)
-                    for prefix in self._shutdown_allowed_key_prefixes))
-        if self._shutting_down and not allowed_during_shutdown:
-            raise RuntimeError('task coordinator is shutting down')
+               latest=False, generation=None, on_discard=None,
+               shutdown_permit=None, shutdown_owner=None):
         if lane not in self._lanes:
             raise ValueError('unknown worker lane: %s' % lane)
         if generation is None:
             generation = self._generation
+        supplied_shutdown_capability = bool(
+            shutdown_permit is not None or shutdown_owner is not None)
+        if self._shutting_down:
+            authorization = self._shutdown_submission
+            allowed_during_shutdown = bool(
+                authorization is not None
+                and shutdown_permit is authorization[0]
+                and shutdown_owner is authorization[1]
+                and lane == 'background'
+                and key == authorization[2]
+                and generation == authorization[3])
+            if not allowed_during_shutdown:
+                raise RuntimeError('task coordinator is shutting down')
+        elif supplied_shutdown_capability:
+            raise RuntimeError('shutdown submission permit is not active')
         sequence = next(self._sequence)
         handle = JobHandle(sequence, generation, key, self)
         if latest and key is not None:
@@ -227,16 +256,32 @@ class TaskCoordinator(QObject):
             if id(handle) in excluded
         }
 
-    def begin_shutdown(self, exclude_handles=()):
-        """Stop new document work while the sole save stream drains."""
+    def begin_shutdown(self, exclude_handles=(), save_identity=None,
+                       save_owner=None):
+        """Stop new work and optionally authorize one exact save stream."""
         self._shutting_down = True
-        self._shutdown_allowed_key_prefixes = (
-            'save:', 'continuous-save:')
+        permit = None
+        self._shutdown_submission = None
+        if save_identity is not None:
+            if save_owner is None:
+                raise ValueError('shutdown save owner is required')
+            key, generation = save_identity
+            if key is None:
+                raise ValueError('shutdown save key is required')
+            permit = _ShutdownSubmissionPermit()
+            self._shutdown_submission = (
+                permit, save_owner, str(key), int(generation))
         self.cancel_all(exclude_handles=exclude_handles)
+        return permit
+
+    def abort_shutdown(self):
+        """Reopen submissions after the user cancels application shutdown."""
+        self._shutting_down = False
+        self._shutdown_submission = None
 
     def shutdown(self, wait_ms=500):
         self._shutting_down = True
-        self._shutdown_allowed_key_prefixes = ()
+        self._shutdown_submission = None
         self.cancel_all()
         all_done = True
         for lane in self._lanes.values():

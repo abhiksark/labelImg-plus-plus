@@ -209,6 +209,27 @@ class _WindowShutdownActivity(object):
 
     def __init__(self, window):
         self.window = window
+        self._preserved_save_handles = set()
+        self._remember_save_handles()
+
+    def _remember_save_handles(self):
+        for handle in (
+                getattr(self.window, '_save_handle', None),
+                getattr(self.window, '_video_save_handle', None)):
+            if handle is not None:
+                self._preserved_save_handles.add(handle)
+        return tuple(self._preserved_save_handles)
+
+    def active_save_handles(self):
+        coordinator = self.window.task_coordinator
+        return tuple(
+            handle for handle in self._remember_save_handles()
+            if coordinator.has_active_handle(handle))
+
+    def has_unresolved_save_work(self):
+        return bool(
+            self.active_save_handles()
+            or not self.window.continuous_save.is_drained)
 
     def cancel_all(self):
         window = self.window
@@ -217,23 +238,24 @@ class _WindowShutdownActivity(object):
         window.annotation_catalog.cancel()
         if hasattr(window, 'sam_controller'):
             window.sam_controller.cancel()
-        save_handles = tuple(
-            handle for handle in (
-                getattr(window, '_save_handle', None),
-                getattr(window, '_video_save_handle', None))
-            if handle is not None)
-        window.task_coordinator.begin_shutdown(
-            exclude_handles=save_handles)
+        save_handles = self._remember_save_handles()
+        save_identity = window._shutdown_save_identity()
+        window._shutdown_save_permit = window.task_coordinator.begin_shutdown(
+            exclude_handles=save_handles,
+            save_identity=save_identity,
+            save_owner=(window._continuous_save_submission_owner
+                        if save_identity is not None else None))
 
     def active_jobs(self):
         jobs = []
-        for name in self.window.task_coordinator.active_jobs():
-            if (name.startswith('save:')
-                    or name.startswith('continuous-save:')):
-                continue
-            jobs.append(name)
+        save_handles = self._remember_save_handles()
+        jobs.extend(self.window.task_coordinator.active_jobs(
+            exclude_handles=save_handles))
+        if self.active_save_handles():
+            jobs.append('Saving newest revision')
         save = self.window.continuous_save
-        if not save.is_drained:
+        if (not getattr(self.window, '_shutdown_discard_confirmed', False)
+                and not save.is_drained):
             jobs.append(
                 'Save failed · Retry' if save.state == 'failed'
                 else 'Saving newest revision')
@@ -242,7 +264,9 @@ class _WindowShutdownActivity(object):
     def is_idle(self):
         return (
             self.window.task_coordinator.is_idle()
-            and self.window.continuous_save.is_drained)
+            and (self.window.continuous_save.is_drained
+                 or getattr(
+                     self.window, '_shutdown_discard_confirmed', False)))
 
 
 def _probe_status(image_path, save_dir, image_list=None, resolver=None):
@@ -261,6 +285,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def __init__(self, default_filename=None, default_prefdef_class_file=None, default_save_dir=None):
         super(MainWindow, self).__init__()
+        self._initialization_complete = False
         self.setWindowTitle(__appname__)
 
         # Load setting in the main thread
@@ -375,11 +400,19 @@ class MainWindow(QMainWindow, WindowMixin):
         self._shutdown_remaining_label = None
         self._shutdown_wait_button = None
         self._shutdown_force_button = None
+        self._shutdown_save_button = None
+        self._shutdown_discard_button = None
+        self._shutdown_cancel_button = None
         self._shutdown_ready = False
         self._shutdown_force = False
         self._shutdown_finished = False
         self._shutdown_decoder = None
         self._shutdown_discard_confirmed = False
+        self._shutdown_save_permit = None
+        self._continuous_save_submission_owner = object()
+        self._shutdown_widget_states = []
+        self._shutdown_action_states = []
+        self._shutdown_restore_focus = None
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -1447,6 +1480,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self._action_map, self.settings)
         self.plugin_manager.command_host = self.plugin_command_host
         self.plugin_manager.activate_enabled()
+        self._initialization_complete = True
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -6265,7 +6299,8 @@ class MainWindow(QMainWindow, WindowMixin):
             viewport.width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
-        if not hasattr(self, 'task_coordinator'):
+        if not getattr(self, '_initialization_complete', False):
+            self._minimal_close_teardown()
             event.accept()
             return
         if getattr(self, '_reset_all_in_progress', False):
@@ -6348,6 +6383,42 @@ class MainWindow(QMainWindow, WindowMixin):
         self._begin_async_shutdown()
         event.ignore()
 
+    def _minimal_close_teardown(self):
+        """Release only owners known to exist on an incomplete window."""
+        shutdown = getattr(self, '_shutdown_coordinator', None)
+        if shutdown is not None:
+            try:
+                shutdown.cancel()
+            except Exception:
+                pass
+        coordinator = getattr(self, 'task_coordinator', None)
+        all_done = True
+        if coordinator is not None:
+            try:
+                all_done = coordinator.shutdown(wait_ms=0)
+            except Exception:
+                all_done = False
+        decoder = getattr(self, 'video_decoder', None)
+        if decoder is not None and all_done:
+            try:
+                decoder.close()
+                self.video_decoder = None
+            except Exception:
+                pass
+
+    def _shutdown_save_identity(self):
+        if self.document_kind == DocumentKind.IMAGE and self.file_path:
+            return (
+                'save:' + self.file_path,
+                self._dataset_generation)
+        if (self.document_kind == DocumentKind.VIDEO
+                and self.video_snapshot is not None
+                and self.video_snapshot.project_path):
+            return (
+                'continuous-save:' + self.video_snapshot.project_path,
+                self._dataset_generation)
+        return None
+
     def _begin_async_shutdown(self):
         if self._shutdown_coordinator is not None:
             return
@@ -6355,7 +6426,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.continuous_save.reset(
                 self._continuous_document_key(), self._dataset_generation,
                 self._document_revision)
-        else:
+        elif self.continuous_save.state != 'failed':
             self._request_continuous_save_drain()
             if (self.document_kind == DocumentKind.NONE
                     and not self.continuous_save.is_drained):
@@ -6373,14 +6444,38 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _freeze_shutdown_workspace(self):
         """Keep the draining document immutable while close is pending."""
+        self._shutdown_restore_focus = QApplication.focusWidget()
+        self._shutdown_widget_states = []
         for widget_name in (
                 'workspace_pages', 'workspace_shell', 'workspace_inspector',
                 'tool_rail', 'command_bar'):
             widget = getattr(self, widget_name, None)
             if widget is not None:
+                self._shutdown_widget_states.append(
+                    (widget, widget.isEnabled()))
                 widget.setEnabled(False)
+        self._shutdown_action_states = []
         for item in self.findChildren(QAction):
+            self._shutdown_action_states.append(
+                (item, item.isEnabled()))
             item.setEnabled(False)
+
+    def _restore_shutdown_workspace(self):
+        for widget, enabled in self._shutdown_widget_states:
+            widget.setEnabled(enabled)
+        for action, enabled in self._shutdown_action_states:
+            action.setEnabled(enabled)
+        self._shutdown_widget_states = []
+        self._shutdown_action_states = []
+        focus = self._shutdown_restore_focus
+        self._shutdown_restore_focus = None
+        if (focus is None or not QWidget.isVisible(focus)
+                or not QWidget.isEnabled(focus)):
+            focus = getattr(self, 'canvas', None)
+        if focus is not None:
+            QTimer.singleShot(
+                0, lambda target=focus:
+                target.setFocus(Qt.OtherFocusReason))
 
     def _on_shutdown_ready(self):
         if self._shutdown_ready or self._shutdown_force:
@@ -6435,25 +6530,63 @@ class MainWindow(QMainWindow, WindowMixin):
         force_button.setMinimumSize(96, 32)
         force_button.clicked.connect(self._request_force_shutdown)
         buttons.addWidget(force_button)
+        save_button = QToolButton(surface)
+        save_button.setText('Save')
+        save_button.setAccessibleName('Retry saving before quit')
+        save_button.setFocusPolicy(Qt.StrongFocus)
+        save_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        save_button.setMinimumSize(72, 32)
+        save_button.clicked.connect(self._retry_failed_shutdown_save)
+        buttons.addWidget(save_button)
+        discard_button = QToolButton(surface)
+        discard_button.setText('Discard')
+        discard_button.setAccessibleName('Discard unsaved changes and quit')
+        discard_button.setFocusPolicy(Qt.StrongFocus)
+        discard_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        discard_button.setMinimumSize(80, 32)
+        discard_button.clicked.connect(self._discard_failed_shutdown_save)
+        buttons.addWidget(discard_button)
+        cancel_button = QToolButton(surface)
+        cancel_button.setText('Cancel')
+        cancel_button.setAccessibleName('Cancel quit and return to editing')
+        cancel_button.setFocusPolicy(Qt.StrongFocus)
+        cancel_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        cancel_button.setMinimumSize(72, 32)
+        cancel_button.clicked.connect(self._cancel_shutdown_recovery)
+        buttons.addWidget(cancel_button)
         buttons.addStretch(1)
         layout.addLayout(buttons)
         layout.addStretch(1)
         QWidget.setTabOrder(wait_button, force_button)
+        QWidget.setTabOrder(force_button, save_button)
+        QWidget.setTabOrder(save_button, discard_button)
+        QWidget.setTabOrder(discard_button, cancel_button)
         self._shutdown_surface = surface
         self._shutdown_remaining_label = remaining
         self._shutdown_wait_button = wait_button
         self._shutdown_force_button = force_button
+        self._shutdown_save_button = save_button
+        self._shutdown_discard_button = discard_button
+        self._shutdown_cancel_button = cancel_button
         return surface
 
     def _show_shutdown_timeout(self, jobs):
         surface = self._ensure_shutdown_surface()
-        names = tuple(str(name) for name in jobs) or ('Unknown work',)
+        names = tuple(str(name) for name in jobs) or (
+            'Finishing background work',)
         self._shutdown_remaining_label.setText(
             'Remaining: %s' % ', '.join(names))
+        failed_save = self.continuous_save.state == 'failed'
+        self._shutdown_wait_button.setVisible(not failed_save)
+        self._shutdown_force_button.setVisible(not failed_save)
+        self._shutdown_save_button.setVisible(failed_save)
+        self._shutdown_discard_button.setVisible(failed_save)
+        self._shutdown_cancel_button.setVisible(failed_save)
         surface.setGeometry(self.rect())
         surface.show()
         surface.raise_()
-        self._shutdown_wait_button.setFocus(Qt.OtherFocusReason)
+        (self._shutdown_save_button if failed_save
+         else self._shutdown_wait_button).setFocus(Qt.OtherFocusReason)
 
     def _hide_shutdown_timeout(self):
         if self._shutdown_surface is not None:
@@ -6463,21 +6596,73 @@ class MainWindow(QMainWindow, WindowMixin):
         coordinator = self._shutdown_coordinator
         if coordinator is None or coordinator.state != 'timed_out':
             return
-        if (not self._shutdown_discard_confirmed
-                and not self.continuous_save.is_drained):
-            self.continuous_save.drain()
         self._hide_shutdown_timeout()
         coordinator.wait_again()
+
+    def _retry_failed_shutdown_save(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if (coordinator is None or coordinator.state != 'timed_out'
+                or self.continuous_save.state != 'failed'):
+            return
+        self._hide_shutdown_timeout()
+        self.continuous_save.drain()
+        coordinator.wait_again()
+
+    def _discard_failed_shutdown_save(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if (coordinator is None or coordinator.state != 'timed_out'
+                or self.continuous_save.state != 'failed'):
+            return
+        self._shutdown_discard_confirmed = True
+        self.continuous_save.reset(
+            self._continuous_document_key(), self._dataset_generation,
+            self._document_revision)
+        self._hide_shutdown_timeout()
+        coordinator.wait_again()
+
+    def _cancel_shutdown_recovery(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if (coordinator is None or coordinator.state != 'timed_out'
+                or self.continuous_save.state != 'failed'):
+            return
+        coordinator.cancel()
+        try:
+            coordinator.ready.disconnect(self._on_shutdown_ready)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            coordinator.timedOut.disconnect(self._show_shutdown_timeout)
+        except (TypeError, RuntimeError):
+            pass
+        coordinator.deleteLater()
+        self.task_coordinator.abort_shutdown()
+        self._shutdown_save_permit = None
+        self._shutdown_activity = None
+        self._shutdown_coordinator = None
+        self._shutdown_ready = False
+        self._shutdown_force = False
+        self._shutdown_finished = False
+        self._shutdown_decoder = None
+        self._shutdown_discard_confirmed = False
+        self._video_close_save_pending = False
+        self._hide_shutdown_timeout()
+        self._restore_shutdown_workspace()
+        self._plugin_document_ready = (
+            self.document_kind != DocumentKind.NONE)
+        self._publish_plugin_document(new_generation=True, force=True)
 
     def _request_force_shutdown(self, _checked=False):
         coordinator = self._shutdown_coordinator
         if coordinator is None or coordinator.state != 'timed_out':
             return
-        save_unresolved = not self.continuous_save.is_drained
+        activity = self._shutdown_activity
+        save_unresolved = bool(
+            activity.has_unresolved_save_work()
+            if activity is not None
+            else not self.continuous_save.is_drained)
         unsaved = bool(
-            not self._shutdown_discard_confirmed
-            and (self.dirty or save_unresolved
-                 or self.continuous_save.state == 'failed'))
+            save_unresolved
+            or (not self._shutdown_discard_confirmed and self.dirty))
         if unsaved:
             answer = QMessageBox.warning(
                 self, 'Force Quit with unsaved changes',
@@ -7374,10 +7559,15 @@ class MainWindow(QMainWindow, WindowMixin):
                 request, cancelled=handle.is_cancelled,
                 begin_commit=handle.begin_non_cancellable)
 
+        shutdown_permit = getattr(self, '_shutdown_save_permit', None)
+        shutdown_capability = ({
+            'shutdown_permit': shutdown_permit,
+            'shutdown_owner': self._continuous_save_submission_owner,
+        } if shutdown_permit is not None else {})
         handle = self.task_coordinator.submit(
             'background', save, priority=JobPriority.IMAGE_LOAD,
             key='continuous-save:' + request.project_path, latest=True,
-            generation=generation)
+            generation=generation, **shutdown_capability)
         self._video_save_handle = handle
         self._video_save_active = True
         handle.result.connect(
@@ -7529,10 +7719,15 @@ class MainWindow(QMainWindow, WindowMixin):
                         request, cancelled=handle.is_cancelled,
                         begin_commit=handle.begin_non_cancellable)
 
+        shutdown_permit = getattr(self, '_shutdown_save_permit', None)
+        shutdown_capability = ({
+            'shutdown_permit': shutdown_permit,
+            'shutdown_owner': self._continuous_save_submission_owner,
+        } if shutdown_permit is not None else {})
         handle = self.task_coordinator.submit(
             'background', save, priority=JobPriority.IMAGE_LOAD,
             key='save:' + request.image_path, latest=True,
-            generation=self._dataset_generation)
+            generation=self._dataset_generation, **shutdown_capability)
         self._save_handle = handle
         handle.result.connect(
             lambda path, req=request, gen=continuous_ticket.generation,

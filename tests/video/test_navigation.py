@@ -7,9 +7,9 @@ from unittest.mock import patch
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMainWindow, QMessageBox
 
-from labelImgPlusPlus import DocumentKind, get_main_app
+from labelImgPlusPlus import DocumentKind, MainWindow, get_main_app
 from libs.core.video_types import (
     VideoFingerprint, VideoFrameRef, VideoFrameResult, VideoSessionSnapshot,
 )
@@ -223,6 +223,45 @@ def test_close_is_nonblocking_and_waits_for_video_lane_before_decoder_close():
         release.set()
         window.dirty = False
         window.close()
+
+
+def test_close_during_shallow_partial_initialization_uses_minimal_teardown():
+    window = MainWindow.__new__(MainWindow)
+    QMainWindow.__init__(window)
+    window._initialization_complete = False
+    decoder = SimpleNamespace(close=MagicMock())
+    window.video_decoder = decoder
+    event = MagicMock()
+    try:
+        window.closeEvent(event)
+
+        event.accept.assert_called_once_with()
+        event.ignore.assert_not_called()
+        decoder.close.assert_called_once_with()
+    finally:
+        window.deleteLater()
+
+
+def test_close_after_task_owner_partial_initialization_skips_full_cleanup():
+    window = MainWindow.__new__(MainWindow)
+    QMainWindow.__init__(window)
+    window._initialization_complete = False
+    task_coordinator = SimpleNamespace(
+        shutdown=MagicMock(return_value=True))
+    decoder = SimpleNamespace(close=MagicMock())
+    window.task_coordinator = task_coordinator
+    window.video_decoder = decoder
+    event = MagicMock()
+    try:
+        window.closeEvent(event)
+
+        event.accept.assert_called_once_with()
+        event.ignore.assert_not_called()
+        task_coordinator.shutdown.assert_called_once_with(wait_ms=0)
+        decoder.close.assert_called_once_with()
+        assert not hasattr(window, 'settings')
+    finally:
+        window.deleteLater()
 
 
 def test_shutdown_timeout_surface_is_named_reused_and_keyboard_reachable():

@@ -59,3 +59,9 @@ class ShutdownCoordinator(QObject):
         self._poll_timer.stop()
         self._deadline.stop()
         self.state = 'force_requested'
+
+    def cancel(self):
+        """Abort the bounded wait without changing the activity owner."""
+        self._poll_timer.stop()
+        self._deadline.stop()
+        self.state = 'cancelled'
