@@ -259,6 +259,8 @@ class VideoTimelineWidget(QWidget):
         self._playback_action = None
         self._playback_action_destroyed_slot = None
         self._propagation_running = False
+        self._propagation_review_counts = (0, 0, 0)
+        self._review_actions_configured = False
         self._projecting_position = False
         self._pending_seek_value = None
         self._displayed_timecode = '00:00:00.000'
@@ -308,9 +310,15 @@ class VideoTimelineWidget(QWidget):
         self.propagate_selected_button.setText('Track selected object')
         self.cancel_propagation_button = QToolButton()
         self.cancel_propagation_button.setText('Cancel propagation')
+        self.accept_propagation_button = QToolButton()
+        self.accept_propagation_button.setText('Accept')
+        self.reject_propagation_button = QToolButton()
+        self.reject_propagation_button.setText('Reject')
         for button in (
                 self.propagate_all_button, self.propagate_selected_button,
-                self.cancel_propagation_button):
+                self.cancel_propagation_button,
+                self.accept_propagation_button,
+                self.reject_propagation_button):
             button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.track_menu = QMenu('Track', self)
         self.track_menu.setObjectName('videoTrackMenu')
@@ -329,6 +337,8 @@ class VideoTimelineWidget(QWidget):
             QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.progress_label.hide()
         self.cancel_propagation_button.hide()
+        self.accept_propagation_button.hide()
+        self.reject_propagation_button.hide()
         self.slider = _MarkerSlider()
         self.slider.setRange(0, TIMELINE_MAX)
         self.slider.setMinimumHeight(32)
@@ -360,6 +370,8 @@ class VideoTimelineWidget(QWidget):
         transport.addWidget(self.propagate_all_button)
         transport.addWidget(self.propagate_selected_button)
         transport.addWidget(self.cancel_propagation_button)
+        transport.addWidget(self.accept_propagation_button)
+        transport.addWidget(self.reject_propagation_button)
         transport.addWidget(self.legend_button)
         transport.addWidget(self.track_button)
         self._transport_layout = transport
@@ -399,15 +411,41 @@ class VideoTimelineWidget(QWidget):
         return super(VideoTimelineWidget, self).eventFilter(watched, event)
 
     def set_propagation_actions(self, all_action, selected_action,
-                                cancel_action):
+                                cancel_action, accept_action=None,
+                                reject_action=None):
         self.propagate_all_button.setDefaultAction(all_action)
         self.propagate_selected_button.setDefaultAction(selected_action)
         self.cancel_propagation_button.setDefaultAction(cancel_action)
+        self._review_actions_configured = (
+            accept_action is not None and reject_action is not None)
+        if self._review_actions_configured:
+            self.accept_propagation_button.setDefaultAction(accept_action)
+            self.reject_propagation_button.setDefaultAction(reject_action)
         self.track_menu.clear()
         self.track_menu.addAction(all_action)
         self.track_menu.addAction(selected_action)
+        if self._review_actions_configured:
+            self.track_menu.addSeparator()
+            self.track_menu.addAction(accept_action)
+            self.track_menu.addAction(reject_action)
         self.track_menu.addAction(cancel_action)
         self._update_layout_mode(self.width())
+
+    def set_propagation_review(self, pending, gaps=0, failures=0):
+        self._propagation_review_counts = (
+            max(0, int(pending)), max(0, int(gaps)), max(0, int(failures)))
+        if not self._propagation_running:
+            self._show_propagation_review_summary()
+        self._update_layout_mode(self.width())
+
+    def _show_propagation_review_summary(self):
+        pending, gaps, failures = self._propagation_review_counts
+        if pending or gaps or failures:
+            self.progress_label.setText(
+                'Propagation review · %s pending · %s gaps · %s failures' % (
+                    pending, gaps, failures))
+        else:
+            self.progress_label.clear()
 
     def set_playback_action(self, action):
         previous = self._playback_action
@@ -445,7 +483,7 @@ class VideoTimelineWidget(QWidget):
                                  eta_seconds, failures, running=True):
         self._propagation_running = bool(running)
         if not running:
-            self.progress_label.clear()
+            self._show_propagation_review_summary()
         else:
             eta = ('—' if eta_seconds is None
                    else format_timecode(float(eta_seconds)))
@@ -463,6 +501,10 @@ class VideoTimelineWidget(QWidget):
         self._drag_emitted_value = None
         self._pending_seek_value = None
         self._snapshot = snapshot
+        if snapshot is None:
+            self._propagation_review_counts = (0, 0, 0)
+            self._propagation_running = False
+            self._show_propagation_review_summary()
         self.setEnabled(snapshot is not None)
         if snapshot is None:
             blocked = self.slider.blockSignals(True)
@@ -609,6 +651,10 @@ class VideoTimelineWidget(QWidget):
         )
         idle_track = (
             self.propagate_all_button, self.propagate_selected_button)
+        review_track = (
+            (self.accept_propagation_button,
+             self.reject_propagation_button)
+            if self._review_actions_configured else ())
         running_track = (
             self.progress_label, self.cancel_propagation_button)
 
@@ -616,9 +662,10 @@ class VideoTimelineWidget(QWidget):
             return sum(self._measured_control_width(item)
                        for item in controls)
 
-        context_width = max(measured(idle_track), measured(running_track))
+        context_width = max(
+            measured(idle_track + review_track), measured(running_track))
         control_count = len(essentials) + max(
-            len(idle_track), len(running_track))
+            len(idle_track + review_track), len(running_track))
         margins = self._transport_layout.contentsMargins()
         outer = self.layout().contentsMargins()
         return (
@@ -630,10 +677,18 @@ class VideoTimelineWidget(QWidget):
     def _apply_responsive_visibility(self):
         wide = self.layout_mode == 'wide'
         running = self._propagation_running
+        pending, gaps, failures = self._propagation_review_counts
         self.propagate_all_button.setVisible(wide and not running)
         self.propagate_selected_button.setVisible(wide and not running)
         self.cancel_propagation_button.setVisible(wide and running)
-        self.progress_label.setVisible(running)
+        self.accept_propagation_button.setVisible(
+            wide and not running and self._review_actions_configured
+            and pending > 0)
+        self.reject_propagation_button.setVisible(
+            wide and not running and self._review_actions_configured
+            and pending > 0)
+        self.progress_label.setVisible(
+            running or bool(pending or gaps or failures))
         self.track_button.setVisible(not wide)
 
     def _update_layout_mode(self, width):

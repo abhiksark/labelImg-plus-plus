@@ -124,7 +124,7 @@ from libs.core.video_session import (
 )
 from libs.core.video_types import (
     DocumentKind, PropagationBatch, PropagationRequest, PropagationResult,
-    TrackingRequest, VideoExportRequest, VideoFrameRef,
+    TrackGapRecord, TrackingRequest, VideoExportRequest, VideoFrameRef,
 )
 from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.widgets.pluginManagerDialog import (
@@ -310,6 +310,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview = {}
         self._propagation_preview_gaps = {}
         self._propagation_before_state = None
+        self._pending_propagation_keys = set()
+        self._pending_propagation_gap_keys = set()
+        self._pending_propagation_failures = 0
         self._regeneration_runs = {}
         self._video_export_handle = None
         self._load_request_id = 0
@@ -643,18 +646,19 @@ class MainWindow(QMainWindow, WindowMixin):
             'Propagate the selected accepted anchor backward with optical flow',
             enabled=False)
         video_propagate_all = action(
-            'Propagate across video', self.propagate_across_video,
+            'Track all anchors', self.propagate_across_video,
             None, None,
-            'Propagate every accepted manual anchor on the current frame',
+            'Track every accepted manual anchor on the current frame',
             enabled=False)
         video_propagate_selected = action(
-            'Propagate selected object', self.propagate_selected_object,
+            'Track selected object', self.propagate_selected_object,
             None, None,
-            'Propagate the selected accepted manual anchor across the video',
+            'Track the selected accepted manual anchor across the video',
             enabled=False)
         video_cancel_propagation = action(
             'Cancel', self.cancel_video_propagation, None, None,
-            'Cancel whole-video propagation without changing the project',
+            'Cancel tracking, keep completed suggestions pending, and mark '
+            'the unresolved range',
             enabled=False)
         video_accept_suggestion = action(
             'Accept Current Suggestion', self.accept_current_suggestion,
@@ -679,14 +683,14 @@ class MainWindow(QMainWindow, WindowMixin):
             'Reject pending tracker observations in the visible range',
             enabled=False)
         video_accept_run = action(
-            'Accept Full Propagation',
-            lambda: self.review_full_propagation('accepted'),
+            'Accept propagated results',
+            self.accept_pending_propagation,
             None, 'verify',
             'Accept pending observations from the latest propagation run',
             enabled=False)
         video_reject_run = action(
-            'Reject Full Propagation',
-            lambda: self.review_full_propagation('rejected'),
+            'Reject propagated results',
+            self.reject_pending_propagation,
             None, 'close',
             'Reject pending observations from the latest propagation run',
             enabled=False)
@@ -1181,7 +1185,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self._dismiss_video_runtime_setup)
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
-            video_cancel_propagation)
+            video_cancel_propagation, video_accept_run, video_reject_run)
         self.video_timeline.set_playback_action(video_play_pause)
         self.workspace_pages.sam_output_toggle.set_mode(self.sam_output_mode)
         self.workspace_pages.sam_output_toggle.modeChanged.connect(
@@ -1994,7 +1998,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_video_playback_timer'):
             self.pause_video()
         if hasattr(self, '_propagation_handle'):
-            self.cancel_video_propagation()
+            # Replacement/reset teardown has already decided to abandon this
+            # document. A close workflow can call the public staging
+            # cancellation before teardown when it must preserve review work.
+            self.cancel_video_propagation(stage=False)
         if hasattr(self, '_regeneration_runs'):
             self._cancel_all_regeneration()
         if hasattr(self, '_tracking_handle'):
@@ -2007,6 +2014,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_snapshot = None
         self.video_model = None
         self._selected_video_track_id = None
+        self._pending_propagation_keys = set()
+        self._pending_propagation_gap_keys = set()
+        self._pending_propagation_failures = 0
         self._video_save_active = False
         self._video_close_save_pending = False
         self.current_video_frame_ref = None
@@ -3965,26 +3975,37 @@ class MainWindow(QMainWindow, WindowMixin):
     def _refresh_video_timeline_markers(self):
         if self.video_snapshot is None:
             return
-        by_track = {}
-        accepted = []
-        pending = []
-        for observation in self.video_observations:
-            by_track.setdefault(observation.track_id, []).append(
-                observation.pts)
-            if (observation.source == 'manual'
-                    and observation.review_state == 'accepted'
-                    and observation.anchor):
-                accepted.append(observation.pts)
-            elif observation.review_state == 'pending':
-                pending.append(observation.pts)
-        spans = tuple(
-            (min(values), max(values)) for values in by_track.values()
+        model = self.video_model
+        observations = (() if model is None else
+                        tuple(model.observations.values()))
+        frame_states = (() if model is None else
+                        tuple(model.frame_states.values()))
+        stored_gaps = (() if model is None else tuple(model.gaps.values()))
+        preview = tuple(self._propagation_preview.values())
+        preview_gaps = tuple(self._propagation_preview_gaps.values())
+        propagated_by_track = {}
+        for observation in observations + preview:
+            if observation.source == 'tracker':
+                propagated_by_track.setdefault(
+                    observation.track_id, []).append(observation.pts)
+        propagation = tuple(
+            (min(values), max(values))
+            for values in propagated_by_track.values()
             if values)
+        accepted = tuple(
+            item.pts for item in observations
+            if item.present and item.review_state == 'accepted')
+        pending = tuple(
+            item.pts for item in observations
+            if item.present and item.review_state == 'pending')
         verified = tuple(
-            state.pts for state in self.video_frame_states if state.verified)
+            state.pts for state in frame_states if state.verified)
+        gaps = tuple(
+            (item.start_pts, item.end_pts)
+            for item in stored_gaps + preview_gaps)
         self.video_timeline.set_markers(
-            spans=spans, accepted=accepted, pending=pending,
-            verified=verified)
+            accepted=accepted, pending=pending, verified=verified,
+            propagation=propagation, gaps=gaps)
 
     def _sync_video_model_views(self):
         model = self.video_model
@@ -4011,6 +4032,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.save.setEnabled(self.dirty)
         self.update_save_status(saved=not self.dirty)
         self._refresh_video_timeline_markers()
+        self._sync_pending_propagation_review()
         self._refresh_video_track_list()
         self.update_box_count()
         self._publish_plugin_document()
@@ -4135,7 +4157,8 @@ class MainWindow(QMainWindow, WindowMixin):
             item.review_state == 'pending'
             for item in model.observations.values())
         has_run_pending = any(
-            key in self._tracking_run_keys
+            key in (self._tracking_run_keys
+                    | self._pending_propagation_keys)
             and item.review_state == 'pending'
             for key, item in model.observations.items())
         self.actions.videoAcceptVisible.setEnabled(
@@ -4171,8 +4194,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.edit.setEnabled(editable and has_track)
         self.actions.shapeLineColor.setEnabled(editable and has_track)
         self.actions.shapeFillColor.setEnabled(editable and has_track)
-        can_track = (track is not None
-                     and track.shape_type in ('rectangle', 'polygon'))
+        can_track = bool(self._qualifying_propagation_seeds(True))
         self.actions.videoTrackForward.setEnabled(can_track and editable)
         self.actions.videoTrackBackward.setEnabled(can_track and editable)
         self._sync_video_propagation_actions()
@@ -4412,6 +4434,12 @@ class MainWindow(QMainWindow, WindowMixin):
         model = self.video_model
         if request is None or snapshot is None or model is None:
             return False
+        requested_tracks = {
+            track_id for track_id, _revision in request.track_revisions}
+        result_tracks = {
+            item.track_id for item in getattr(value, 'observations', ())}
+        result_tracks.update(
+            item.track_id for item in getattr(value, 'gaps', ()))
         return (
             value.request_id == request.request_id
             and value.generation == request.generation
@@ -4424,6 +4452,7 @@ class MainWindow(QMainWindow, WindowMixin):
             and snapshot.stream_index == request.stream_index
             and snapshot.time_base_num == request.time_base_num
             and snapshot.time_base_den == request.time_base_den
+            and result_tracks.issubset(requested_tracks)
             and all(track_id in model.tracks
                     and model.tracks[track_id].revision == revision
                     for track_id, revision in request.track_revisions))
@@ -4439,6 +4468,7 @@ class MainWindow(QMainWindow, WindowMixin):
             ((item.track_id, item.start_pts, item.end_pts), item)
             for item in batch.gaps)
         self._render_propagation_preview()
+        self._refresh_video_timeline_markers()
         self.video_timeline.set_propagation_progress(
             batch.processed_frames, batch.total_frames,
             batch.active_tracks, batch.completed_tracks,
@@ -4449,35 +4479,96 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self._propagation_is_current(result):
             self.cancel_video_propagation()
             return
-        model = self.video_model
-        before = self._propagation_before_state
-        self._propagation_handle = None
-        self._active_propagation_request = None
-        self._propagation_before_state = None
-        self._propagation_preview = {}
-        self._propagation_preview_gaps = {}
-        applied = model.apply_propagation_result(result)
-        after = model.snapshot_state()
-        if before != after:
-            self.undo_stack.push(VideoModelCommand(
-                self, before, after, 'Propagate video objects'))
-            self._on_video_model_mutation()
-        self._materialize_video_frame(self.current_video_frame_ref.pts)
-        self._set_propagation_running(False)
-        self.status(
-            'Propagation complete: %s observations, %s gaps, %s failures' % (
-                len(applied.observations), len(applied.gaps),
-                len(applied.failures)))
+        request = self._active_propagation_request
+        merged = self._merged_propagation_result(request, result=result)
+        state = self._take_propagation_state()
+        self._stage_pending_propagation(
+            merged, state['before'], 'Stage propagated video results',
+            'Propagation complete')
 
     def _on_propagation_error(self, message):
-        self._clear_propagation_state()
+        request = self._active_propagation_request
+        if request is not None and (
+                self._propagation_preview or self._propagation_preview_gaps):
+            merged = self._merged_propagation_result(
+                request, unresolved=True, unresolved_reason='failed')
+            state = self._take_propagation_state()
+            self._stage_pending_propagation(
+                merged, state['before'], 'Stage interrupted video results',
+                'Propagation interrupted')
+        else:
+            self._clear_propagation_state()
         self.status('Video propagation failed: ' + message, delay=10000)
 
     def _on_propagation_finished(self, handle):
         if self._propagation_handle is handle:
-            self._clear_propagation_state()
+            self._finalize_cancelled_propagation(handle)
 
-    def _clear_propagation_state(self):
+    def _unresolved_propagation_gaps(self, request, observations, gaps,
+                                     reason='cancelled'):
+        directions = ((request.direction,) if request.direction else (-1, 1))
+        backend = normalize_propagation_backend(
+            self.video_propagation_backend)
+        backend = 'propagation' if backend == 'auto' else backend
+        values = []
+        for track_id, _revision in request.track_revisions:
+            track_observations = tuple(
+                item for item in observations if item.track_id == track_id)
+            track_gaps = tuple(
+                item for item in gaps if item.track_id == track_id)
+            for direction in directions:
+                if direction > 0:
+                    frontier = max(
+                        (request.current_pts,)
+                        + tuple(item.pts for item in track_observations
+                                if item.pts > request.current_pts)
+                        + tuple(item.end_pts for item in track_gaps
+                                if item.end_pts > request.current_pts))
+                    start_pts, end_pts = frontier + 1, request.end_pts
+                else:
+                    frontier = min(
+                        (request.current_pts,)
+                        + tuple(item.pts for item in track_observations
+                                if item.pts < request.current_pts)
+                        + tuple(item.start_pts for item in track_gaps
+                                if item.start_pts < request.current_pts))
+                    start_pts, end_pts = request.start_pts, frontier - 1
+                if end_pts >= start_pts:
+                    values.append(TrackGapRecord(
+                        track_id, int(start_pts), int(end_pts), reason,
+                        backend, request.document_revision))
+        return tuple(values)
+
+    def _merged_propagation_result(self, request, result=None,
+                                   unresolved=False,
+                                   unresolved_reason='cancelled'):
+        observations = dict(self._propagation_preview)
+        gaps = dict(self._propagation_preview_gaps)
+        failures = ()
+        if result is not None:
+            observations.update(
+                ((item.track_id, int(item.pts)), item)
+                for item in result.observations)
+            gaps.update(
+                ((item.track_id, int(item.start_pts), int(item.end_pts)), item)
+                for item in result.gaps)
+            failures = result.failures
+        if unresolved:
+            for item in self._unresolved_propagation_gaps(
+                    request, tuple(observations.values()),
+                    tuple(gaps.values()), reason=unresolved_reason):
+                gaps[(item.track_id, item.start_pts, item.end_pts)] = item
+        return PropagationResult(
+            request.request_id, request.generation, request.document_revision,
+            observations=tuple(observations.values()),
+            gaps=tuple(gaps.values()), failures=tuple(failures))
+
+    def _take_propagation_state(self):
+        state = {
+            'handle': self._propagation_handle,
+            'request': self._active_propagation_request,
+            'before': self._propagation_before_state,
+        }
         self._propagation_handle = None
         self._active_propagation_request = None
         self._propagation_before_state = None
@@ -4485,14 +4576,102 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview_gaps = {}
         if hasattr(self, 'canvas'):
             self.canvas.set_propagation_preview_shapes([])
+        return state
+
+    def _stage_pending_propagation(self, result, before, description,
+                                   status_prefix):
+        model = self.video_model
+        if model is None or before is None:
+            self._set_propagation_running(False)
+            return None
+        try:
+            staged = model.stage_propagation_result(result)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._set_propagation_running(False)
+            self._sync_pending_propagation_review()
+            self._refresh_video_timeline_markers()
+            self.status(
+                'Propagation result could not be staged: %s' % exc,
+                delay=10000)
+            return None
+        self._pending_propagation_keys = {
+            (item.track_id, item.pts) for item in staged.observations}
+        self._pending_propagation_gap_keys = {
+            (item.track_id, item.start_pts, item.end_pts)
+            for item in staged.gaps}
+        self._pending_propagation_failures = len(staged.failures)
+        after = model.snapshot_state()
+        if before != after:
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, description))
+            self._on_video_model_mutation()
+        self._set_propagation_running(False)
+        self._sync_pending_propagation_review()
+        if self.current_video_frame_ref is not None:
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+        self.status(
+            '%s: %s pending, %s gaps, %s failures' % (
+                status_prefix, len(staged.observations), len(staged.gaps),
+                len(staged.failures)))
+        return staged
+
+    def _sync_pending_propagation_review(self):
+        model = self.video_model
+        pending = 0
+        gaps = 0
+        if model is not None:
+            pending = sum(
+                key in model.observations
+                and model.observations[key].review_state == 'pending'
+                for key in self._pending_propagation_keys)
+            gaps = sum(
+                key in model.gaps
+                for key in self._pending_propagation_gap_keys)
+        editable = self._video_editable()
+        self.actions.videoAcceptRun.setEnabled(bool(pending) and editable)
+        self.actions.videoRejectRun.setEnabled(bool(pending) and editable)
+        self.video_timeline.set_propagation_review(
+            pending, gaps, self._pending_propagation_failures)
+
+    def _finalize_cancelled_propagation(self, handle=None):
+        if handle is not None and self._propagation_handle is not handle:
+            return False
+        request = self._active_propagation_request
+        if request is None:
+            self._clear_propagation_state()
+            return False
+        identity = PropagationResult(
+            request.request_id, request.generation,
+            request.document_revision)
+        if not self._propagation_is_current(identity):
+            self._clear_propagation_state()
+            return False
+        merged = self._merged_propagation_result(
+            request, unresolved=True, unresolved_reason='cancelled')
+        state = self._take_propagation_state()
+        self._stage_pending_propagation(
+            merged, state['before'], 'Stage cancelled video results',
+            'Propagation cancelled')
+        return True
+
+    def _clear_propagation_state(self):
+        self._take_propagation_state()
         if hasattr(self, 'video_timeline'):
             self._set_propagation_running(False)
+            self._sync_pending_propagation_review()
+        if self.video_snapshot is not None:
+            self._refresh_video_timeline_markers()
 
-    def cancel_video_propagation(self):
+    def cancel_video_propagation(self, stage=True):
         handle = getattr(self, '_propagation_handle', None)
         if handle is not None:
             handle.cancel()
+            if stage:
+                return self._finalize_cancelled_propagation(handle)
+            self._clear_propagation_state()
+            return True
         self._clear_propagation_state()
+        return False
 
     def _start_correction_regeneration(self, track_id, correction_pts):
         model = self.video_model
@@ -4963,13 +5142,15 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
         self.cancel_video_tracking()
         before = self.video_model.snapshot_state()
-        for track_id, pts in keys:
-            self.video_model.review(track_id, pts, review_state)
+        reviewed = self.video_model.review_many(keys, review_state)
+        if not reviewed:
+            return False
         after = self.video_model.snapshot_state()
         self.undo_stack.push(VideoModelCommand(
             self, before, after, description))
         self._on_video_model_mutation()
         self._materialize_video_frame(self.current_video_frame_ref.pts)
+        self._sync_pending_propagation_review()
         return True
 
     def accept_current_suggestion(self):
@@ -5001,9 +5182,21 @@ class MainWindow(QMainWindow, WindowMixin):
             '%s visible tracker suggestions' % review_state.title())
 
     def review_full_propagation(self, review_state):
+        if review_state == 'accepted':
+            return self.accept_pending_propagation()
+        if review_state == 'rejected':
+            return self.reject_pending_propagation()
+        raise ValueError('invalid review state: %s' % review_state)
+
+    def accept_pending_propagation(self):
         return self._review_video_keys(
-            tuple(self._tracking_run_keys), review_state,
-            '%s full tracker propagation' % review_state.title())
+            tuple(self._pending_propagation_keys), 'accepted',
+            'Accept propagated video results')
+
+    def reject_pending_propagation(self):
+        return self._review_video_keys(
+            tuple(self._pending_propagation_keys), 'rejected',
+            'Reject propagated video results')
 
     def _video_export_range_bounds(self, values):
         snapshot = self.video_snapshot

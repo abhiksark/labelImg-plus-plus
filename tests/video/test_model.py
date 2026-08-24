@@ -187,6 +187,113 @@ def test_propagation_result_is_one_revision_and_protects_manual_anchors():
     assert [item.pts for item in applied.observations] == [5]
 
 
+def test_completed_propagation_is_pending_until_review_in_one_revision():
+    model = VideoProjectModel()
+    track = _track(model)
+    baseline_revision = model.revision
+
+    staged = model.stage_propagation_result(PropagationResult(
+        1, 2, baseline_revision,
+        observations=(
+            ObservationRecord(
+                track.track_id, 10, [2, 2, 12, 12], source='tracker',
+                review_state='accepted', anchor=False),
+            ObservationRecord(
+                track.track_id, 20, [3, 3, 13, 13], source='tracker',
+                review_state='accepted', anchor=False),
+        )))
+
+    assert model.revision == baseline_revision + 1
+    assert staged.observations
+    assert all(item.review_state == 'pending'
+               for item in staged.observations)
+    assert model.dirty
+
+    review_revision = model.revision
+    reviewed = model.review_many(
+        ((item.track_id, item.pts) for item in staged.observations),
+        'accepted')
+    assert model.revision == review_revision + 1
+    assert len(reviewed) == 2
+    assert all(model.observations[(item.track_id, item.pts)].review_state
+               == 'accepted' for item in staged.observations)
+
+
+def test_staging_preserves_manual_and_accepted_barriers_while_storing_gaps():
+    model = VideoProjectModel()
+    track = _track(model)
+    manual = model.upsert_manual(
+        track.track_id, 10, [1, 1, 11, 11])
+    accepted = model.upsert_tracker(ObservationRecord(
+        track.track_id, 20, [2, 2, 12, 12], source='tracker',
+        review_state='accepted', anchor=False))
+    baseline_revision = model.revision
+
+    staged = model.stage_propagation_result(PropagationResult(
+        2, 3, baseline_revision,
+        observations=(
+            ObservationRecord(
+                track.track_id, 10, [90, 90, 99, 99], source='tracker',
+                review_state='accepted', anchor=False),
+            ObservationRecord(
+                track.track_id, 20, [80, 80, 89, 89], source='tracker',
+                review_state='accepted', anchor=False),
+            ObservationRecord(
+                track.track_id, 30, [3, 3, 13, 13], source='tracker',
+                review_state='accepted', anchor=False),
+        ),
+        gaps=(
+            TrackGapRecord(track.track_id, 5, 25, 'occluded', 'opencv'),
+            TrackGapRecord(track.track_id, 40, 45, 'cancelled', 'opencv'),
+        )))
+
+    assert model.revision == baseline_revision + 1
+    assert model.observations[(track.track_id, 10)] == manual
+    assert model.observations[(track.track_id, 20)] == accepted
+    assert model.observations[(track.track_id, 30)].review_state == 'pending'
+    assert [item.pts for item in staged.observations] == [30]
+    assert set(model.gaps) == {
+        (track.track_id, 5, 25),
+        (track.track_id, 40, 45),
+    }
+
+
+def test_staging_and_many_review_validate_before_any_revision_advances():
+    model = VideoProjectModel()
+    track = _track(model)
+    baseline = model.snapshot_state()
+    revision = model.revision
+    with pytest.raises(ValueError, match='model revision'):
+        model.stage_propagation_result(PropagationResult(
+            1, 1, revision - 1,
+            observations=(ObservationRecord(
+                track.track_id, 5, [0, 0, 10, 10], source='tracker',
+                review_state='accepted', anchor=False),)))
+    assert model.revision == revision
+    assert model.snapshot_state() == baseline
+
+    with pytest.raises(KeyError):
+        model.stage_propagation_result(PropagationResult(
+            1, 1, revision,
+            observations=(ObservationRecord(
+                track.track_id, 5, [0, 0, 10, 10], source='tracker',
+                review_state='accepted', anchor=False),),
+            gaps=(TrackGapRecord(
+                'missing', 6, 7, 'occluded', 'opencv'),)))
+    assert model.revision == revision
+    assert model.snapshot_state() == baseline
+
+    pending = model.upsert_tracker(ObservationRecord(
+        track.track_id, 5, [0, 0, 10, 10], source='tracker',
+        review_state='pending', anchor=False))
+    review_revision = model.revision
+    with pytest.raises(KeyError):
+        model.review_many(
+            ((pending.track_id, pending.pts), ('missing', 99)), 'accepted')
+    assert model.revision == review_revision
+    assert model.observations[(pending.track_id, pending.pts)] == pending
+
+
 def test_propagation_gap_removes_stale_tracker_but_not_manual_data():
     model = VideoProjectModel()
     track = _track(model)

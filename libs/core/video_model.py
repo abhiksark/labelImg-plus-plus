@@ -234,6 +234,95 @@ class VideoProjectModel:
         self._changed_tracks[gap.track_id] = track
         return value
 
+    def stage_propagation_result(self, result):
+        """Atomically stage generated observations for explicit review."""
+        if not isinstance(result, PropagationResult):
+            raise TypeError('result must be a PropagationResult')
+        if int(result.document_revision) != self.revision:
+            raise ValueError('propagation result does not match model revision')
+
+        observations = {}
+        for item in result.observations:
+            if item.track_id not in self.tracks:
+                raise KeyError(item.track_id)
+            if item.source != 'tracker' or item.anchor:
+                raise ValueError(
+                    'propagation observations must be generated tracker data')
+            key = (item.track_id, int(item.pts))
+            observations[key] = replace(
+                item, pts=key[1], source='tracker',
+                review_state='pending', anchor=False)
+
+        gaps = {}
+        for item in result.gaps:
+            if not isinstance(item, TrackGapRecord):
+                raise TypeError('propagation gaps must be TrackGapRecord values')
+            if item.track_id not in self.tracks:
+                raise KeyError(item.track_id)
+            start_pts = int(item.start_pts)
+            end_pts = int(item.end_pts)
+            if end_pts < start_pts:
+                raise ValueError(
+                    'gap end_pts must be greater than or equal to start_pts')
+            key = (item.track_id, start_pts, end_pts)
+            gaps[key] = replace(
+                item, start_pts=start_pts, end_pts=end_pts)
+
+        pending = {}
+        for key, item in observations.items():
+            existing = self.observations.get(key)
+            if existing is not None and (
+                    existing.source == 'manual'
+                    or existing.review_state == 'accepted'):
+                continue
+            if any(gap.track_id == item.track_id
+                   and gap.start_pts <= item.pts <= gap.end_pts
+                   for gap in gaps.values()):
+                continue
+            pending[key] = item
+        if not pending and not gaps:
+            return PropagationResult(
+                result.request_id, result.generation, self.revision,
+                failures=result.failures)
+
+        revision = self._advance()
+        touched_tracks = set()
+        for key, gap in gaps.items():
+            for observation_key, current in tuple(self.observations.items()):
+                if (observation_key[0] == gap.track_id
+                        and gap.start_pts <= observation_key[1] <= gap.end_pts
+                        and current.source != 'manual'
+                        and current.review_state != 'accepted'):
+                    del self.observations[observation_key]
+                    self._changed_observations.pop(observation_key, None)
+                    self._deleted_observations[observation_key] = revision
+            value = replace(gap, revision=revision)
+            self.gaps[key] = value
+            self._changed_gaps[key] = value
+            self._deleted_gaps.pop(key, None)
+            touched_tracks.add(gap.track_id)
+        for key, item in pending.items():
+            for gap_key, gap in tuple(self.gaps.items()):
+                if (gap.track_id == item.track_id
+                        and gap.start_pts <= item.pts <= gap.end_pts):
+                    del self.gaps[gap_key]
+                    self._changed_gaps.pop(gap_key, None)
+                    self._deleted_gaps[gap_key] = revision
+            value = replace(item, revision=revision)
+            self.observations[key] = value
+            self._changed_observations[key] = value
+            self._deleted_observations.pop(key, None)
+            touched_tracks.add(item.track_id)
+        for track_id in touched_tracks:
+            track = replace(self.tracks[track_id], revision=revision)
+            self.tracks[track_id] = track
+            self._changed_tracks[track_id] = track
+        return PropagationResult(
+            result.request_id, result.generation, revision,
+            observations=tuple(self.observations[key] for key in pending),
+            gaps=tuple(self.gaps[key] for key in gaps),
+            failures=result.failures)
+
     def apply_propagation_result(self, result):
         """Atomically apply accepted generated observations and gaps.
 
@@ -460,6 +549,31 @@ class VideoProjectModel:
         self.observations[key] = value
         self._changed_observations[key] = value
         return value
+
+    def review_many(self, keys, review_state):
+        if review_state not in ('accepted', 'rejected'):
+            raise ValueError('invalid review state: %s' % review_state)
+        normalized = tuple(dict.fromkeys(
+            (track_id, int(pts)) for track_id, pts in keys))
+        for key in normalized:
+            if key not in self.observations:
+                raise KeyError(key)
+        changed = tuple(
+            key for key in normalized
+            if self.observations[key].source == 'tracker'
+            and self.observations[key].review_state != review_state)
+        if not changed:
+            return ()
+        revision = self._advance()
+        reviewed = []
+        for key in changed:
+            value = replace(
+                self.observations[key], review_state=review_state,
+                anchor=False, revision=revision)
+            self.observations[key] = value
+            self._changed_observations[key] = value
+            reviewed.append(value)
+        return tuple(reviewed)
 
     def promote_to_manual(self, track_id, pts):
         current = self.materialize_one(track_id, pts)
