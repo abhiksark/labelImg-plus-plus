@@ -58,7 +58,12 @@ class ActiveClassControl(QWidget):
 
     def set_active_class(self, label):
         if label:
-            self.combo.setCurrentText(str(label))
+            value = str(label)
+            index = self.combo.findText(value)
+            if index >= 0:
+                self.combo.setCurrentIndex(index)
+            else:
+                self.combo.setEditText(value)
         else:
             self.combo.setCurrentIndex(-1)
 

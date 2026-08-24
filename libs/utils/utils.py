@@ -10,8 +10,10 @@ try:
     from PyQt5.QtWidgets import QPushButton, QAction, QMenu, QWidget
     QT5 = True
 except ImportError:
-    from PyQt4.QtGui import QIcon, QColor, QPushButton, QAction, QMenu, QWidget, QRegExpValidator
-    from PyQt4.QtCore import QRegExp
+    from PyQt4.QtGui import (
+        QIcon, QColor, QPainter, QPixmap, QPushButton, QAction, QMenu, QWidget,
+        QRegExpValidator)
+    from PyQt4.QtCore import QRegExp, QSize
     QT5 = False
 
 # QRegExpValidator location differs between Qt versions

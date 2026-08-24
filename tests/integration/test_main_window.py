@@ -121,6 +121,43 @@ def test_manual_zoom_survives_dataset_navigation(tmp_path):
         window.close()
 
 
+def test_manual_image_navigation_centers_both_scrollbars(tmp_path):
+    """A differently sized image keeps manual zoom but starts centered."""
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    for path, size in ((first, (1200, 900)), (second, (1800, 1400))):
+        image = QImage(size[0], size[1], QImage.Format_RGB32)
+        image.fill(Qt.white)
+        assert image.save(str(path))
+    app, window = get_main_app()
+    try:
+        window.resize(640, 480)
+        window.show()
+        assert window.import_dir_images(str(tmp_path))
+        window.set_zoom(100)
+        app.processEvents()
+        horizontal = window.scroll_bars[Qt.Horizontal]
+        vertical = window.scroll_bars[Qt.Vertical]
+        assert horizontal.maximum() > 0
+        assert vertical.maximum() > 0
+        horizontal.setValue(0)
+        vertical.setValue(vertical.maximum())
+
+        window.request_next_image()
+
+        assert _wait(
+            app, lambda: (window.file_path == str(second)
+                          and horizontal.maximum() > 0
+                          and vertical.maximum() > 0))
+        QTest.qWait(5)
+        app.processEvents()
+        assert window.zoom_widget.value() == 100
+        assert abs(horizontal.value() - horizontal.maximum() // 2) <= 1
+        assert abs(vertical.value() - vertical.maximum() // 2) <= 1
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_direct_zoom_widget_input_selects_manual_mode(tmp_path):
     """Typing a zoom percentage must take ownership away from fit mode."""
     image_path = tmp_path / 'image.png'
@@ -621,8 +658,11 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         event = MagicMock()
         settings = MagicMock()
+        self.win.set_dirty()
         with patch.object(self.win, 'settings', settings), \
-                patch.object(self.win, 'may_continue', return_value=False):
+                patch.object(
+                    self.win, 'discard_changes_dialog',
+                    return_value=QMessageBox.Cancel):
             self.win.closeEvent(event)
 
         event.ignore.assert_called_once_with()
@@ -862,17 +902,27 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.win.default_save_dir = None
         self.win.load_file(self.test_image_path)
         self.win.label_file = None
+        self.win.save_changes_automatically.setChecked(False)
         self.win.set_dirty()
+        self.assertEqual(self.win.continuous_save.state, 'pending')
+        self.assertGreater(
+            self.win.continuous_save._newest_revision,
+            self.win.continuous_save._durable_revision)
+        self.assertIsNone(self.win.continuous_save._in_flight)
 
         expected = os.path.splitext(self.test_image_path)[0]
-        with patch.object(self.win, 'save_file_dialog') as dialog, \
-                patch.object(self.win, 'save_labels',
-                             return_value=True) as save_labels:
-            self.assertTrue(self.win.save_file())
+        from libs.core.save_pipeline import write_save_request
+        try:
+            with patch.object(self.win, 'save_file_dialog') as dialog, \
+                    patch('labelImgPlusPlus.write_save_request',
+                          wraps=write_save_request) as atomic_write:
+                self.assertTrue(self.win.save_file())
+        finally:
+            self.win.save_changes_automatically.setChecked(True)
 
         dialog.assert_not_called()
-        save_labels.assert_called_once()
-        written = save_labels.call_args[0][0]
+        atomic_write.assert_called_once()
+        written = atomic_write.call_args[0][0].annotation_path
         self.assertEqual(os.path.splitext(written)[0], expected)
         self.assertFalse(self.win.dirty)
 
@@ -883,7 +933,9 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.win.load_file(self.test_image_path)
         self.win.set_dirty()
 
-        with patch.object(self.win, 'save_labels', return_value=False):
+        with patch(
+                'labelImgPlusPlus.write_save_request',
+                side_effect=RuntimeError('writer rejected save')):
             self.assertFalse(self.win.save_file())
 
         self.assertTrue(self.win.dirty)
@@ -965,6 +1017,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Save as YOLO
         from libs.formats.labelFile import LabelFileFormat
         self.win.label_file_format = LabelFileFormat.YOLO
+        self.win.set_dirty()
         self.win.save_file()
 
         # Check TXT file exists
@@ -1268,6 +1321,7 @@ class TestMainWindowAnnotations(unittest.TestCase):
     def test_completed_rectangle_uses_the_active_class_control(self):
         """A completed shape must not retain a removed legacy control path."""
         try:
+            self.win.active_class_control.confirm_each.setChecked(False)
             self.win._active_class_selected('vehicle')
             existing_count = len(self.win.canvas.shapes)
 

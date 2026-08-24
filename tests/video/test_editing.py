@@ -1,13 +1,17 @@
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtWidgets import QInputDialog, QMessageBox
 
 from labelImgPlusPlus import get_main_app
-from libs.core.video_project import load_project
-from libs.core.video_types import VideoFrameRef
+from libs.core.video_model import VideoProjectModel
+from libs.core.video_project import initialize_project, load_project
+from libs.core.video_types import (
+    DocumentKind, VideoFingerprint, VideoFrameRef, VideoSessionSnapshot,
+)
 
 
 def _wait(app, predicate, timeout=5):
@@ -39,6 +43,63 @@ def _ref(window, pts):
     return VideoFrameRef(
         snapshot.fingerprint, snapshot.stream_index, pts,
         snapshot.time_base_num, snapshot.time_base_den)
+
+
+class _BlockingFirstSave(object):
+    def __init__(self, writer):
+        self.writer = writer
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.requests = []
+        self.max_active = 0
+        self._active = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, request, cancelled=None, begin_commit=None):
+        with self._lock:
+            self.requests.append(request)
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+            first = len(self.requests) == 1
+        try:
+            if first:
+                self.started.set()
+                assert self.release.wait(5)
+            return self.writer(
+                request, cancelled=cancelled, begin_commit=begin_commit)
+        finally:
+            with self._lock:
+                self._active -= 1
+
+
+def _install_writable_video_document(window, tmp_path, name):
+    source = tmp_path / (name + '.mp4')
+    source.write_bytes(b'video-save-owner-fixture')
+    stat = source.stat()
+    fingerprint = VideoFingerprint(
+        stat.st_size, stat.st_mtime_ns, name + '-fingerprint')
+    project = tmp_path / (name + '.labelimgpp.sqlite')
+    initialize_project(str(project), SimpleNamespace(
+        source_path=str(source), fingerprint=fingerprint, stream_index=0,
+        time_base_num=1, time_base_den=12, duration_pts=2, width=64,
+        height=48, rotation=0, codec='fixture'))
+    snapshot = VideoSessionSnapshot(
+        source_path=str(source), project_path=str(project),
+        fingerprint=fingerprint, stream_index=0, time_base_num=1,
+        time_base_den=12, width=64, height=48, rotation=0,
+        codec='fixture', duration_pts=2, start_pts=0,
+        average_rate_num=12, average_rate_den=1, revision=0,
+        initial_frame=None, read_only=False)
+    window._dataset_generation = window.task_coordinator.next_generation()
+    window.document_kind = DocumentKind.VIDEO
+    window.file_path = str(source)
+    window.video_snapshot = snapshot
+    window.video_model = VideoProjectModel()
+    window.current_video_frame_ref = VideoFrameRef(
+        fingerprint, 0, 0, 1, 12)
+    window.continuous_save.reset(
+        window._continuous_document_key(), window._dataset_generation, 0)
+    return str(project)
 
 
 def test_unified_inspector_materializes_shape_and_renames_globally(
@@ -246,6 +307,47 @@ def test_mutation_during_async_save_is_chained_into_next_delta(
         window.close()
 
 
+def test_manual_save_joins_the_active_continuous_video_writer(tmp_path):
+    app, window = get_main_app()
+    from libs.core.video_project import save_project_delta
+    blocked = _BlockingFirstSave(save_project_delta)
+    try:
+        project = _install_writable_video_document(
+            window, tmp_path, 'manual-join')
+        window.save_changes_automatically.setChecked(True)
+        with patch('labelImgPlusPlus.save_project_delta', blocked):
+            track = window.video_model.create_track(
+                'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+            window.video_model.upsert_manual(
+                track.track_id, 0, [2, 3, 22, 23])
+            window._on_video_model_mutation()
+            window.continuous_save.flush()
+            assert blocked.started.wait(2)
+            window.video_model.upsert_manual(
+                track.track_id,
+                window.current_video_frame_ref.pts
+                + window._video_step_pts(),
+                [3, 4, 23, 24])
+            window._on_video_model_mutation()
+            target_revision = window.video_model.revision
+
+            window._request_save_or_retry()
+            blocked.release.set()
+            assert _wait(
+                app, lambda: (window.continuous_save.state == 'saved'
+                              and not window.video_model.dirty))
+
+        contents = load_project(project)
+        assert contents.revision == target_revision
+        assert len(contents.observations) == 2
+        assert blocked.max_active == 1
+    finally:
+        blocked.release.set()
+        window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()
+
+
 def test_async_save_failure_retains_overlay_and_dirty_state(
         tmp_path, make_video):
     app, window = get_main_app()
@@ -262,6 +364,30 @@ def test_async_save_failure_retains_overlay_and_dirty_state(
         assert window.dirty is True
         assert window.actions.save.isEnabled()
         assert 'disk unavailable' in window.statusBar().currentMessage()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_video_save_without_a_durable_revision_remains_dirty(tmp_path):
+    app, window = get_main_app()
+    try:
+        _install_writable_video_document(window, tmp_path, 'missing-revision')
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_manual(
+            track.track_id, 0, [2, 3, 22, 23])
+        window._on_video_model_mutation()
+
+        with patch('labelImgPlusPlus.save_project_delta', return_value=None):
+            window.request_save_video_project()
+            assert _wait(
+                app, lambda: window.continuous_save.state in (
+                    'saved', 'failed'))
+
+        assert window.continuous_save.state == 'failed'
+        assert window.video_model.dirty is True
+        assert window.dirty is True
     finally:
         window.dirty = False
         window.close()
@@ -303,5 +429,56 @@ def test_close_with_save_ignores_first_event_until_async_commit_finishes(
             assert window.dirty is False
     finally:
         gate.set()
+        window.dirty = False
+        window.close()
+
+
+def test_quit_save_waits_for_the_continuous_video_writer_to_drain(tmp_path):
+    app, window = get_main_app()
+    from libs.core.video_project import save_project_delta
+    blocked = _BlockingFirstSave(save_project_delta)
+    event = MagicMock()
+    close_observations = []
+    try:
+        project = _install_writable_video_document(
+            window, tmp_path, 'quit-join')
+        window.save_changes_automatically.setChecked(True)
+        with patch('labelImgPlusPlus.save_project_delta', blocked):
+            track = window.video_model.create_track(
+                'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+            window.video_model.upsert_manual(
+                track.track_id, 0, [2, 3, 22, 23])
+            window._on_video_model_mutation()
+            window.continuous_save.flush()
+            assert blocked.started.wait(2)
+            window.video_model.upsert_manual(
+                track.track_id,
+                window.current_video_frame_ref.pts
+                + window._video_step_pts(),
+                [3, 4, 23, 24])
+            window._on_video_model_mutation()
+            target_revision = window.video_model.revision
+
+            def observe_close():
+                close_observations.append((
+                    window.continuous_save.state,
+                    window.video_model.durable_revision))
+                return True
+
+            with patch.object(
+                    window, 'discard_changes_dialog',
+                    return_value=QMessageBox.Yes), patch.object(
+                    window, 'close', side_effect=observe_close):
+                window.closeEvent(event)
+                event.ignore.assert_called_once_with()
+                blocked.release.set()
+                assert _wait(app, lambda: bool(close_observations))
+
+        assert close_observations == [('saved', target_revision)]
+        assert load_project(project).revision == target_revision
+        assert blocked.max_active == 1
+    finally:
+        blocked.release.set()
+        window.save_changes_automatically.setChecked(True)
         window.dirty = False
         window.close()

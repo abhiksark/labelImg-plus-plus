@@ -31,11 +31,19 @@ class ContinuousSaveCoordinator(QObject):
         self._newest_revision = 0
         self._in_flight = None
         self._enabled = True
+        self._draining = False
         self.error = None
 
     @property
     def state(self):
         return self._state
+
+    @property
+    def is_drained(self):
+        return (
+            self._state == 'saved'
+            and self._in_flight is None
+            and self._newest_revision <= self._durable_revision)
 
     def _set_state(self, value):
         if value != self._state:
@@ -68,6 +76,7 @@ class ContinuousSaveCoordinator(QObject):
         self._durable_revision = int(durable_revision)
         self._newest_revision = int(durable_revision)
         self._in_flight = None
+        self._draining = False
         self.error = None
         self._set_state('saved')
 
@@ -81,13 +90,28 @@ class ContinuousSaveCoordinator(QObject):
 
     def flush(self):
         self._timer.stop()
-        if (self._enabled and self._in_flight is None
+        if ((self._enabled or self._draining) and self._in_flight is None
                 and self._newest_revision > self._durable_revision):
             ticket = SaveTicket(
                 self._document_key, self._generation, self._newest_revision)
             self._in_flight = ticket
             self._set_state('saving')
             self.saveRequested.emit(ticket)
+
+    def drain(self):
+        """Force the current immutable ticket stream through its newest edit."""
+        self._timer.stop()
+        self._draining = True
+        if self._state == 'failed':
+            self.error = None
+            self._set_state('pending')
+        if (self._in_flight is None
+                and self._newest_revision <= self._durable_revision):
+            self._draining = False
+            self._set_state('saved')
+            self.drained.emit()
+            return
+        self.flush()
 
     def complete(self, ticket):
         if not self._is_current_in_flight(ticket):
@@ -97,18 +121,21 @@ class ContinuousSaveCoordinator(QObject):
         self._in_flight = None
         if self._newest_revision > self._durable_revision:
             self._set_state('pending')
-            if self._enabled:
+            if self._enabled or self._draining:
                 self.flush()
         else:
+            self._draining = False
             self._set_state('saved')
             self.drained.emit()
 
     def fail(self, ticket, message):
         if not self._is_current_in_flight(ticket):
-            return
+            return False
         self._in_flight = None
+        self._draining = False
         self.error = str(message)
         self._set_state('failed')
+        return True
 
     def retry(self):
         if self._state != 'failed':

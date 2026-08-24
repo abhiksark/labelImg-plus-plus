@@ -65,7 +65,7 @@ class WorkspaceInspector(QWidget):
 
     def apply_theme(self, theme):
         self._current_theme = theme
-        self.collapse_button.setIcon(themed_icon('chevron-right', theme))
+        self.collapse_button.setIcon(themed_icon('next', theme))
         self.setStyleSheet(get_workspace_inspector_style(theme))
 
 
@@ -118,7 +118,7 @@ class WorkspaceSplitterShell(QWidget):
         self.reopen_button.setAccessibleName('Open inspector, 0 objects')
         self.reopen_button.setToolTip('Open inspector')
         self.reopen_button.setFocusPolicy(Qt.StrongFocus)
-        self.reopen_button.setIcon(themed_icon('chevron-left', Theme.LIGHT))
+        self.reopen_button.setIcon(themed_icon('prev', Theme.LIGHT))
         self.reopen_button.setFixedWidth(scale_px(32))
         self.reopen_button.clicked.connect(self.open_inspector)
 
@@ -392,4 +392,4 @@ class WorkspaceSplitterShell(QWidget):
         self.inspectorCollapsedChanged.emit(collapsed)
 
     def apply_theme(self, theme):
-        self.reopen_button.setIcon(themed_icon('chevron-left', theme))
+        self.reopen_button.setIcon(themed_icon('prev', theme))

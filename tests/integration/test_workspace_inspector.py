@@ -4,7 +4,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QByteArray, Qt
+from PyQt5.QtCore import QByteArray, QSize, Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QApplication, QDockWidget, QToolBar
 from PyQt5.QtTest import QTest
@@ -14,7 +14,8 @@ from libs.core.settings import Settings
 from libs.utils.constants import (
     SETTING_ADVANCE_MODE, SETTING_ICON_SIZE, SETTING_INSPECTOR_COLLAPSED,
     SETTING_INSPECTOR_TAB, SETTING_INSPECTOR_WIDTH,
-    SETTING_TOOLBAR_EXPANDED, SETTING_WIN_STATE,
+    SETTING_PROMPT_POLICY, SETTING_SINGLE_CLASS, SETTING_TOOLBAR_EXPANDED,
+    SETTING_WIN_STATE,
 )
 from libs.utils.dpi import scale_px
 
@@ -166,6 +167,30 @@ def test_legacy_layout_and_toolbar_values_round_trip_without_exposure(
     assert loaded.get(SETTING_WIN_STATE) == legacy_state
 
 
+def test_legacy_prompt_setting_round_trips_but_new_policy_wins_next_launch(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path, {
+        SETTING_SINGLE_CLASS: True,
+    })
+    try:
+        assert window.single_class_mode not in _view_actions(window)
+        window._active_class_policy_changed('confirm_each')
+    finally:
+        _close(window)
+
+    persisted = Settings()
+    assert persisted.load()
+    assert persisted.get(SETTING_SINGLE_CLASS) is True
+    assert persisted.get(SETTING_PROMPT_POLICY) == 'confirm_each'
+
+    second = MainWindow(default_save_dir=str(tmp_path))
+    try:
+        assert second.workflow.snapshot.prompt_policy.value == 'confirm_each'
+        assert second.single_class_mode not in _view_actions(second)
+    finally:
+        _close(second)
+
+
 def test_inspector_becomes_dismissible_drawer_below_960(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
@@ -184,6 +209,22 @@ def test_inspector_becomes_dismissible_drawer_below_960(
         QApplication.processEvents()
         assert window.workspace_inspector.isHidden()
         assert window.workspace_shell.reopen_button.hasFocus()
+    finally:
+        _close(window)
+
+
+def test_compact_inspector_controls_use_non_null_resource_icons(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.resize(1200, 700)
+        window.show()
+        QApplication.processEvents()
+        assert not window.workspace_inspector.collapse_button.icon().pixmap(
+            QSize(32, 32)).isNull()
+        window.workspace_shell.set_inspector_collapsed(True)
+        assert not window.workspace_shell.reopen_button.icon().pixmap(
+            QSize(32, 32)).isNull()
     finally:
         _close(window)
 

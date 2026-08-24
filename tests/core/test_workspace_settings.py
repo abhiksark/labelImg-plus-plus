@@ -58,3 +58,10 @@ def test_prompt_policy_accepts_known_values_and_defaults_invalid_values():
     assert load_prompt_policy({
         SETTING_PROMPT_POLICY: 'unexpected',
     }) == 'reuse_active'
+
+
+def test_valid_prompt_policy_is_authoritative_over_legacy_single_class():
+    assert load_prompt_policy({
+        SETTING_SINGLE_CLASS: True,
+        SETTING_PROMPT_POLICY: 'confirm_each',
+    }) == 'confirm_each'

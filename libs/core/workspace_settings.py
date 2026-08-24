@@ -32,12 +32,12 @@ def clamp_inspector_width(value):
 
 def load_prompt_policy(settings):
     """Load a valid prompt policy while migrating the legacy mode."""
+    policy = settings.get(SETTING_PROMPT_POLICY)
+    if policy in PROMPT_POLICIES:
+        return policy
     if settings.get(SETTING_SINGLE_CLASS) is True:
         return 'reuse_active'
-    policy = settings.get(SETTING_PROMPT_POLICY)
-    if policy not in PROMPT_POLICIES:
-        return 'reuse_active'
-    return policy
+    return 'reuse_active'
 
 
 def load_workspace_settings(settings):

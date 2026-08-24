@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PyQt5.QtCore import QThread, Qt
@@ -8,9 +9,15 @@ from PyQt5.QtGui import QImage, QPixmap
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_decoder import VideoDependencyError
-from libs.core.video_project import default_project_path
-from libs.core.video_project import read_project_source
-from libs.core.video_types import ObservationRecord
+from libs.core.video_model import VideoProjectModel
+from libs.core.video_project import (
+    default_project_path, initialize_project, load_project,
+    read_project_source,
+)
+from libs.core.video_types import (
+    ObservationRecord, VideoFingerprint, VideoFrameRef,
+    VideoSessionSnapshot,
+)
 
 
 def _wait(app, predicate, timeout=5):
@@ -27,6 +34,36 @@ def _image(path):
     image = QImage(64, 48, QImage.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(str(path))
+
+
+def _install_writable_video_document(window, tmp_path):
+    source = tmp_path / 'current.mp4'
+    source.write_bytes(b'failed-replacement-current-video')
+    stat = source.stat()
+    fingerprint = VideoFingerprint(
+        stat.st_size, stat.st_mtime_ns, 'current-fingerprint')
+    project = tmp_path / 'current.labelimgpp.sqlite'
+    initialize_project(str(project), SimpleNamespace(
+        source_path=str(source), fingerprint=fingerprint, stream_index=0,
+        time_base_num=1, time_base_den=12, duration_pts=2, width=64,
+        height=48, rotation=0, codec='fixture'))
+    snapshot = VideoSessionSnapshot(
+        source_path=str(source), project_path=str(project),
+        fingerprint=fingerprint, stream_index=0, time_base_num=1,
+        time_base_den=12, width=64, height=48, rotation=0,
+        codec='fixture', duration_pts=2, start_pts=0,
+        average_rate_num=12, average_rate_den=1, revision=0,
+        initial_frame=None, read_only=False)
+    window._dataset_generation = window.task_coordinator.next_generation()
+    window.document_kind = DocumentKind.VIDEO
+    window.file_path = str(source)
+    window.video_snapshot = snapshot
+    window.video_model = VideoProjectModel()
+    window.current_video_frame_ref = VideoFrameRef(
+        fingerprint, 0, 0, 1, 12)
+    window.continuous_save.reset(
+        window._continuous_document_key(), window._dataset_generation, 0)
+    return str(source), str(project)
 
 
 def test_synchronous_open_creates_sidecar_after_first_frame(
@@ -65,6 +102,49 @@ def test_async_failed_open_keeps_previous_image_document(
         assert window.document_kind == DocumentKind.IMAGE
         assert window.file_path == str(image)
         assert not window.image.isNull()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_failed_video_replacement_keeps_save_identity_for_current_document(
+        tmp_path):
+    app, window = get_main_app()
+    current_source, project = _install_writable_video_document(
+        window, tmp_path)
+    committed_generation = window._dataset_generation
+    replacement = tmp_path / 'replacement.mp4'
+    replacement.write_bytes(b'failed replacement')
+    try:
+        with patch(
+                'libs.core.video_decoder.load_video_dependencies'), patch(
+                'labelImgPlusPlus.prepare_video_open',
+                side_effect=RuntimeError('replacement preparation failed')):
+            window.request_open_video(str(replacement), skip_prompt=True)
+            assert _wait(
+                app, lambda: 'replacement preparation failed' in
+                window.statusBar().currentMessage())
+
+        assert window.file_path == current_source
+        assert window._dataset_generation == committed_generation
+
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+        window.video_model.upsert_manual(track.track_id, 0, [2, 3, 22, 23])
+        window._on_video_model_mutation()
+        window.continuous_save.flush()
+        first_revision = window.video_model.revision
+        assert _wait(
+            app, lambda: (
+                load_project(project).revision == first_revision
+                and not window.video_model.dirty))
+        assert not window.video_model.dirty
+
+        window.video_model.upsert_manual(
+            track.track_id, 1, [3, 4, 23, 24])
+        window._on_video_model_mutation()
+        assert window.save_video_project()
+        assert len(load_project(project).observations) == 2
     finally:
         window.dirty = False
         window.close()

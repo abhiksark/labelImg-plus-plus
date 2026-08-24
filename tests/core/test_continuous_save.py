@@ -121,3 +121,26 @@ def test_disable_during_save_requeues_newer_revision_without_dispatching():
     if len(requested) < 2:
         assert requested.wait(1000)
     assert requested[1][0].revision == 2
+
+
+def test_explicit_drain_serializes_newest_revision_while_automatic_is_off():
+    coordinator = ContinuousSaveCoordinator(delay_ms=1)
+    coordinator.reset('image:/a.png', 1, 0)
+    requested = QSignalSpy(coordinator.saveRequested)
+    drained = QSignalSpy(coordinator.drained)
+    coordinator.set_enabled(False)
+    coordinator.mark_dirty(1)
+
+    coordinator.drain()
+
+    assert len(requested) == 1
+    first = requested[0][0]
+    assert first.revision == 1
+    coordinator.mark_dirty(2)
+    coordinator.complete(first)
+    assert len(requested) == 2
+    newest = requested[1][0]
+    assert newest.revision == 2
+    coordinator.complete(newest)
+    assert len(drained) == 1
+    assert coordinator.state == 'saved'

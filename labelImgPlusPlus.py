@@ -259,6 +259,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self._dispatch_continuous_save)
         self.continuous_save.stateChanged.connect(
             self._on_continuous_save_state_changed)
+        self.continuous_save.drained.connect(
+            self._on_continuous_save_drained)
+        self._save_drain_callbacks = []
         self._plugin_document_generation = 0
         self._plugin_document_ready = False
         self.plugin_manager = PluginManager(
@@ -283,14 +286,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_open_request_id = 0
         self._video_save_handle = None
         self._video_save_active = False
-        self._video_save_queued = False
-        self._video_save_callbacks = []
         self._video_close_save_pending = False
         self._video_frame_request_id = 0
         self._video_decode_in_flight = False
         self._video_prefetch_handle = None
         self.current_video_frame_ref = None
         self._pending_video_scroll_ratios = None
+        self._pending_image_navigation_center = False
         self._video_playback_speed = 1.0
         self._video_play_started_wall = None
         self._video_play_started_seconds = None
@@ -312,8 +314,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self._navigation_direction = 0
         self._navigation_streak = 0
         self._document_revision = 0
+        self._continuous_identity_epoch = 0
         self._save_handle = None
         self._save_locks = {}
+        self._image_save_target_overrides = {}
         self._loading_veil = None
 
         # Memory optimization for large images (Issue #31)
@@ -1047,7 +1051,6 @@ class MainWindow(QMainWindow, WindowMixin):
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
             self.save_changes_automatically,
-            self.single_class_mode,
             self.display_label_option,
             self.lock_on_verify_option,
             labels, gallery_mode, None,
@@ -1634,6 +1637,65 @@ class MainWindow(QMainWindow, WindowMixin):
         if command_bar is not None:
             command_bar.save_button.setText(copy)
 
+    def _save_document_identity(self):
+        return (
+            self.document_kind,
+            self._continuous_document_key(),
+            self._dataset_generation,
+        )
+
+    def _request_continuous_save_drain(self, on_success=None):
+        """Join the document's sole serializer and drain its newest edit."""
+        if self.document_kind == DocumentKind.NONE:
+            return None
+        if (self.document_kind == DocumentKind.VIDEO
+                and (self.video_snapshot is None
+                     or self.video_snapshot.read_only
+                     or not self.video_snapshot.project_path)):
+            return None
+        if callable(on_success):
+            self._save_drain_callbacks.append(
+                (self._save_document_identity(), on_success))
+        self.continuous_save.drain()
+        return (self._video_save_handle
+                if self.document_kind == DocumentKind.VIDEO
+                else self._save_handle)
+
+    def _on_continuous_save_drained(self):
+        identity = self._save_document_identity()
+        callbacks = []
+        for callback_identity, callback in self._save_drain_callbacks:
+            if callback_identity == identity:
+                callbacks.append(callback)
+        # A document replacement invalidates every callback for the old
+        # identity; none may run against a later document with the same UI.
+        self._save_drain_callbacks = []
+        for callback in callbacks:
+            callback()
+
+    def _wait_for_continuous_save_drain(self, timeout_ms=30000):
+        """Compatibility join for synchronous callers; never writes itself."""
+        if self.document_kind == DocumentKind.NONE:
+            return False
+        identity = self._save_document_identity()
+        deadline = time.monotonic() + (float(timeout_ms) / 1000.0)
+        self.continuous_save.drain()
+        while (self._save_document_identity() == identity
+               and self.continuous_save.state not in ('saved', 'failed')):
+            remaining_ms = int(max(
+                0.0, (deadline - time.monotonic()) * 1000.0))
+            if remaining_ms <= 0:
+                break
+            # Join the actual serializer workers, then deliver their queued
+            # GUI-thread result callbacks. This avoids a second writer and
+            # also lets chained newer-revision tickets dispatch in order.
+            self.task_coordinator.pool('background').waitForDone(
+                min(remaining_ms, 100))
+            QApplication.processEvents()
+        return bool(
+            self._save_document_identity() == identity
+            and self.continuous_save.is_drained)
+
     def set_clean(self):
         self.dirty = False
         self.actions.save.setEnabled(False)
@@ -1682,13 +1744,16 @@ class MainWindow(QMainWindow, WindowMixin):
         )
 
     def _continuous_document_key(self):
+        epoch = getattr(self, '_continuous_identity_epoch', 0)
         if self.document_kind == DocumentKind.VIDEO:
             snapshot = self.video_snapshot
             path = (snapshot.project_path or snapshot.source_path
                     if snapshot is not None else self.file_path)
-            return 'video:' + os.path.abspath(ustr(path or ''))
+            return 'video:%s@%d' % (
+                os.path.abspath(ustr(path or '')), epoch)
         if self.document_kind == DocumentKind.IMAGE:
-            return 'image:' + os.path.abspath(ustr(self.file_path or ''))
+            return 'image:%s@%d' % (
+                os.path.abspath(ustr(self.file_path or '')), epoch)
         return ''
 
     def _publish_plugin_document(self, new_generation=False, force=False):
@@ -1817,7 +1882,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def reset_state(self):
         self._dismiss_class_picker()
+        self._save_drain_callbacks = []
         self._pending_video_scroll_ratios = None
+        self._pending_image_navigation_center = False
+        # Replacing a document must invalidate a late ticket even when the
+        # same path is reopened in the same dataset generation and revision.
+        self._continuous_identity_epoch += 1
+        self._load_request_id += 1
         self._plugin_document_ready = False
         self._restart_workers_if_needed()
         self._close_video_decoder()
@@ -1925,8 +1996,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_model = None
         self._selected_video_track_id = None
         self._video_save_active = False
-        self._video_save_queued = False
-        self._video_save_callbacks = []
         self._video_close_save_pending = False
         self.current_video_frame_ref = None
         if hasattr(self, 'video_timeline'):
@@ -3316,6 +3385,26 @@ class MainWindow(QMainWindow, WindowMixin):
         self._pending_provisional_shape = None
         if discard and hasattr(self, 'canvas'):
             self.canvas.discard_provisional_shape()
+            self.workflow.finish_provisional()
+
+    def _discard_workflow_draft(self, show_status=True):
+        """Cancel all transient geometry while preserving tool and class."""
+        canvas = self.canvas
+        picker = getattr(self, 'class_picker', None)
+        had_draft = bool(
+            self._pending_provisional_shape is not None
+            or canvas.provisional_shape is not None
+            or canvas.current is not None
+            or getattr(canvas, '_edit_drag_draw', False)
+            or getattr(canvas, '_freehand_active', False)
+            or (picker is not None and picker.isVisible()))
+        self._dismiss_class_picker(discard=True)
+        canvas.cancel_to_edit()
+        self.workflow.finish_provisional()
+        self._apply_workflow_state()
+        if had_draft and show_status:
+            self.status('Draft discarded')
+        return had_draft
 
     def scroll_request(self, delta, orientation):
         units = - delta / (8 * 15)
@@ -3481,7 +3570,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=True)
-        self._dataset_generation = self.task_coordinator.next_generation()
+        # Preparation is only a replacement request. Keep the committed
+        # document generation intact until the candidate is ready to publish,
+        # so a failed open cannot stale the visible document's save identity.
         generation = self._dataset_generation
         self._video_open_request_id += 1
         request_id = self._video_open_request_id
@@ -3539,6 +3630,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self._resolve_video_open_problem(
                 prepared, requested_path, project_path, source_override)
             return
+        self._dataset_generation = self.task_coordinator.next_generation()
         self._commit_video_open(prepared)
         self._hide_loading_veil()
 
@@ -3727,111 +3819,22 @@ class MainWindow(QMainWindow, WindowMixin):
         return True
 
     def request_save_video_project(self, _value=False, on_success=None):
-        snapshot = self.video_snapshot
         if getattr(self, '_propagation_handle', None) is not None:
             self.status('Cancel propagation before saving the video project')
             return None
-        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
-                or snapshot.read_only or not snapshot.project_path):
+        if self.document_kind != DocumentKind.VIDEO:
             return None
-        if callable(on_success):
-            self._video_save_callbacks.append(on_success)
-        if self._video_save_active:
-            self._video_save_queued = True
-            return self._video_save_handle
-        model = self.video_model
-        if model is None or not model.dirty:
-            try:
-                checkpoint_project(snapshot.project_path)
-            except Exception as exc:
-                self.status(
-                    'Error saving video project: %s' % exc, delay=10000)
-                return None
-            self.set_clean()
-            callbacks, self._video_save_callbacks = \
-                self._video_save_callbacks, []
-            for callback in callbacks:
-                callback()
-            return None
-        request = model.build_save_request(snapshot.project_path)
-        generation = self._dataset_generation
-
-        def save(handle):
-            handle.check_cancelled()
-            return save_project_delta(
-                request, cancelled=handle.is_cancelled,
-                begin_commit=handle.begin_non_cancellable)
-
-        handle = self.task_coordinator.submit(
-            'background', save, priority=JobPriority.IMAGE_LOAD,
-            generation=generation)
-        self._video_save_handle = handle
-        self._video_save_active = True
-        self._video_save_queued = False
-        handle.result.connect(
-            lambda revision, req=request, gen=generation:
-            self._on_video_save_result(revision, req, gen))
-        handle.error.connect(
-            self._on_video_save_error)
-        handle.finished.connect(self._on_video_save_finished)
-        return handle
-
-    def _on_video_save_result(self, revision, request, generation):
-        if (revision is None or generation != self._dataset_generation
-                or self.video_model is None
-                or self.video_snapshot is None
-                or request.project_path != self.video_snapshot.project_path):
-            return
-        self.video_model.mark_saved(revision)
-        self.video_snapshot = replace(
-            self.video_snapshot, revision=revision)
-        if not self.video_model.dirty:
-            self.set_clean()
-        else:
-            self._video_save_queued = True
-        self.status('Saved video project to %s' % request.project_path)
-
-    def _on_video_save_error(self, message):
-        self._video_save_queued = False
-        self._video_save_callbacks = []
-        self._video_close_save_pending = False
-        self.status('Error saving video project: ' + message, delay=10000)
-
-    def _on_video_save_finished(self):
-        self._video_save_active = False
-        self._video_save_handle = None
-        if (self.video_model is not None and self.video_model.dirty
-                and self._video_save_queued):
-            self.request_save_video_project()
-            return
-        if self.video_model is not None and not self.video_model.dirty:
-            callbacks, self._video_save_callbacks = \
-                self._video_save_callbacks, []
-            for callback in callbacks:
-                callback()
+        return self._request_continuous_save_drain(on_success=on_success)
 
     def save_video_project(self):
-        snapshot = self.video_snapshot
         if getattr(self, '_propagation_handle', None) is not None:
             self.status('Cancel propagation before saving the video project')
             return False
+        snapshot = self.video_snapshot
         if (self.document_kind != DocumentKind.VIDEO or snapshot is None
                 or snapshot.read_only or not snapshot.project_path):
             return False
-        try:
-            if self.video_model is not None and self.video_model.dirty:
-                request = self.video_model.build_save_request(
-                    snapshot.project_path)
-                revision = save_project_delta(request)
-                self.video_model.mark_saved(revision)
-                self.video_snapshot = replace(
-                    self.video_snapshot, revision=revision)
-            checkpoint_project(snapshot.project_path)
-        except Exception as exc:
-            self.status('Error saving video project: %s' % exc, delay=10000)
-            return False
-        self.set_clean()
-        return True
+        return self._wait_for_continuous_save_drain()
 
     def _refresh_video_timeline_markers(self):
         if self.video_snapshot is None:
@@ -5040,6 +5043,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if playback and self._video_decode_in_flight:
             return None
         if not playback:
+            self._discard_workflow_draft()
             self.pause_video()
         cached = self.frame_cache.get(frame_ref)
         if cached is not None:
@@ -5106,6 +5110,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _commit_video_frame(self, result, playback=False):
         assert QApplication.instance().thread() == self.thread()
+        self._pending_image_navigation_center = False
         self._pending_video_scroll_ratios = (
             self._scroll_ratios()
             if self.view_transform.mode is ViewMode.MANUAL else None)
@@ -5144,6 +5149,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def request_next_video_frame(self):
         if self.current_video_frame_ref is None:
             return None
+        self._discard_workflow_draft()
         self.pause_video()
         self._navigation_direction = 1
         cached = self.frame_cache.video_neighbor(
@@ -5158,6 +5164,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def request_previous_video_frame(self):
         if self.current_video_frame_ref is None:
             return None
+        self._discard_workflow_draft()
         self.pause_video()
         self._navigation_direction = -1
         cached = self.frame_cache.video_neighbor(
@@ -5342,6 +5349,8 @@ class MainWindow(QMainWindow, WindowMixin):
                         previous_snapshot=previous_snapshot))
                 return None
 
+        self._discard_workflow_draft()
+
         self._load_request_id += 1
         request_id = self._load_request_id
         generation = self._dataset_generation
@@ -5409,7 +5418,13 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if replacement_snapshot is not None:
             self._commit_dataset_snapshot(replacement_snapshot)
-        self._commit_image_result(result)
+        center_after_projection = bool(
+            replacement_snapshot is None
+            and self.document_kind == DocumentKind.IMAGE
+            and self.file_path
+            and result.path != self.file_path)
+        self._commit_image_result(
+            result, center_after_projection=center_after_projection)
         if replacement_snapshot is not None:
             self._start_interaction_session()
         self.frame_cache.put(result)
@@ -5417,7 +5432,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._hide_loading_veil()
         self._schedule_prefetch(result.path)
 
-    def _commit_image_result(self, result):
+    def _commit_image_result(self, result, center_after_projection=False):
         """Apply worker data; this method is the GUI-thread mutation boundary."""
         trace_started = None
         if trace_recorder is not None:
@@ -5439,6 +5454,7 @@ class MainWindow(QMainWindow, WindowMixin):
             result.path, self.cur_img_idx)
         self.canvas.verified = result.verified
         self.canvas.load_pixmap(QPixmap.fromImage(result.image))
+        self._pending_image_navigation_center = center_after_projection
         if result.annotation_format is not None:
             format_names = {
                 LabelFileFormat.PASCAL_VOC: FORMAT_PASCALVOC,
@@ -5577,6 +5593,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 return self.open_video(requested)
         starts_new_session = (
             bool(requested) and requested not in self._path_to_idx)
+        center_after_projection = bool(
+            not starts_new_session
+            and self.document_kind == DocumentKind.IMAGE
+            and self.file_path
+            and requested != self.file_path)
+        self._discard_workflow_draft()
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
@@ -5668,6 +5690,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self._continuous_document_key(), self._dataset_generation,
                 self._document_revision)
             self.canvas.load_pixmap(QPixmap.fromImage(image))
+            self._pending_image_navigation_center = center_after_projection
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
             self.set_clean()
@@ -5814,6 +5837,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self._applying_view_projection = False
         self._sync_view_actions()
         self.paint_canvas()
+        center_image = self._pending_image_navigation_center
+        self._pending_image_navigation_center = False
+        if center_image and self.view_transform.mode is ViewMode.MANUAL:
+            for orientation in (Qt.Horizontal, Qt.Vertical):
+                bar = self.scroll_bars[orientation]
+                bar.setValue(bar.maximum() // 2)
         scroll_ratios = self._pending_video_scroll_ratios
         self._pending_video_scroll_ratios = None
         if scroll_ratios is not None:
@@ -5848,26 +5877,23 @@ class MainWindow(QMainWindow, WindowMixin):
             event.ignore()
             return
 
-        if self.document_kind == DocumentKind.VIDEO and self.dirty:
+        if self.dirty:
             answer = self.discard_changes_dialog()
             if answer == QMessageBox.Cancel:
                 event.ignore()
                 return
             if answer == QMessageBox.Yes:
                 self._video_close_save_pending = True
-                handle = self.request_save_video_project(
+                self.request_save_file(
                     on_success=self._finish_video_close_after_save)
-                if handle is None and self.dirty:
+                if (self.continuous_save.state == 'failed'
+                        and self.dirty):
                     self._video_close_save_pending = False
-                    self._video_save_callbacks = []
                     self.status(
-                        'Could not save the video project; close cancelled',
+                        'Could not save the document; close cancelled',
                         delay=10000)
                 event.ignore()
                 return
-        elif not self.may_continue():
-            event.ignore()
-            return
 
         settings = self.settings
         # If it loads images from dir, don't load it at the beginning
@@ -6718,7 +6744,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.document_kind == DocumentKind.VIDEO:
             self._dispatch_continuous_video_save(ticket)
         elif self.document_kind == DocumentKind.IMAGE:
-            handle = self.request_save_file(continuous_ticket=ticket)
+            handle = self._dispatch_image_save(ticket)
             if handle is None:
                 self.continuous_save.fail(
                     ticket, 'Automatic save could not be started')
@@ -6726,11 +6752,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self._save_handle = handle
 
     def _request_save_or_retry(self, _value=False):
-        if self.continuous_save.state == 'failed':
-            if self.save_changes_automatically.isChecked():
-                self.continuous_save.retry()
-                return self._save_handle
-            return self.request_save_file(_value)
         return self.request_save_file(_value)
 
     def _dispatch_continuous_video_save(self, ticket):
@@ -6754,6 +6775,7 @@ class MainWindow(QMainWindow, WindowMixin):
             key='continuous-save:' + request.project_path, latest=True,
             generation=generation)
         self._video_save_handle = handle
+        self._video_save_active = True
         handle.result.connect(
             lambda revision, req=request, current=ticket:
             self._on_continuous_video_save_result(
@@ -6761,31 +6783,66 @@ class MainWindow(QMainWindow, WindowMixin):
         handle.error.connect(
             lambda message, current=ticket:
             self._on_continuous_save_error(current, message))
+        handle.finished.connect(
+            lambda current=handle:
+            self._clear_continuous_video_save_handle(current))
+
+    def _clear_continuous_video_save_handle(self, handle):
+        if self._video_save_handle is handle:
+            self._video_save_handle = None
+            self._video_save_active = False
+        self._sync_verification_ui()
 
     def _on_continuous_video_save_result(self, revision, request, ticket):
-        if (revision is None or ticket.generation != self._dataset_generation
+        if (ticket.generation != self._dataset_generation
                 or ticket.document_key != self._continuous_document_key()
-                or self.video_model is None or self.video_snapshot is None
+                or self.video_model is None
+                or self.video_snapshot is None):
+            return
+        if (revision is None
                 or request.project_path != self.video_snapshot.project_path):
-            self.continuous_save.complete(ticket)
+            self._on_continuous_save_error(
+                ticket, 'Video save did not publish a durable revision')
             return
         self.video_model.mark_saved(revision)
         self.video_snapshot = replace(
             self.video_snapshot, revision=revision)
-        self.continuous_save.complete(ticket)
         if not self.video_model.dirty:
             self.set_clean()
+        self.continuous_save.complete(ticket)
         self.status('Saved video project to %s' % request.project_path)
 
     def _on_continuous_save_error(self, ticket, message):
-        self.continuous_save.fail(ticket, message)
+        if not self.continuous_save.fail(ticket, message):
+            return
+        self._save_drain_callbacks = []
+        self._video_close_save_pending = False
         self.status('Error saving annotation: ' + str(message))
 
     def request_save_file(self, _value=False, on_success=None,
                           annotation_base=None, continuous_ticket=None):
-        """Queue an immutable, revision-aware save for GUI workflows."""
+        """Join the ticketed serializer and drain through the newest edit."""
         if self.document_kind == DocumentKind.VIDEO:
             return self.request_save_video_project(on_success=on_success)
+        if not self.file_path:
+            return None
+        if continuous_ticket is not None:
+            return self._dispatch_image_save(
+                continuous_ticket, annotation_base=annotation_base)
+        if annotation_base is not None:
+            if not self.dirty:
+                # Saving an unchanged image to a new target still needs a
+                # ticket, so it joins the same serialization lane.
+                self.set_dirty()
+            identity = (
+                self._continuous_document_key(), self._dataset_generation,
+                self._document_revision)
+            self._image_save_target_overrides[identity] = ustr(annotation_base)
+        return self._request_continuous_save_drain(on_success=on_success)
+
+    def _dispatch_image_save(self, continuous_ticket,
+                             annotation_base=None):
+        """Build one immutable image request for a coordinator ticket."""
         if not self.file_path:
             return None
         degradation_formats = {
@@ -6796,6 +6853,11 @@ class MainWindow(QMainWindow, WindowMixin):
         if degradation and not self._check_polygon_degradation(degradation):
             return None
 
+        override_identity = (
+            continuous_ticket.document_key, continuous_ticket.generation,
+            continuous_ticket.revision)
+        annotation_base = self._image_save_target_overrides.pop(
+            override_identity, annotation_base)
         if annotation_base:
             annotation_base = ustr(annotation_base)
         elif (self.default_save_dir is not None
@@ -6849,9 +6911,7 @@ class MainWindow(QMainWindow, WindowMixin):
             shapes=tuple(serialized),
             class_list=tuple(self.label_hist),
             verified=bool(self.canvas.verified),
-            revision=(continuous_ticket.revision
-                      if continuous_ticket is not None
-                      else self._document_revision),
+            revision=continuous_ticket.revision,
         )
         save_lock = self._save_locks.setdefault(
             request.annotation_path, threading.Lock())
@@ -6871,17 +6931,30 @@ class MainWindow(QMainWindow, WindowMixin):
             generation=self._dataset_generation)
         self._save_handle = handle
         handle.result.connect(
-            lambda path, req=request, callback=on_success,
-            gen=self._dataset_generation, ticket=continuous_ticket:
-            self._on_save_result(path, req, callback, gen, ticket))
+            lambda path, req=request, gen=continuous_ticket.generation,
+            ticket=continuous_ticket:
+            self._on_save_result(path, req, None, gen, ticket))
         handle.error.connect(
             lambda message, ticket=continuous_ticket:
             self._on_save_error(message, ticket))
+        handle.finished.connect(
+            lambda current=handle:
+            self._clear_continuous_image_save_handle(current))
         return handle
+
+    def _clear_continuous_image_save_handle(self, handle):
+        if self._save_handle is handle:
+            self._save_handle = None
 
     def _on_save_result(self, path, request, on_success, generation=None,
                         continuous_ticket=None):
         if path is None:
+            if continuous_ticket is not None:
+                self._on_continuous_save_error(
+                    continuous_ticket,
+                    'Image save did not publish a durable path')
+            else:
+                self.status('Error saving annotation: no durable path')
             return
         if (generation is not None
                 and generation != self._dataset_generation):
@@ -6890,17 +6963,13 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status('Saved superseded document to %s' % path)
             return
         self._record_annotation_written(path, image_path=request.image_path)
-        if continuous_ticket is not None:
-            self.continuous_save.complete(continuous_ticket)
         current_revision = (
             self.file_path == request.image_path
             and self._document_revision == request.revision)
-        if current_revision and continuous_ticket is None:
-            self.continuous_save.reset(
-                self._continuous_document_key(), self._dataset_generation,
-                request.revision)
         if current_revision:
             self.set_clean()
+        if continuous_ticket is not None:
+            self.continuous_save.complete(continuous_ticket)
         self.status('Saved to %s' % path)
         if self.file_path == request.image_path:
             self._update_current_image_gallery_status()
@@ -6909,7 +6978,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _on_save_error(self, message, continuous_ticket=None):
         if continuous_ticket is not None:
-            self.continuous_save.fail(continuous_ticket, message)
+            self._on_continuous_save_error(continuous_ticket, message)
+            return
         self.status('Error saving annotation: ' + message)
 
     def _record_annotation_written(self, path, image_path=None):
@@ -6936,25 +7006,11 @@ class MainWindow(QMainWindow, WindowMixin):
             return self.save_video_project()
         if not self.file_path:
             return False
-
-        if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            resolver = self._active_annotation_resolver(self.file_path)
-            shared_path = (
-                self._shared_annotation_path(self.file_path, resolver)
-                if self.label_file_format in (
-                    LabelFileFormat.CREATE_ML, LabelFileFormat.COCO)
-                else None)
-            saved_path = shared_path or annotation_output_base(
-                self.file_path, ustr(self.default_save_dir), self.m_img_list,
-                resolver=resolver)
-            return self._save_file(saved_path)
-        else:
-            # Mirrors request_save_file: beside the image, never a dialog.
-            image_file_dir = os.path.dirname(self.file_path)
-            image_file_name = os.path.basename(self.file_path)
-            saved_file_name = os.path.splitext(image_file_name)[0]
-            saved_path = os.path.join(image_file_dir, saved_file_name)
-            return self._save_file(saved_path)
+        if not self.dirty:
+            # Preserve the compatibility API's explicit-save semantics while
+            # still routing the write through an immutable coordinator ticket.
+            self.set_dirty()
+        return self._wait_for_continuous_save_drain()
 
     def save_file_as(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:
@@ -6970,7 +7026,16 @@ class MainWindow(QMainWindow, WindowMixin):
                 return False
             return True
         assert not self.image.isNull(), "cannot save empty image"
-        return self._save_file(self.save_file_dialog())
+        annotation_base = self.save_file_dialog()
+        if not annotation_base:
+            return False
+        if not self.dirty:
+            self.set_dirty()
+        identity = (
+            self._continuous_document_key(), self._dataset_generation,
+            self._document_revision)
+        self._image_save_target_overrides[identity] = ustr(annotation_base)
+        return self._wait_for_continuous_save_drain()
 
     def request_save_file_as(self, _value=False):
         """Choose a target on the GUI thread and write it asynchronously."""
@@ -7055,7 +7120,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def close_file(self, _value=False):
         if not self.may_continue():
             return
+        self._discard_workflow_draft(show_status=False)
         self.reset_state()
+        self._start_interaction_session()
         self.set_clean()
         self.toggle_actions(False)
         self.canvas.setEnabled(False)

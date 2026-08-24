@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QApplication
 
@@ -57,3 +59,32 @@ def test_placeholder_uses_the_editable_line_edit_when_combo_lacks_the_qt5_api():
     ActiveClassControl._set_placeholder_text(combo)
 
     assert combo.edit.placeholder == 'Choose a class'
+
+
+def test_set_active_class_uses_qt4_compatible_combo_api():
+    class LegacyCombo(object):
+        def __init__(self):
+            self.items = ['person', 'vehicle']
+            self.current_index = -1
+            self.edit_text = None
+
+        def findText(self, value):
+            try:
+                return self.items.index(value)
+            except ValueError:
+                return -1
+
+        def setCurrentIndex(self, index):
+            self.current_index = index
+
+        def setEditText(self, value):
+            self.edit_text = value
+
+    combo = LegacyCombo()
+    control = SimpleNamespace(combo=combo)
+
+    ActiveClassControl.set_active_class(control, 'vehicle')
+    assert combo.current_index == 1
+
+    ActiveClassControl.set_active_class(control, 'custom')
+    assert combo.edit_text == 'custom'

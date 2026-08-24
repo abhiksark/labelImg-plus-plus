@@ -2,6 +2,8 @@ import os
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+import xml.etree.ElementTree as ET
 
 
 if 'QT_QPA_PLATFORM' not in os.environ:
@@ -36,6 +38,7 @@ def _wait(app, predicate, timeout_ms=3000):
 
 
 def commit_rectangle(window, label):
+    window.active_class_control.confirm_each.setChecked(False)
     window._active_class_selected(label)
     window.activate_box_tool()
     window.canvas.commit_rectangle((2, 2, 20, 20))
@@ -57,6 +60,33 @@ def test_shape_commit_creates_sidecar_without_navigation(tmp_path):
         sidecar = image_path.with_suffix('.xml')
         assert _wait(app, sidecar.exists)
         assert window.continuous_save.state == 'saved'
+    finally:
+        window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()
+
+
+def test_image_save_without_a_durable_path_remains_dirty(tmp_path):
+    app, window = get_main_app()
+    image_path = tmp_path / 'missing-path.png'
+    image = QImage(80, 60, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    try:
+        window.default_save_dir = None
+        window.label_file_format = LabelFileFormat.PASCAL_VOC
+        window.save_changes_automatically.setChecked(True)
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(image_path))
+
+        with patch('labelImgPlusPlus.write_save_request', return_value=None):
+            commit_rectangle(window, 'vehicle')
+            window.continuous_save.flush()
+            assert _wait(app, lambda: window._save_handle is None)
+
+        assert window.continuous_save.state == 'failed'
+        assert window.dirty is True
+        assert not image_path.with_suffix('.xml').exists()
     finally:
         window.save_changes_automatically.setChecked(True)
         window.dirty = False
@@ -87,6 +117,7 @@ def test_provisional_geometry_and_existing_shape_drag_save_only_on_completion(
         window.save_changes_automatically.setChecked(True)
         window.request_open_file(str(image_path), skip_prompt=True)
         assert _wait(app, lambda: window.file_path == str(image_path))
+        window.active_class_control.confirm_each.setChecked(False)
         window._active_class_selected('vehicle')
         requested = QSignalSpy(window.continuous_save.saveRequested)
 
@@ -248,6 +279,70 @@ def test_late_image_save_updates_original_image_without_invalidating_current(
         assert find_existing_annotation(
             str(first), resolver=resolver) == str(first.with_suffix('.xml'))
         assert find_existing_annotation(str(second), resolver=resolver) is None
+    finally:
+        release.set()
+        window.save_changes_automatically.setChecked(True)
+        window.dirty = False
+        window.close()
+
+
+def test_close_save_drains_newest_image_revision_after_blocked_write(
+        monkeypatch, tmp_path):
+    app, window = get_main_app()
+    image_path = tmp_path / 'close-race.png'
+    image = QImage(120, 80, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    started = threading.Event()
+    release = threading.Event()
+    first_published = threading.Event()
+    writes = []
+    original_write = app_module.write_save_request
+
+    def block_first_publication(request, cancelled=None, begin_commit=None):
+        writes.append(request)
+        if len(writes) == 1:
+            if begin_commit is not None:
+                begin_commit()
+            started.set()
+            assert release.wait(5)
+            result = original_write(request)
+            first_published.set()
+            return result
+        return original_write(
+            request, cancelled=cancelled, begin_commit=begin_commit)
+
+    monkeypatch.setattr(
+        app_module, 'write_save_request', block_first_publication)
+    event = MagicMock()
+    try:
+        window.default_save_dir = None
+        window.label_file_format = LabelFileFormat.PASCAL_VOC
+        window.save_changes_automatically.setChecked(True)
+        window.active_class_control.confirm_each.setChecked(False)
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(image_path))
+
+        commit_rectangle(window, 'vehicle')
+        window.continuous_save.flush()
+        assert started.wait(2)
+        window.canvas.commit_rectangle((30, 5, 55, 35))
+        assert len(window.canvas.shapes) == 2
+
+        with patch.object(
+                window, 'discard_changes_dialog',
+                return_value=QMessageBox.Yes), patch.object(
+                window, 'close', return_value=True) as close:
+            window.closeEvent(event)
+            release.set()
+            assert _wait(app, lambda: close.called, timeout_ms=5000)
+
+        assert first_published.is_set()
+        assert _wait(
+            app, lambda: window.continuous_save.state == 'saved',
+            timeout_ms=5000)
+        assert len(ET.parse(str(image_path.with_suffix('.xml'))).findall(
+            'object')) == 2
     finally:
         release.set()
         window.save_changes_automatically.setChecked(True)
