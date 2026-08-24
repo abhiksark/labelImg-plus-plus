@@ -22,7 +22,8 @@ def is_video_project(path):
 
 
 def prepare_video_open(path, project_path=None, read_only=False,
-                       cancelled=None, source_override=None):
+                       cancelled=None, source_override=None,
+                       dependencies=None):
     """Fully prepare a new session without mutating application state."""
     requested = os.path.abspath(os.fspath(path))
     if is_video_project(requested):
@@ -40,7 +41,8 @@ def prepare_video_open(path, project_path=None, read_only=False,
         if project_path is None and not read_only:
             project_path = default_project_path(source_path)
     decoder = VideoDecoderSession(
-        source_path, stream_index=stream_index, cancelled=cancelled)
+        source_path, stream_index=stream_index, cancelled=cancelled,
+        dependencies=dependencies)
     try:
         initial = decoder.decode_first(cancelled=cancelled)
         if cancelled is not None and cancelled():

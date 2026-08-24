@@ -102,7 +102,10 @@ from libs.core.plugin_manager import PluginManager
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
-from libs.core.video_decoder import VIDEO_EXTENSIONS, VideoDecoderSession
+from libs.core.video_decoder import (
+    VIDEO_EXTENSIONS, VideoDecoderSession, VideoDependencyError,
+)
+from libs.core.video_runtime import VideoRuntimeStatus, probe_video_runtime
 from libs.core.video_project import (
     PROJECT_SUFFIX, VideoSourceChanged, VideoSourceMissing,
     checkpoint_project, default_project_path, save_project_as,
@@ -1170,6 +1173,10 @@ class MainWindow(QMainWindow, WindowMixin):
              self.label_zoom, self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.workspace_pages.video_setup_card.chooseAnotherRequested.connect(
+            self._choose_another_video_after_setup)
+        self.workspace_pages.video_setup_card.dismissRequested.connect(
+            self._dismiss_video_runtime_setup)
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
             video_cancel_propagation)
@@ -3553,6 +3560,11 @@ class MainWindow(QMainWindow, WindowMixin):
                            source_override=None):
         """Queue a transactional video/project open on the decoder lane."""
         path = os.path.abspath(ustr(path))
+        runtime_status = probe_video_runtime()
+        if not runtime_status.available:
+            self._show_video_runtime_setup(path, runtime_status)
+            return None
+        self.workspace_pages.hide_video_setup()
         if not skip_prompt and self.dirty:
             if self.auto_saving.isChecked():
                 self.request_save_file(on_success=lambda: self.request_open_video(
@@ -3570,6 +3582,22 @@ class MainWindow(QMainWindow, WindowMixin):
 
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=True)
+        # NumPy performs a small linear-algebra self-check the first time it
+        # is imported. On macOS that check can overflow QThreadPool's worker
+        # stack inside OpenBLAS, terminating the whole application. Keep the
+        # dependencies lazy, but initialize them on the GUI thread before the
+        # decoding job starts.
+        try:
+            from libs.core.video_decoder import load_video_dependencies
+            dependencies = load_video_dependencies()
+        except VideoDependencyError as exc:
+            runtime_status = probe_video_runtime()
+            if runtime_status.available:
+                runtime_status = VideoRuntimeStatus(
+                    False, runtime_status.missing,
+                    runtime_status.install_command, str(exc))
+            self._show_video_runtime_setup(path, runtime_status)
+            return None
         # Preparation is only a replacement request. Keep the committed
         # document generation intact until the candidate is ready to publish,
         # so a failed open cannot stale the visible document's save identity.
@@ -3583,7 +3611,10 @@ class MainWindow(QMainWindow, WindowMixin):
                 prepared = prepare_video_open(
                     path, project_path=target, read_only=read_only,
                     cancelled=handle.is_cancelled,
-                    source_override=source_override)
+                    source_override=source_override,
+                    dependencies=dependencies)
+            except VideoDependencyError as exc:
+                return VideoOpenProblem('dependency', str(exc))
             except VideoSourceMissing as exc:
                 return VideoOpenProblem('missing', str(exc))
             except VideoSourceChanged as exc:
@@ -3627,12 +3658,39 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if isinstance(prepared, VideoOpenProblem):
             self._hide_loading_veil()
+            if prepared.kind == 'dependency':
+                runtime_status = probe_video_runtime()
+                if runtime_status.available:
+                    runtime_status = VideoRuntimeStatus(
+                        False, runtime_status.missing,
+                        runtime_status.install_command, prepared.message)
+                self._show_video_runtime_setup(
+                    requested_path, runtime_status)
+                return
             self._resolve_video_open_problem(
                 prepared, requested_path, project_path, source_override)
             return
         self._dataset_generation = self.task_coordinator.next_generation()
         self._commit_video_open(prepared)
         self._hide_loading_veil()
+
+    def _show_video_runtime_setup(self, path, status):
+        """Explain missing optional support without replacing current work."""
+        self._video_runtime_setup_path = os.path.abspath(ustr(path))
+        self.workspace_pages.show_video_setup(status)
+        self.status('Video setup required: %s' % status.detail, delay=10000)
+
+    def _dismiss_video_runtime_setup(self):
+        self.workspace_pages.hide_video_setup()
+        if self.workspace_pages.current_page() == 'canvas':
+            self.canvas.setFocus(Qt.OtherFocusReason)
+        else:
+            self.workspace_pages.stack.currentWidget().setFocus(
+                Qt.OtherFocusReason)
+
+    def _choose_another_video_after_setup(self):
+        self._dismiss_video_runtime_setup()
+        self.open_video_dialog()
 
     def _locate_video_source(self, project_path):
         source, _selected = QFileDialog.getOpenFileName(

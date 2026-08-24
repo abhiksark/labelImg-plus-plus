@@ -109,14 +109,20 @@ def test_async_failed_open_keeps_previous_image_document(
 
 def test_failed_video_replacement_keeps_save_identity_for_current_document(
         tmp_path):
+    from libs.core.video_runtime import VideoRuntimeStatus
+
     app, window = get_main_app()
     current_source, project = _install_writable_video_document(
         window, tmp_path)
     committed_generation = window._dataset_generation
     replacement = tmp_path / 'replacement.mp4'
     replacement.write_bytes(b'failed replacement')
+    ready = VideoRuntimeStatus(
+        True, (), 'pip install "labelimgplusplus[video]"', 'Ready')
     try:
         with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=ready), patch(
                 'libs.core.video_decoder.load_video_dependencies'), patch(
                 'labelImgPlusPlus.prepare_video_open',
                 side_effect=RuntimeError('replacement preparation failed')):
@@ -426,6 +432,137 @@ def test_gallery_becomes_available_again_after_the_video_closes(
         window.reset_state()
         assert window.document_kind == DocumentKind.NONE
         assert window.actions.galleryMode.isEnabled()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_missing_runtime_short_circuits_before_touching_current_document(
+        tmp_path):
+    from libs.core.video_runtime import VideoRuntimeStatus
+
+    app, window = get_main_app()
+    image = tmp_path / 'image.png'
+    _image(image)
+    assert window.load_file(str(image))
+    committed_generation = window._dataset_generation
+    window.dirty = True
+    missing = VideoRuntimeStatus(
+        False, ('av',), 'pip install "labelimgplusplus[video]"',
+        'Missing optional component: av')
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=missing), patch.object(
+                window, 'discard_changes_dialog') as save_prompt, patch.object(
+                window, '_video_project_target') as project_target, patch(
+                'libs.core.video_decoder.load_video_dependencies') \
+                as load_dependencies, patch(
+                'labelImgPlusPlus.prepare_video_open') as prepare:
+            assert window.request_open_video(
+                str(tmp_path / 'clip.mp4')) is None
+
+        assert window.document_kind == DocumentKind.IMAGE
+        assert window.file_path == str(image)
+        assert window.dirty is True
+        assert window._dataset_generation == committed_generation
+        assert window.workspace_pages.current_page() == 'canvas'
+        assert not window.workspace_pages.video_setup_overlay.isHidden()
+        assert window.workspace_pages.video_setup_card.detail.text() == \
+            'Missing optional component: av'
+        assert not window.task_coordinator.queue_depths()['video']
+        save_prompt.assert_not_called()
+        project_target.assert_not_called()
+        load_dependencies.assert_not_called()
+        prepare.assert_not_called()
+        app.processEvents()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_video_setup_choose_another_reopens_file_chooser(tmp_path):
+    from libs.core.video_runtime import VideoRuntimeStatus
+
+    app, window = get_main_app()
+    image = tmp_path / 'image.png'
+    _image(image)
+    assert window.load_file(str(image))
+    missing = VideoRuntimeStatus(
+        False, ('av',), 'pip install "labelimgplusplus[video]"',
+        'Missing optional component: av')
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=missing):
+            window.request_open_video(
+                str(tmp_path / 'clip.mp4'), skip_prompt=True)
+
+        with patch.object(window, 'open_video_dialog') as open_dialog:
+            window.workspace_pages.video_setup_card \
+                .choose_another_button.click()
+
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+        open_dialog.assert_called_once_with()
+        app.processEvents()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_closing_video_setup_returns_focus_to_current_canvas(tmp_path):
+    from libs.core.video_runtime import VideoRuntimeStatus
+
+    app, window = get_main_app()
+    image = tmp_path / 'image.png'
+    _image(image)
+    assert window.load_file(str(image))
+    window.show()
+    app.processEvents()
+    missing = VideoRuntimeStatus(
+        False, ('av',), 'pip install "labelimgplusplus[video]"',
+        'Missing optional component: av')
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=missing):
+            window.request_open_video(
+                str(tmp_path / 'clip.mp4'), skip_prompt=True)
+        window.workspace_pages.video_setup_card.close_button.click()
+        app.processEvents()
+
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_dependency_import_race_shows_setup_without_submitting_work(tmp_path):
+    from libs.core.video_runtime import VideoRuntimeStatus
+
+    _app, window = get_main_app()
+    image = tmp_path / 'image.png'
+    _image(image)
+    assert window.load_file(str(image))
+    committed_generation = window._dataset_generation
+    ready = VideoRuntimeStatus(
+        True, (), 'pip install "labelimgplusplus[video]"', 'Ready')
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=ready), patch(
+                'libs.core.video_decoder.load_video_dependencies',
+                side_effect=VideoDependencyError('av disappeared')):
+            assert window.request_open_video(
+                str(tmp_path / 'clip.mp4'), skip_prompt=True) is None
+
+        assert window.file_path == str(image)
+        assert window._dataset_generation == committed_generation
+        assert not window.workspace_pages.video_setup_overlay.isHidden()
+        assert 'av disappeared' in \
+            window.workspace_pages.video_setup_card.detail.text()
+        assert not window.task_coordinator.queue_depths()['video']
     finally:
         window.dirty = False
         window.close()

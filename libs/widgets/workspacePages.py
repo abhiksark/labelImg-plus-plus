@@ -3,19 +3,20 @@
 import os
 
 try:
-    from PyQt5.QtCore import Qt, pyqtSignal
+    from PyQt5.QtCore import QEvent, Qt, pyqtSignal
     from PyQt5.QtWidgets import (
         QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
         QStackedWidget, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:
-    from PyQt4.QtCore import Qt, pyqtSignal
+    from PyQt4.QtCore import QEvent, Qt, pyqtSignal
     from PyQt4.QtGui import (
         QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
         QStackedWidget, QToolButton, QVBoxLayout, QWidget,
     )
 
 from libs.utils.dpi import scale_px
+from libs.widgets.videoSetupCard import VideoSetupCard
 
 
 def _action_button(action, parent):
@@ -202,6 +203,19 @@ class WorkspacePages(QWidget):
         self.gallery_page = gallery_page
         self.stack.addWidget(gallery_page)
 
+        self.video_setup_overlay = QWidget(self.stack)
+        self.video_setup_overlay.setObjectName('videoRuntimeSetupOverlay')
+        setup_layout = QVBoxLayout(self.video_setup_overlay)
+        setup_layout.setContentsMargins(
+            scale_px(32), scale_px(32), scale_px(32), scale_px(32))
+        setup_layout.addStretch(1)
+        self.video_setup_card = VideoSetupCard(self.video_setup_overlay)
+        setup_layout.addWidget(
+            self.video_setup_card, 0, Qt.AlignHCenter)
+        setup_layout.addStretch(1)
+        self.video_setup_overlay.hide()
+        self.stack.installEventFilter(self)
+
         self.status_strip = QWidget(self)
         self.status_strip.setObjectName('workspaceStatusStrip')
         self.status_strip.setFixedHeight(scale_px(24))
@@ -234,6 +248,23 @@ class WorkspacePages(QWidget):
 
     def set_video_visible(self, visible):
         self.timeline.setVisible(bool(visible))
+
+    def show_video_setup(self, status):
+        self.video_setup_card.set_status(status)
+        self.video_setup_overlay.setGeometry(self.stack.rect())
+        self.video_setup_overlay.show()
+        self.video_setup_overlay.raise_()
+        self.video_setup_card.choose_another_button.setFocus(
+            Qt.OtherFocusReason)
+
+    def hide_video_setup(self):
+        self.video_setup_overlay.hide()
+
+    def eventFilter(self, watched, event):
+        if watched is self.stack and event.type() in (
+                QEvent.Resize, QEvent.Show):
+            self.video_setup_overlay.setGeometry(self.stack.rect())
+        return super(WorkspacePages, self).eventFilter(watched, event)
 
     def set_status_message(self, text):
         """Show a status message, eliding it rather than clipping it.
