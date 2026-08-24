@@ -1,22 +1,28 @@
 """PTS-based controls and marker strip for smart-video documents."""
 
+from dataclasses import dataclass
 import re
 import weakref
 
 try:
-    from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
-    from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen
+    from PyQt5.QtCore import QEvent, QPoint, Qt, QTimer, pyqtSignal
+    from PyQt5.QtGui import (
+        QBrush, QColor, QKeySequence, QPainter, QPen, QPolygon,
+    )
     from PyQt5.QtWidgets import (
         QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
         QSizePolicy, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
     )
     _QT5 = True
 except ImportError:
-    from PyQt4.QtCore import QEvent, QRegExp, Qt, QTimer, pyqtSignal
+    from PyQt4.QtCore import (
+        QEvent, QPoint, QRegExp, Qt, QTimer, pyqtSignal,
+    )
     from PyQt4.QtGui import (
-        QColor, QComboBox, QHBoxLayout, QKeySequence, QLabel, QLineEdit,
-        QMenu, QPainter, QPen, QPushButton, QRegExpValidator, QSizePolicy,
-        QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
+        QBrush, QColor, QComboBox, QHBoxLayout, QKeySequence, QLabel,
+        QLineEdit, QMenu, QPainter, QPen, QPolygon, QPushButton,
+        QRegExpValidator, QSizePolicy, QSlider, QStyle, QToolButton,
+        QVBoxLayout, QWidget,
     )
     _QT5 = False
 
@@ -38,6 +44,47 @@ from libs.core.video_types import VideoFrameRef
 TIMELINE_MAX = 1_000_000
 _TIMECODE_PATTERN = r'^(\d{2,}):([0-5]\d):([0-5]\d)\.(\d{3})$'
 _TIMECODE = re.compile(_TIMECODE_PATTERN)
+_MARKER_SPECS = (
+    ('accepted', 'Accepted', 'solid-tick'),
+    ('pending', 'Pending', 'hollow-diamond'),
+    ('verified', 'Verified', 'bottom-triangle'),
+    ('propagation', 'Propagation', 'hatched-span'),
+    ('gap', 'Gaps', 'crossed-span'),
+)
+
+
+@dataclass(frozen=True)
+class TimelineMarkerGroup:
+    """One immutable semantic marker layer in normalized slider space."""
+
+    kind: str
+    label: str
+    pattern: str
+    ranges: tuple
+
+
+def _normalize_marker_range(value):
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        start, end = value
+    else:
+        start = end = value
+    start = max(0, min(TIMELINE_MAX, int(start)))
+    end = max(0, min(TIMELINE_MAX, int(end)))
+    return (min(start, end), max(start, end))
+
+
+def _normalize_marker_ranges(values):
+    return tuple(sorted(_normalize_marker_range(value) for value in values))
+
+
+def _marker_group_summary(group):
+    first = min(item[0] for item in group.ranges)
+    last = max(item[1] for item in group.ranges)
+    range_text = str(first) if first == last else '%s–%s' % (first, last)
+    kind = group.kind
+    if kind == 'gap' and len(group.ranges) != 1:
+        kind = 'gaps'
+    return '%s %s, range %s' % (len(group.ranges), kind, range_text)
 
 
 def _timecode_validator(parent):
@@ -73,17 +120,45 @@ class _MarkerSlider(QSlider):
 
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
+        self._marker_groups = ()
         self.spans = ()
         self.accepted = ()
         self.pending = ()
         self.verified = ()
+        self.gaps = ()
+        self.setAccessibleName('Video timeline')
+        self.setAccessibleDescription(self.accessible_marker_summary())
 
-    def set_markers(self, spans=(), accepted=(), pending=(), verified=()):
-        self.spans = tuple(spans)
-        self.accepted = tuple(accepted)
-        self.pending = tuple(pending)
-        self.verified = tuple(verified)
+    def set_markers(self, spans=(), accepted=(), pending=(), verified=(),
+                    propagation=(), gaps=()):
+        values_by_kind = {
+            'accepted': _normalize_marker_ranges(accepted),
+            'pending': _normalize_marker_ranges(pending),
+            'verified': _normalize_marker_ranges(verified),
+            'propagation': _normalize_marker_ranges(
+                tuple(spans) + tuple(propagation)),
+            'gap': _normalize_marker_ranges(gaps),
+        }
+        self._marker_groups = tuple(
+            TimelineMarkerGroup(kind, label, pattern, values_by_kind[kind])
+            for kind, label, pattern in _MARKER_SPECS
+            if values_by_kind[kind])
+        self.spans = values_by_kind['propagation']
+        self.accepted = tuple(item[0] for item in values_by_kind['accepted'])
+        self.pending = tuple(item[0] for item in values_by_kind['pending'])
+        self.verified = tuple(item[0] for item in values_by_kind['verified'])
+        self.gaps = values_by_kind['gap']
+        self.setAccessibleDescription(self.accessible_marker_summary())
         self.update()
+
+    def marker_groups(self):
+        return self._marker_groups
+
+    def accessible_marker_summary(self):
+        if not self._marker_groups:
+            return 'No timeline markers'
+        return 'Timeline markers: %s' % '; '.join(
+            _marker_group_summary(group) for group in self._marker_groups)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -91,20 +166,44 @@ class _MarkerSlider(QSlider):
         left = 6
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        for start, end in self.spans:
-            painter.fillRect(
-                left + int(start * width / TIMELINE_MAX), 1,
-                max(1, int((end - start) * width / TIMELINE_MAX)), 3,
-                QColor(70, 140, 220, 160))
-        for values, color, y0, y1 in (
-                (self.accepted, QColor(45, 180, 90), 0, 6),
-                (self.pending, QColor(235, 165, 35), 0, 6),
-                (self.verified, QColor(125, 90, 220),
-                 self.height() - 6, self.height())):
-            painter.setPen(QPen(color, 2))
-            for value in values:
-                x = left + int(value * width / TIMELINE_MAX)
-                painter.drawLine(x, y0, x, y1)
+        colors = {
+            'accepted': QColor(45, 180, 90),
+            'pending': QColor(235, 165, 35),
+            'verified': QColor(125, 90, 220),
+            'propagation': QColor(70, 140, 220, 190),
+            'gap': QColor(200, 75, 75, 190),
+        }
+        for group in self._marker_groups:
+            color = colors[group.kind]
+            if group.pattern in ('hatched-span', 'crossed-span'):
+                brush_style = (Qt.BDiagPattern
+                               if group.pattern == 'hatched-span'
+                               else Qt.CrossPattern)
+                painter.setPen(QPen(color, 1))
+                painter.setBrush(QBrush(color, brush_style))
+                for start, end in group.ranges:
+                    x = left + int(start * width / TIMELINE_MAX)
+                    x_end = left + int(end * width / TIMELINE_MAX)
+                    painter.drawRect(x, 1, max(2, x_end - x), 5)
+                continue
+            for start, _end in group.ranges:
+                x = left + int(start * width / TIMELINE_MAX)
+                if group.pattern == 'solid-tick':
+                    painter.setPen(QPen(color, 2))
+                    painter.drawLine(x, 0, x, 7)
+                elif group.pattern == 'hollow-diamond':
+                    painter.setPen(QPen(color, 2))
+                    painter.setBrush(QBrush(Qt.NoBrush))
+                    painter.drawPolygon(QPolygon((
+                        QPoint(x, 0), QPoint(x + 4, 4), QPoint(x, 8),
+                        QPoint(x - 4, 4))))
+                elif group.pattern == 'bottom-triangle':
+                    bottom = self.height() - 1
+                    painter.setPen(QPen(color, 1))
+                    painter.setBrush(QBrush(color))
+                    painter.drawPolygon(QPolygon((
+                        QPoint(x - 4, bottom), QPoint(x + 4, bottom),
+                        QPoint(x, bottom - 7))))
         painter.end()
 
 
@@ -200,6 +299,20 @@ class VideoTimelineWidget(QWidget):
         self.slider = _MarkerSlider()
         self.slider.setRange(0, TIMELINE_MAX)
         self.slider.setMinimumHeight(32)
+        self.legend_menu = QMenu('Timeline legend', self)
+        self.legend_menu.setObjectName('videoTimelineLegendMenu')
+        self.legend_button = QToolButton()
+        self.legend_button.setText('Legend')
+        self.legend_button.setAccessibleName('Timeline legend')
+        self.legend_button.setAccessibleDescription(
+            self.slider.accessible_marker_summary())
+        self.legend_button.setToolTip('Timeline legend')
+        self.legend_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.legend_button.setPopupMode(QToolButton.InstantPopup)
+        self.legend_button.setMenu(self.legend_menu)
+        self.legend_button.setFocusPolicy(Qt.StrongFocus)
+        self.legend_button.setMinimumSize(32, 32)
+        self._legend_actions = {}
 
         transport = QHBoxLayout()
         transport.setContentsMargins(4, 0, 4, 2)
@@ -214,6 +327,7 @@ class VideoTimelineWidget(QWidget):
         transport.addWidget(self.propagate_all_button)
         transport.addWidget(self.propagate_selected_button)
         transport.addWidget(self.cancel_propagation_button)
+        transport.addWidget(self.legend_button)
         transport.addWidget(self.track_button)
         self._transport_layout = transport
         layout = QVBoxLayout(self)
@@ -349,12 +463,46 @@ class VideoTimelineWidget(QWidget):
             '%s (%s)' % (name, shortcut) if shortcut else name)
         self.play_button.setChecked(self._playing)
 
-    def set_markers(self, spans=(), accepted=(), pending=(), verified=()):
+    def set_markers(self, spans=(), accepted=(), pending=(), verified=(),
+                    propagation=(), gaps=()):
         self.slider.set_markers(
-            spans=tuple(self._pts_to_normalized_range(item) for item in spans),
+            propagation=tuple(
+                self._pts_to_normalized_range(item)
+                for item in tuple(spans) + tuple(propagation)),
             accepted=tuple(self._pts_to_normalized(item) for item in accepted),
             pending=tuple(self._pts_to_normalized(item) for item in pending),
-            verified=tuple(self._pts_to_normalized(item) for item in verified))
+            verified=tuple(self._pts_to_normalized(item) for item in verified),
+            gaps=tuple(self._pts_to_normalized_range(item) for item in gaps))
+        self._rebuild_legend()
+
+    def _rebuild_legend(self):
+        self.legend_menu.clear()
+        self._legend_actions = {}
+        summary = self.slider.accessible_marker_summary()
+        self.legend_button.setAccessibleDescription(summary)
+        self.legend_button.setToolTip(summary)
+        for group in self.slider.marker_groups():
+            action = self.legend_menu.addAction(
+                '%s: %s' % (group.label, _marker_group_summary(group)))
+            action.setData(group.kind)
+            action.setToolTip(_marker_group_summary(group))
+            action.triggered.connect(
+                lambda _checked=False, kind=group.kind:
+                self._seek_next_marker(kind))
+            self._legend_actions[group.kind] = action
+
+    def _seek_next_marker(self, kind):
+        group = next(
+            (item for item in self.slider.marker_groups()
+             if item.kind == kind), None)
+        if group is None or self._snapshot is None:
+            return
+        starts = tuple(item[0] for item in group.ranges)
+        current = self.slider.value()
+        value = next((item for item in starts if item > current), starts[0])
+        self._debounce.stop()
+        self._pending_seek_value = None
+        self._emit_normalized_seek(value)
 
     def set_current_frame(self, frame_ref):
         if self._snapshot is None:
@@ -393,6 +541,7 @@ class VideoTimelineWidget(QWidget):
         essentials = (
             self.previous_button, self.play_button, self.next_button,
             self.time_edit, self.speed_combo, self.position_label,
+            self.legend_button,
         )
         idle_track = (
             self.propagate_all_button, self.propagate_selected_button)
@@ -489,10 +638,13 @@ class VideoTimelineWidget(QWidget):
         value = self._pending_seek_value
         self._pending_seek_value = None
         if self._snapshot is not None and value is not None:
-            self.seekRequested.emit(
-                self._normalized_to_ref(value))
+            self._emit_normalized_seek(value)
             if self._dragging:
                 self._drag_emitted_value = value
+
+    def _emit_normalized_seek(self, value):
+        if self._snapshot is not None:
+            self.seekRequested.emit(self._normalized_to_ref(value))
 
     def restore_time_editor(self):
         self.time_edit.setText(self._displayed_timecode)

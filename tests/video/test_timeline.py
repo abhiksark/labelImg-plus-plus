@@ -184,6 +184,27 @@ def test_compact_timeline_keeps_essential_controls_visible():
         widget.close()
 
 
+def test_marker_legend_stays_keyboard_reachable_in_compact_timeline():
+    widget = VideoTimelineWidget()
+    assert hasattr(widget, 'legend_button')
+    try:
+        widget.resize(748, 96)
+        widget.show()
+        QApplication.processEvents()
+
+        assert widget.layout_mode == 'compact'
+        assert widget.legend_button.isVisible()
+        assert widget.legend_button.focusPolicy() == Qt.StrongFocus
+        assert widget.legend_button.accessibleName() == 'Timeline legend'
+        assert widget.legend_button.geometry().right() < widget.width()
+        assert all(control.isVisible() for control in (
+            widget.previous_button, widget.play_button, widget.next_button,
+            widget.time_edit, widget.speed_combo, widget.slider,
+        ))
+    finally:
+        widget.close()
+
+
 def test_seek_slider_has_a_32_pixel_pointer_target_with_production_style():
     widget = VideoTimelineWidget()
     production_style = QStyleFactory.create('Fusion')
@@ -281,10 +302,11 @@ def test_module_constructs_through_true_pyqt4_fallback(monkeypatch):
     qt4.__path__ = []
     qt_core = types.ModuleType('PyQt4.QtCore')
     qt_gui = types.ModuleType('PyQt4.QtGui')
-    for name in ('QEvent', 'QRegExp', 'Qt', 'QTimer', 'pyqtSignal'):
+    for name in ('QEvent', 'QPoint', 'QRegExp', 'Qt', 'QTimer', 'pyqtSignal'):
         setattr(qt_core, name, getattr(QtCore, name))
     for name in (
-            'QColor', 'QPainter', 'QPen', 'QRegExpValidator',
+            'QBrush', 'QColor', 'QPainter', 'QPen', 'QPolygon',
+            'QRegExpValidator',
             'QComboBox', 'QHBoxLayout', 'QKeySequence', 'QLabel', 'QLineEdit',
             'QMenu', 'QPushButton', 'QSizePolicy', 'QSlider', 'QStyle',
             'QToolButton', 'QVBoxLayout', 'QWidget'):
