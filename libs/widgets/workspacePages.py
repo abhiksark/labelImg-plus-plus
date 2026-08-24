@@ -86,12 +86,14 @@ class EmptyWorkspacePage(QWidget):
         title.setObjectName('emptyWorkspaceTitle')
         title.setAlignment(Qt.AlignCenter)
         actions = QHBoxLayout()
+        self.action_buttons = []
         for label, action in (
                 ('Open Image', open_image), ('Open Folder', open_folder),
                 ('Open Video', open_video)):
             button = QPushButton(label)
             button.setDefault(False)
             button.clicked.connect(action.trigger)
+            self.action_buttons.append(button)
             actions.addWidget(button)
         self.recent_title = QLabel('Recent')
         self.recent_title.setObjectName('emptyRecentTitle')
@@ -254,7 +256,7 @@ class WorkspacePages(QWidget):
         self.video_setup_overlay.setGeometry(self.stack.rect())
         self.video_setup_overlay.show()
         self.video_setup_overlay.raise_()
-        self.video_setup_card.choose_another_button.setFocus(
+        self.video_setup_card.install_command.setFocus(
             Qt.OtherFocusReason)
 
     def hide_video_setup(self):

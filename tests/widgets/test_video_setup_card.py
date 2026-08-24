@@ -1,3 +1,5 @@
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
 from libs.core.video_runtime import VideoRuntimeStatus
@@ -50,6 +52,39 @@ def test_setup_card_choose_another_button_emits_request():
         card.choose_another_button.click()
 
         assert requests == [True]
+    finally:
+        card.close()
+        card.deleteLater()
+
+
+def test_setup_card_contains_focus_in_visual_tab_order():
+    card = VideoSetupCard()
+    app = QApplication.instance()
+    try:
+        card.show()
+        card.install_command.setFocus(Qt.OtherFocusReason)
+        app.processEvents()
+
+        forward = (
+            card.copy_button,
+            card.close_button,
+            card.choose_another_button,
+            card.install_command,
+        )
+        current = card.install_command
+        for expected in forward:
+            QTest.keyClick(current, Qt.Key_Tab)
+            app.processEvents()
+            assert QApplication.focusWidget() is expected
+            current = expected
+
+        QTest.keyClick(card.install_command, Qt.Key_Tab, Qt.ShiftModifier)
+        app.processEvents()
+        assert QApplication.focusWidget() is card.choose_another_button
+        QTest.keyClick(
+            card.choose_another_button, Qt.Key_Tab, Qt.ShiftModifier)
+        app.processEvents()
+        assert QApplication.focusWidget() is card.close_button
     finally:
         card.close()
         card.deleteLater()

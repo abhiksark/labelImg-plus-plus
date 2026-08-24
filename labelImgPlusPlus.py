@@ -287,6 +287,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_model = None
         self._selected_video_track_id = None
         self._video_open_request_id = 0
+        self._video_runtime_restore_focus = None
         self._video_save_handle = None
         self._video_save_active = False
         self._video_close_save_pending = False
@@ -1889,13 +1890,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def reset_state(self):
         self._dismiss_class_picker()
+        self._clear_video_runtime_setup()
         self._save_drain_callbacks = []
         self._pending_video_scroll_ratios = None
         self._pending_image_navigation_center = False
         # Replacing a document must invalidate a late ticket even when the
         # same path is reopened in the same dataset generation and revision.
         self._continuous_identity_epoch += 1
-        self._load_request_id += 1
+        self._supersede_pending_replacement_requests()
         self._plugin_document_ready = False
         self._restart_workers_if_needed()
         self._close_video_decoder()
@@ -3560,11 +3562,12 @@ class MainWindow(QMainWindow, WindowMixin):
                            source_override=None):
         """Queue a transactional video/project open on the decoder lane."""
         path = os.path.abspath(ustr(path))
+        self._supersede_pending_replacement_requests()
         runtime_status = probe_video_runtime()
         if not runtime_status.available:
             self._show_video_runtime_setup(path, runtime_status)
             return None
-        self.workspace_pages.hide_video_setup()
+        self._clear_video_runtime_setup()
         if not skip_prompt and self.dirty:
             if self.auto_saving.isChecked():
                 self.request_save_file(on_success=lambda: self.request_open_video(
@@ -3602,7 +3605,6 @@ class MainWindow(QMainWindow, WindowMixin):
         # document generation intact until the candidate is ready to publish,
         # so a failed open cannot stale the visible document's save identity.
         generation = self._dataset_generation
-        self._video_open_request_id += 1
         request_id = self._video_open_request_id
         self._show_loading_veil('Opening video %s…' % os.path.basename(path))
 
@@ -3676,21 +3678,72 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _show_video_runtime_setup(self, path, status):
         """Explain missing optional support without replacing current work."""
+        if self.workspace_pages.video_setup_overlay.isHidden():
+            focus = QApplication.focusWidget()
+            self._video_runtime_restore_focus = (
+                focus if self._is_meaningful_workspace_focus(focus)
+                else None)
         self._video_runtime_setup_path = os.path.abspath(ustr(path))
         self.workspace_pages.show_video_setup(status)
         self.status('Video setup required: %s' % status.detail, delay=10000)
 
     def _dismiss_video_runtime_setup(self):
         self.workspace_pages.hide_video_setup()
-        if self.workspace_pages.current_page() == 'canvas':
-            self.canvas.setFocus(Qt.OtherFocusReason)
-        else:
-            self.workspace_pages.stack.currentWidget().setFocus(
-                Qt.OtherFocusReason)
+        self._restore_video_runtime_focus()
 
     def _choose_another_video_after_setup(self):
         self._dismiss_video_runtime_setup()
         self.open_video_dialog()
+
+    def _is_meaningful_workspace_focus(self, widget):
+        if widget is None:
+            return False
+        try:
+            return (
+                widget.window() is self
+                and QWidget.isVisible(widget)
+                and QWidget.isEnabled(widget)
+                and QWidget.focusPolicy(widget) != Qt.NoFocus
+                and not self.workspace_pages.video_setup_overlay
+                .isAncestorOf(widget))
+        except RuntimeError:
+            return False
+
+    def _workspace_focus_fallback(self):
+        page = self.workspace_pages.current_page()
+        if page == 'canvas':
+            candidates = (self.canvas,)
+        elif page == 'gallery':
+            candidates = (self.full_gallery.list_widget,)
+        else:
+            candidates = tuple(
+                self.workspace_pages.empty_page.action_buttons)
+            candidates += tuple(
+                self.workspace_pages.empty_page.recent_buttons)
+        for widget in candidates:
+            if self._is_meaningful_workspace_focus(widget):
+                return widget
+        return None
+
+    def _restore_video_runtime_focus(self):
+        focus = self._video_runtime_restore_focus
+        self._video_runtime_restore_focus = None
+        if not self._is_meaningful_workspace_focus(focus):
+            focus = self._workspace_focus_fallback()
+        if focus is not None:
+            focus.setFocus(Qt.OtherFocusReason)
+
+    def _clear_video_runtime_setup(self):
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.hide_video_setup()
+        self._video_runtime_restore_focus = None
+
+    def _supersede_pending_replacement_requests(self):
+        """Invalidate image/video candidates without changing the document."""
+        self._load_request_id += 1
+        self._video_open_request_id += 1
+        self.task_coordinator.cancel_key('image-load')
+        self.task_coordinator.cancel_key('video-open')
 
     def _locate_video_source(self, project_path):
         source, _selected = QFileDialog.getOpenFileName(
@@ -5347,6 +5400,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 or file_path.lower().endswith(VIDEO_EXTENSIONS)):
             return self.request_open_video(
                 file_path, skip_prompt=skip_prompt)
+        self._clear_video_runtime_setup()
         if file_path in self._path_to_idx:
             return self.request_load_file(
                 file_path, skip_prompt=skip_prompt)
@@ -5388,6 +5442,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 u'Cannot open annotation file',
                 u'<p>Open the image it describes instead.</p>')
             return None
+        self._clear_video_runtime_setup()
+        self._supersede_pending_replacement_requests()
         if not skip_prompt and self.dirty:
             if self.save_changes_automatically.isChecked():
                 self.request_save_file(
@@ -5409,7 +5465,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self._discard_workflow_draft()
 
-        self._load_request_id += 1
         request_id = self._load_request_id
         generation = self._dataset_generation
         cached = (None if replacement_snapshot is not None
@@ -6003,6 +6058,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _shutdown_workers(self):
         self._dismiss_class_picker()
+        self._clear_video_runtime_setup()
         self._plugin_document_ready = False
         self._publish_plugin_document(new_generation=True, force=True)
         if hasattr(self, 'plugin_manager'):
@@ -6516,6 +6572,8 @@ class MainWindow(QMainWindow, WindowMixin):
         """Synchronous compatibility path used by tests and extensions."""
         if not self.may_continue() or not dir_path:
             return False
+        self._clear_video_runtime_setup()
+        self._supersede_pending_replacement_requests()
         self._dataset_generation = self.task_coordinator.next_generation()
         with trace_span('directory.scan', args={
                 'root': hash_path(dir_path)}):
@@ -6533,6 +6591,8 @@ class MainWindow(QMainWindow, WindowMixin):
         """Transactionally scan a directory without clearing the live dataset."""
         if not dir_path:
             return None
+        self._clear_video_runtime_setup()
+        self._supersede_pending_replacement_requests()
         dir_path = os.path.abspath(ustr(dir_path))
         if not skip_prompt and self.dirty:
             if self.save_changes_automatically.isChecked():

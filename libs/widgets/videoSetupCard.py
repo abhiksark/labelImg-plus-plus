@@ -1,13 +1,13 @@
 """In-workspace guidance for enabling optional video annotation support."""
 
 try:
-    from PyQt5.QtCore import pyqtSignal
+    from PyQt5.QtCore import QEvent, Qt, pyqtSignal
     from PyQt5.QtWidgets import (
         QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QVBoxLayout, QWidget,
     )
 except ImportError:
-    from PyQt4.QtCore import pyqtSignal
+    from PyQt4.QtCore import QEvent, Qt, pyqtSignal
     from PyQt4.QtGui import (
         QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QVBoxLayout, QWidget,
@@ -78,9 +78,37 @@ class VideoSetupCard(QWidget):
         layout.addLayout(command_row)
         layout.addLayout(actions)
 
+        self._focus_order = (
+            self.install_command,
+            self.copy_button,
+            self.close_button,
+            self.choose_another_button,
+        )
+        for before, after in zip(
+                self._focus_order, self._focus_order[1:]):
+            QWidget.setTabOrder(before, after)
+        for widget in self._focus_order:
+            widget.installEventFilter(self)
+
     def set_status(self, status):
         self.detail.setText(status.detail)
         self.install_command.setText(status.install_command)
 
     def _copy_command(self):
         QApplication.clipboard().setText(self.install_command.text())
+
+    def eventFilter(self, watched, event):
+        if (watched in self._focus_order
+                and event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)):
+            backwards = (
+                event.key() == Qt.Key_Backtab
+                or bool(event.modifiers() & Qt.ShiftModifier))
+            index = self._focus_order.index(watched)
+            offset = -1 if backwards else 1
+            target = self._focus_order[
+                (index + offset) % len(self._focus_order)]
+            target.setFocus(
+                Qt.BacktabFocusReason if backwards else Qt.TabFocusReason)
+            return True
+        return super(VideoSetupCard, self).eventFilter(watched, event)

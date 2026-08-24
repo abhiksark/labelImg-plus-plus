@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from PyQt5.QtCore import QThread, Qt
 from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtWidgets import QApplication, QPushButton, QToolButton
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.video_decoder import VideoDependencyError
@@ -34,6 +35,13 @@ def _image(path):
     image = QImage(64, 48, QImage.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(str(path))
+
+
+def _missing_runtime_status():
+    from libs.core.video_runtime import VideoRuntimeStatus
+    return VideoRuntimeStatus(
+        False, ('av',), 'pip install "labelimgplusplus[video]"',
+        'Missing optional component: av')
 
 
 def _install_writable_video_document(window, tmp_path):
@@ -481,6 +489,76 @@ def test_missing_runtime_short_circuits_before_touching_current_document(
         window.close()
 
 
+def test_missing_runtime_supersedes_delayed_image_result(tmp_path):
+    from libs.core.image_pipeline import load_image_result
+
+    app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    delayed = tmp_path / 'delayed.png'
+    _image(current)
+    _image(delayed)
+    assert window.load_file(str(current))
+    result = load_image_result(str(delayed))
+    request_id = window._load_request_id
+    committed_generation = window._dataset_generation
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=_missing_runtime_status()):
+            window.request_open_video(
+                str(tmp_path / 'missing-runtime.mp4'), skip_prompt=True)
+
+        window._on_image_result(
+            result, request_id, committed_generation)
+        app.processEvents()
+
+        assert window.file_path == str(current)
+        assert window._dataset_generation == committed_generation
+        assert not window.workspace_pages.video_setup_overlay.isHidden()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_missing_runtime_supersedes_delayed_video_and_closes_decoder(
+        tmp_path):
+    class Decoder:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    _app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    _image(current)
+    assert window.load_file(str(current))
+    decoder = Decoder()
+    prepared = SimpleNamespace(decoder=decoder)
+    request_id = window._video_open_request_id
+    committed_generation = window._dataset_generation
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=_missing_runtime_status()):
+            window.request_open_video(
+                str(tmp_path / 'missing-runtime.mp4'), skip_prompt=True)
+
+        with patch.object(window, '_commit_video_open') as commit:
+            window._on_video_open_result(
+                prepared, request_id, committed_generation,
+                requested_path=str(tmp_path / 'old.mp4'))
+
+        commit.assert_not_called()
+        assert decoder.closed
+        assert window.file_path == str(current)
+        assert window._dataset_generation == committed_generation
+        assert not window.workspace_pages.video_setup_overlay.isHidden()
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_video_setup_choose_another_reopens_file_chooser(tmp_path):
     from libs.core.video_runtime import VideoRuntimeStatus
 
@@ -533,6 +611,117 @@ def test_closing_video_setup_returns_focus_to_current_canvas(tmp_path):
 
         assert window.workspace_pages.video_setup_overlay.isHidden()
         assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_closing_video_setup_restores_prior_focus_on_every_workspace_page(
+        tmp_path):
+    app, window = get_main_app()
+    image = tmp_path / 'image.png'
+    _image(image)
+    assert window.load_file(str(image))
+    window.show()
+    app.processEvents()
+    empty_action = next(
+        button for button in
+        window.workspace_pages.empty_page.findChildren(QPushButton)
+        if button.text() == 'Open Image')
+    canvas_action = window.workspace_pages.canvas_chrome \
+        .findChildren(QToolButton)[0]
+    cases = (
+        ('canvas', canvas_action),
+        ('empty', empty_action),
+        ('gallery', window.full_gallery.list_widget),
+    )
+    try:
+        for page, target in cases:
+            window.workspace_pages.set_page(page)
+            target.setFocus(Qt.OtherFocusReason)
+            app.processEvents()
+            assert QApplication.focusWidget() is target
+
+            window._show_video_runtime_setup(
+                str(tmp_path / 'clip.mp4'), _missing_runtime_status())
+            window.workspace_pages.video_setup_card.close_button.click()
+            app.processEvents()
+
+            assert window.workspace_pages.video_setup_overlay.isHidden()
+            assert QApplication.focusWidget() is target
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_canceling_choose_another_restores_prior_empty_page_focus(tmp_path):
+    app, window = get_main_app()
+    window.show()
+    window.workspace_pages.set_page('empty')
+    target = next(
+        button for button in
+        window.workspace_pages.empty_page.findChildren(QPushButton)
+        if button.text() == 'Open Folder')
+    target.setFocus(Qt.OtherFocusReason)
+    app.processEvents()
+    assert QApplication.focusWidget() is target
+    try:
+        window._show_video_runtime_setup(
+            str(tmp_path / 'clip.mp4'), _missing_runtime_status())
+        with patch(
+                'labelImgPlusPlus.QFileDialog.getOpenFileName',
+                return_value=('', '')):
+            window.workspace_pages.video_setup_card \
+                .choose_another_button.click()
+        app.processEvents()
+
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+        assert QApplication.focusWidget() is target
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_opening_image_hides_visible_video_setup(tmp_path):
+    app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    replacement = tmp_path / 'replacement.png'
+    _image(current)
+    _image(replacement)
+    assert window.load_file(str(current))
+    try:
+        window._show_video_runtime_setup(
+            str(tmp_path / 'clip.mp4'), _missing_runtime_status())
+        assert not window.workspace_pages.video_setup_overlay.isHidden()
+
+        window.request_open_file(str(replacement), skip_prompt=True)
+
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+        assert _wait(app, lambda: window.file_path == str(replacement))
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_reset_dataset_close_and_window_close_hide_video_setup(tmp_path):
+    app, window = get_main_app()
+    try:
+        window._show_video_runtime_setup(
+            str(tmp_path / 'reset.mp4'), _missing_runtime_status())
+        window.reset_state()
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+
+        window._show_video_runtime_setup(
+            str(tmp_path / 'dataset.mp4'), _missing_runtime_status())
+        window.close_file()
+        assert window.workspace_pages.video_setup_overlay.isHidden()
+
+        window._show_video_runtime_setup(
+            str(tmp_path / 'window.mp4'), _missing_runtime_status())
+        window.close()
+        app.processEvents()
+        assert window.workspace_pages.video_setup_overlay.isHidden()
     finally:
         window.dirty = False
         window.close()
