@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.canvas import (
     Canvas, CURSOR_DEFAULT, CURSOR_DRAW, CURSOR_GRAB)
+from libs.core.assist_state import AssistPrompt
 from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
@@ -330,6 +331,7 @@ class TestCanvasTransform(unittest.TestCase):
 
         # Results should differ when scale differs
         # (exact values depend on widget geometry)
+        self.assertNotEqual(result1, result2)
 
 
 class TestCanvasScale(unittest.TestCase):
@@ -899,18 +901,23 @@ class TestEditDragDraw(_DrawFirstBase):
 
         self.assertEqual(len(blocked), 1)
 
-    def test_click_blocked_is_announced_in_sam_mode_too(self):
-        self.canvas.set_sam_mode(True)
-        self.canvas.commit_rectangle([20, 20, 60, 50])
+    def test_smart_points_receive_input_after_manual_draft_is_discarded(self):
+        """The supported tool transition never puts SAM atop a manual draft."""
+        self._drag(20, 20, 60, 50)
         self.assertIsNotNone(self.canvas.provisional_shape)
-        blocked = []
-        self.canvas.provisionalClickBlocked.connect(
-            lambda: blocked.append(True))
+        self.canvas.discard_provisional_shape()
+        prompts = []
+        self.canvas.assistPrompted.connect(prompts.append)
+        self.canvas.set_assist_prompt_mode('points')
+        self.canvas.set_sam_mode(True)
 
         self.canvas.mousePressEvent(
             self._mouse(QEvent.MouseButtonPress, 100, 100))
 
-        self.assertEqual(len(blocked), 1)
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertIsNone(self.canvas.current)
+        self.assertEqual(prompts, [AssistPrompt(
+            mode='points', positive_points=((100.0, 100.0),))])
 
     def test_right_press_mid_drag_cancels_and_swallows_the_menu(self):
         # menu.exec_() is a nested event loop; letting it run here would eat

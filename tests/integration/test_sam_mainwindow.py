@@ -5,13 +5,16 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import json
 import time
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImage
+import pytest
+from PyQt5.QtCore import QEvent, QPointF, Qt
+from PyQt5.QtGui import QImage, QMouseEvent
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QApplication
 import labelImgPlusPlus as app_mod
-from libs.core.assist_state import AssistPhase
+from libs.core.annotation_workflow import AnnotationTool, PromptPolicy
+from libs.core.assist_state import AssistPhase, AssistPrompt
 from libs.core.sam_types import SamResult
+from libs.core.shape import Shape, ShapeType
 
 app = QApplication.instance() or QApplication([])
 
@@ -64,6 +67,252 @@ def _continuous_state(window):
         window.continuous_save._durable_revision,
         window.continuous_save._in_flight,
     )
+
+
+class _FakeInferenceBackend:
+    """External deterministic boundary; controller/coordinator stay real."""
+
+    def __init__(self):
+        self._image_shape = None
+
+    @property
+    def image_is_set(self):
+        return self._image_shape is not None
+
+    def set_image(self, rgb):
+        self._image_shape = rgb.shape[:2]
+
+    def predict(self, _prompt):
+        import numpy as np
+        height, width = self._image_shape
+        mask = np.zeros((height, width), dtype=bool)
+        mask[8:32, 10:40] = True
+        return mask
+
+
+def _accepted_rectangle():
+    shape = Shape(label='accepted', shape_type=ShapeType.RECTANGLE)
+    for point in ((1.0, 1.0), (5.0, 1.0), (5.0, 5.0), (1.0, 5.0)):
+        shape.add_point(QPointF(*point))
+    shape.close()
+    return shape
+
+
+def _canvas_mouse_event(canvas, kind, x, y, button, buttons):
+    offset = canvas.offset_to_center()
+    position = QPointF(
+        (float(x) + offset.x()) * canvas.scale,
+        (float(y) + offset.y()) * canvas.scale)
+    return QMouseEvent(
+        kind, position, button, buttons, Qt.NoModifier)
+
+
+@pytest.mark.parametrize(
+    ('manual_tool', 'assist_tool'),
+    (('rectangle', 'points'), ('polygon', 'box')),
+)
+def test_smart_tool_activation_releases_manual_picker_and_draft_ownership(
+        monkeypatch, tmp_path, manual_tool, assist_tool):
+    """A manual picker/draft cannot coexist with Assist prompt ownership."""
+    pytest.importorskip('numpy')
+    pytest.importorskip('cv2')
+    window = _assist_window(monkeypatch, tmp_path)
+    try:
+        _prepare_image_document(
+            window, tmp_path / ('manual-to-%s.png' % assist_tool))
+        window.show()
+        app.processEvents()
+        window.sam_controller.backend = _FakeInferenceBackend()
+
+        accepted = _accepted_rectangle()
+        window.canvas.shapes.append(accepted)
+        window.canvas.rebuild_spatial_index()
+        window.workflow.set_active_class('vehicle')
+        window.workflow.set_prompt_policy(PromptPolicy.CONFIRM_EACH)
+        window._apply_workflow_state()
+
+        if manual_tool == 'rectangle':
+            window.activate_box_tool()
+            window.canvas.commit_rectangle((8.0, 8.0, 28.0, 24.0))
+        else:
+            window.activate_polygon_tool()
+            window.canvas.commit_polygon(
+                ((8.0, 8.0), (28.0, 8.0), (24.0, 24.0)))
+        app.processEvents()
+
+        manual_draft = window.canvas.provisional_shape
+        assert manual_draft is not None
+        assert window._pending_provisional_shape is manual_draft
+        assert window.workflow.snapshot.provisional is True
+        assert window.class_picker.isVisible()
+        window.class_picker.edit.setText('stale manual class')
+        picker_accepts = QSignalSpy(window.class_picker.accepted)
+        save_requests = QSignalSpy(window.continuous_save.saveRequested)
+        protected_document = (
+            tuple(window.canvas.shapes),
+            tuple(window.undo_stack._undo_stack),
+            tuple(window.undo_stack._redo_stack),
+            window._document_revision,
+            window.dirty,
+            _continuous_state(window),
+        )
+
+        if assist_tool == 'points':
+            window.activate_smart_points_tool()
+            expected_tool = AnnotationTool.SMART_POINTS
+            expected_mode = 'points'
+            expected_geometry = (18.0, 16.0)
+        else:
+            window.activate_smart_box_tool()
+            expected_tool = AnnotationTool.SMART_BOX
+            expected_mode = 'box'
+            expected_geometry = (10.0, 10.0, 36.0, 30.0)
+        assert _wait(lambda: not window.sam_controller._busy)
+
+        assert window.class_picker.isHidden()
+        assert window._pending_provisional_shape is None
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.current is None
+        assert window.workflow.snapshot.provisional is False
+        assert window.workflow.snapshot.active_tool is expected_tool
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.canvas.mode == window.canvas.CREATE_SAM
+        assert window.canvas.hasFocus()
+        assert (
+            tuple(window.canvas.shapes),
+            tuple(window.undo_stack._undo_stack),
+            tuple(window.undo_stack._redo_stack),
+            window._document_revision,
+            window.dirty,
+            _continuous_state(window),
+        ) == protected_document
+        assert len(save_requests) == 0
+
+        QTest.keyClick(window.canvas, Qt.Key_Return)
+        app.processEvents()
+        assert len(picker_accepts) == 0
+        assert tuple(window.canvas.shapes) == (accepted,)
+
+        prompts = []
+        manual_shapes = QSignalSpy(window.canvas.newShape)
+        window.canvas.assistPrompted.connect(prompts.append)
+        if assist_tool == 'points':
+            window.canvas.mousePressEvent(_canvas_mouse_event(
+                window.canvas, QEvent.MouseButtonPress, 18, 16,
+                Qt.LeftButton, Qt.LeftButton))
+        else:
+            window.canvas.mousePressEvent(_canvas_mouse_event(
+                window.canvas, QEvent.MouseButtonPress, 10, 10,
+                Qt.LeftButton, Qt.LeftButton))
+            window.canvas.mouseMoveEvent(_canvas_mouse_event(
+                window.canvas, QEvent.MouseMove, 36, 30,
+                Qt.NoButton, Qt.LeftButton))
+            window.canvas.mouseReleaseEvent(_canvas_mouse_event(
+                window.canvas, QEvent.MouseButtonRelease, 36, 30,
+                Qt.LeftButton, Qt.NoButton))
+
+        assert len(prompts) == 1
+        prompt = prompts[0]
+        assert isinstance(prompt, AssistPrompt)
+        assert prompt.mode == expected_mode
+        if assist_tool == 'points':
+            assert prompt.positive_points[0] == pytest.approx(
+                expected_geometry, abs=.5)
+            assert prompt.negative_points == ()
+            assert prompt.box is None
+        else:
+            assert prompt.box == pytest.approx(expected_geometry, abs=.5)
+            assert prompt.positive_points == ()
+            assert prompt.negative_points == ()
+        assert len(manual_shapes) == 0
+        assert _wait(
+            lambda: window.assist_state.snapshot.phase is AssistPhase.PREVIEW)
+        assert window._assist_prompt == prompt
+        assert window.canvas.assist_preview_shape is not None
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.current is None
+        assert window.workflow.snapshot.provisional is False
+        assert window.class_picker.isHidden()
+        assert tuple(window.canvas.shapes) == (accepted,)
+        assert (
+            tuple(window.undo_stack._undo_stack),
+            tuple(window.undo_stack._redo_stack),
+            window._document_revision,
+            window.dirty,
+            _continuous_state(window),
+        ) == protected_document[1:]
+        assert len(save_requests) == 0
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+@pytest.mark.parametrize(
+    ('manual_tool', 'assist_tool', 'expected_tool'),
+    (
+        ('rectangle', 'box', AnnotationTool.SMART_BOX),
+        ('polygon', 'points', AnnotationTool.SMART_POINTS),
+    ),
+)
+def test_smart_tool_activation_finishes_in_progress_manual_gesture_ownership(
+        monkeypatch, tmp_path, manual_tool, assist_tool, expected_tool):
+    """Switching tools balances the unfinished manual drawing lifecycle."""
+    window = _assist_window(monkeypatch, tmp_path)
+    try:
+        _prepare_image_document(
+            window, tmp_path / ('in-progress-to-%s.png' % assist_tool))
+        window.show()
+        app.processEvents()
+        window.sam_controller.backend = _FakeInferenceBackend()
+        if manual_tool == 'rectangle':
+            window.activate_box_tool()
+        else:
+            window.activate_polygon_tool()
+        window.canvas.handle_drawing(QPointF(10.0, 10.0))
+        assert window.canvas.current is not None
+        assert window.class_picker.isHidden()
+        assert window.workflow.snapshot.provisional is False
+
+        drawing_finished = QSignalSpy(window.canvas.drawingPolygon)
+        save_requests = QSignalSpy(window.continuous_save.saveRequested)
+        protected_document = (
+            tuple(window.canvas.shapes),
+            tuple(window.undo_stack._undo_stack),
+            tuple(window.undo_stack._redo_stack),
+            window._document_revision,
+            window.dirty,
+            _continuous_state(window),
+        )
+
+        if assist_tool == 'box':
+            window.activate_smart_box_tool()
+        else:
+            window.activate_smart_points_tool()
+        assert _wait(lambda: not window.sam_controller._busy)
+
+        assert len(drawing_finished) == 1
+        assert drawing_finished[0][0] is False
+        assert window.canvas.current is None
+        assert window.canvas.provisional_shape is None
+        assert window._pending_provisional_shape is None
+        assert window.class_picker.isHidden()
+        assert window.workflow.snapshot.provisional is False
+        assert window.workflow.snapshot.active_tool is expected_tool
+        assert window.canvas.mode == window.canvas.CREATE_SAM
+        assert window.canvas.hasFocus()
+        assert (
+            tuple(window.canvas.shapes),
+            tuple(window.undo_stack._undo_stack),
+            tuple(window.undo_stack._redo_stack),
+            window._document_revision,
+            window.dirty,
+            _continuous_state(window),
+        ) == protected_document
+        assert len(save_requests) == 0
+    finally:
+        window.dirty = False
+        window.close()
 
 
 def test_enter_accepts_assist_preview_through_one_image_mutation_and_save(

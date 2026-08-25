@@ -2685,6 +2685,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
+        self._discard_workflow_draft()
         self.workflow.set_tool(tool)
         self.canvas.set_sam_mode(True)
         self.sam_controller.set_enabled(True)
