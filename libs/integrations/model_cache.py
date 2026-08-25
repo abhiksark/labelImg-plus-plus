@@ -16,7 +16,9 @@ from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
 _HASH_CHUNK = 1 << 20
 _DOWNLOAD_CHUNK = 64 * 1024
-DEFAULT_DOWNLOAD_TIMEOUT = 2.0
+# Allows finite CDN/TLS/read idle gaps while still bounding cancellation to one
+# socket operation. Tests and callers may supply a shorter explicit timeout.
+DEFAULT_DOWNLOAD_TIMEOUT = 10.0
 
 
 @dataclass(frozen=True)

@@ -229,6 +229,21 @@ def test_builtin_timeout_after_cancel_is_cancelled(
     assert not list(tmp_path.glob('*.onnx'))
 
 
+def test_default_timeout_is_forwarded_for_finite_cdn_idle_gap(
+        tmp_path, fake_manifest, monkeypatch):
+    """Catches a two-second default that rejects a healthy CDN read gap."""
+    calls = []
+
+    def provider(request, timeout=None):
+        calls.append((request, timeout))
+        return Response(b'aaaabbbb')
+
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen', provider)
+    paths = model_cache.download_manifest(fake_manifest, str(tmp_path))
+    assert paths == (str(tmp_path / 'fake.onnx'),)
+    assert calls == [(fake_manifest.artifacts[0].url, 10.0)]
+
+
 def test_slow_stream_uses_cancellation_responsive_read_size(
         tmp_path, fake_manifest, monkeypatch):
     """Catches a 1 MiB read exceeding the two-second socket timeout."""
