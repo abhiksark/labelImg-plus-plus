@@ -1,6 +1,8 @@
 import pytest
 
+from libs.integrations import model_cache, segmentation
 from libs.integrations.segmentation import SegmentationBackend, sam_available
+from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
 
 def test_backend_is_abstract():
@@ -63,3 +65,60 @@ def test_set_image_clamps_degenerate_aspect_ratio(monkeypatch):
     rgb = np.zeros((1, 4000, 3), dtype=np.uint8)       # 4000:1 aspect ratio
     backend.set_image(rgb)                             # must not raise
     assert backend.image_is_set
+
+
+def test_load_backend_uses_complete_custom_paths(tmp_path, monkeypatch):
+    """Catches rejecting a complete user-supplied encoder/decoder pair."""
+    encoder = tmp_path / 'custom.encoder.onnx'
+    decoder = tmp_path / 'custom.decoder.onnx'
+    encoder.write_bytes(b'encoder')
+    decoder.write_bytes(b'decoder')
+    loaded = []
+
+    class FakeBackend:
+        def __init__(self, encoder_path, decoder_path):
+            loaded.append((encoder_path, decoder_path))
+
+    monkeypatch.setattr(segmentation, 'OnnxSamBackend', FakeBackend)
+    backend, error = segmentation.load_backend({
+        SETTING_SAM_ENCODER: str(encoder),
+        SETTING_SAM_DECODER: str(decoder),
+    })
+    assert isinstance(backend, FakeBackend)
+    assert error is None
+    assert loaded == [(str(encoder), str(decoder))]
+
+
+def test_load_backend_uses_only_validated_cached_pair(monkeypatch, tmp_path):
+    """Catches backend setup calling the downloader instead of cache lookup."""
+    encoder = tmp_path / 'mobile_sam.encoder.onnx'
+    decoder = tmp_path / 'mobile_sam.decoder.onnx'
+    cached = (str(encoder), str(decoder))
+    monkeypatch.setattr(model_cache, 'cached_model_paths', lambda: cached,
+                        raising=False)
+    monkeypatch.setattr(
+        model_cache, 'download_manifest',
+        lambda *args, **kwargs: pytest.fail('backend loading must not download'),
+        raising=False)
+
+    class FakeBackend:
+        def __init__(self, encoder_path, decoder_path):
+            self.paths = (encoder_path, decoder_path)
+
+    monkeypatch.setattr(segmentation, 'OnnxSamBackend', FakeBackend)
+    backend, error = segmentation.load_backend({})
+    assert backend.paths == cached
+    assert error is None
+
+
+def test_load_backend_without_cache_returns_setup_required(monkeypatch):
+    """Catches implicit download when the default model cache is absent."""
+    monkeypatch.setattr(model_cache, 'cached_model_paths', lambda: None,
+                        raising=False)
+    monkeypatch.setattr(
+        model_cache, 'download_manifest',
+        lambda *args, **kwargs: pytest.fail('backend loading must not download'),
+        raising=False)
+    backend, error = segmentation.load_backend({})
+    assert backend is None
+    assert isinstance(error, model_cache.ModelSetupRequiredError)

@@ -109,11 +109,14 @@ class OnnxSamBackend(SegmentationBackend):
 
 def load_backend(settings):
     """Return (backend, None) on success or (None, error_message) on failure."""
-    from libs.integrations.model_cache import resolve_models
+    from libs.integrations.model_cache import (
+        ModelSetupRequiredError, resolve_models)
 
     try:
         encoder_path, decoder_path = resolve_models(settings)
-    except Exception as exc:  # network, SHA mismatch, disk, half-set pair
+    except ModelSetupRequiredError as exc:
+        return None, exc
+    except Exception as exc:  # invalid custom path pair or cache filesystem error
         return None, "Could not obtain the SAM model files: %s" % exc
 
     try:
