@@ -148,7 +148,7 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None,
             if cancelled and cancelled():
                 raise ModelDownloadCancelled()
             raise ModelProviderError(str(exc))
-        except socket.timeout as exc:
+        except (socket.timeout, TimeoutError) as exc:
             _raise_network_error(exc, cancelled)
         except urllib.error.URLError as exc:
             _raise_network_error(exc, cancelled)

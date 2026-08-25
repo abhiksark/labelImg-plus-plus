@@ -197,6 +197,24 @@ def test_uncancelled_timeout_is_offline_without_promotion(
     assert not list(tmp_path.glob('*.onnx'))
 
 
+def test_builtin_timeout_after_cancel_is_cancelled(
+        tmp_path, fake_manifest, monkeypatch):
+    """Catches Python's non-socket timeout class bypassing cancellation."""
+    state = {'cancelled': False}
+
+    def timed_out(_request, timeout=None):
+        state['cancelled'] = True
+        raise TimeoutError('connect stalled')
+
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen', timed_out)
+    with pytest.raises(model_cache.ModelDownloadCancelled):
+        model_cache.download_manifest(
+            fake_manifest, str(tmp_path),
+            cancelled=lambda: state['cancelled'], timeout=.01)
+    assert not list(tmp_path.glob('*.part'))
+    assert not list(tmp_path.glob('*.onnx'))
+
+
 def test_download_promotes_verified_file_and_reports_progress(
         tmp_path, fake_manifest, monkeypatch):
     """Catches non-atomic promotion or reporting bytes unrelated to written data."""
