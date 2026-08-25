@@ -20,6 +20,12 @@ def _canvas():
     return c
 
 
+def test_canvas_names_the_annotation_surface_for_accessibility():
+    """Removing the name makes the main editing surface anonymous to AX."""
+    c = _canvas()
+    assert c.accessibleName() == 'Annotation canvas'
+
+
 def test_commit_polygon_stages_provisional_polygon_and_emits_new_shape():
     c = _canvas()
     fired = []

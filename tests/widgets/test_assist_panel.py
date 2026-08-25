@@ -78,6 +78,13 @@ def _make_editable_image_projection(window, tmp_path):
     window.toggle_actions(True)
 
 
+def _assert_action_label_fits(panel, button):
+    assert panel.layout().contentsRect().contains(button.geometry())
+    assert button.width() >= button.sizeHint().width()
+    assert button.contentsRect().width() >= \
+        button.fontMetrics().horizontalAdvance(button.text())
+
+
 def test_setup_state_explains_model_before_download():
     """Removing the setup metadata would hide the informed-consent details."""
     panel = _shown_panel()
@@ -178,6 +185,33 @@ def test_ready_state_exposes_both_prompt_tools_and_public_signals():
             assert hasattr(panel, name)
     finally:
         panel.close()
+
+
+@pytest.mark.parametrize('window_size', ((800, 600), (1366, 768)))
+def test_ready_assist_action_labels_fit_at_review_sizes(
+        monkeypatch, tmp_path, window_size):
+    """A single action row must not squeeze essential labels out of view."""
+    window = _window(monkeypatch, tmp_path, cached=True, runtime=True)
+    try:
+        _make_editable_image_projection(window, tmp_path)
+        window.workspace_pages.set_page('canvas')
+        window.resize(*window_size)
+        panel = window.workspace_pages.assist_panel
+        panel.set_snapshot(
+            _snapshot(AssistPhase.READY), MOBILE_SAM_MANIFEST,
+            track_forward_available=True)
+        window.workspace_pages.show_assist()
+        app.processEvents()
+
+        assert (window.width(), window.height()) == window_size
+        for button in (
+                panel.smart_box_button, panel.smart_points_button,
+                panel.track_forward_button):
+            assert button.isVisible()
+            _assert_action_label_fits(panel, button)
+    finally:
+        window.dirty = False
+        window.close()
 
 
 def test_editable_document_opens_assist_even_without_optional_runtime(

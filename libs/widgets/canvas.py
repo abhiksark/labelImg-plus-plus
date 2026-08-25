@@ -211,6 +211,7 @@ class Canvas(QWidget):
         # Set widget options.
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
+        self.setAccessibleName('Annotation canvas')
         self.verified = False
         self._locked = False
         self.draw_square = False

@@ -5,12 +5,14 @@ import os
 try:
     from PyQt5.QtCore import Qt, pyqtSignal
     from PyQt5.QtWidgets import (
-        QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout,
+        QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+        QVBoxLayout,
     )
 except ImportError:
     from PyQt4.QtCore import Qt, pyqtSignal
     from PyQt4.QtGui import (
-        QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout,
+        QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+        QVBoxLayout,
     )
 
 from libs.core.assist_state import AssistFailureKind, AssistPhase
@@ -96,11 +98,19 @@ class AssistPanel(QFrame):
             'Track forward', 'Track accepted Assist result forward',
             self.trackForwardRequested)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(scale_px(6))
-        for button in self._phase_buttons():
-            actions.addWidget(button)
-        actions.addStretch(1)
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(scale_px(6))
+        actions.setVerticalSpacing(scale_px(6))
+        actions.setColumnStretch(0, 1)
+        actions.setColumnStretch(1, 1)
+        for button in (
+                self.download_button, self.cancel_button, self.retry_button):
+            actions.addWidget(button, 0, 0, 1, 2)
+        actions.addWidget(self.smart_box_button, 0, 0)
+        actions.addWidget(self.smart_points_button, 0, 1)
+        actions.addWidget(self.accept_button, 0, 0)
+        actions.addWidget(self.reject_button, 0, 1)
+        actions.addWidget(self.track_forward_button, 1, 0, 1, 2)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(
