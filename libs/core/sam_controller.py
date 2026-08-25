@@ -115,7 +115,8 @@ class SamController(QObject):
         self.backend = None
         self._busy = False
         self._gen = 0
-        self._embedded_key = None        # file_path the current embedding belongs to
+        self._content_key = None         # identity of the published image/frame
+        self._embedded_key = None        # content identity the embedding belongs to
         self._enabled = False
         self._pending_prompt = None
         self._pending_prepare = False
@@ -139,9 +140,21 @@ class SamController(QObject):
         self._embedded_key = None
 
     def on_image_changed(self):
+        self._on_content_changed(self.mw.file_path)
+
+    def on_video_frame_changed(self, session_generation, frame_ref):
+        """Invalidate Assist for one successfully published video frame."""
+        frame_key = getattr(frame_ref, 'cache_key', None)
+        if frame_key is None:  # Compatibility for lightweight frame adapters.
+            frame_key = ('pts', int(frame_ref.pts))
+        self._on_content_changed((
+            'video', int(session_generation), frame_key))
+
+    def _on_content_changed(self, content_key):
         # Invalidate the cached embedding AND discard any in-flight result, so a
         # segmentation started on the previous image can never commit onto the
         # new one (the stale generation is dropped in _on_finished).
+        self._content_key = content_key
         self._embedded_key = None
         self._gen += 1
         self._pending_prompt = None
@@ -199,7 +212,10 @@ class SamController(QObject):
 
     def _start(self, prompt):
         # A not-yet-loaded backend has no embedding, so the first click must embed.
-        need_embed = self.backend is None or self._embedded_key != self.mw.file_path
+        content_key = (
+            self._content_key
+            if self._content_key is not None else self.mw.file_path)
+        need_embed = self.backend is None or self._embedded_key != content_key
         qimage = self.mw.image.copy() if need_embed else None
         self._busy = True
         self._gen += 1
@@ -207,7 +223,7 @@ class SamController(QObject):
         self._active_document_generation = int(
             getattr(self.mw, '_dataset_generation', 0))
         if need_embed:
-            self._embedded_key = self.mw.file_path
+            self._embedded_key = content_key
         if prompt is None:
             message = "Preparing SAM…"
         else:

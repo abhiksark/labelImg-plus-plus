@@ -4748,6 +4748,8 @@ class MainWindow(QMainWindow, WindowMixin):
                     raise _VideoPublicationError(
                         'Could not dispose failed video candidate: %s'
                         % close_exc) from close_exc
+        self.sam_controller.on_video_frame_changed(
+            self._dataset_generation, self.current_video_frame_ref)
         self._queue_replaced_video_decoder_close(
             checkpoint['video_decoder'], self._dataset_generation)
 
@@ -6301,6 +6303,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self._apply_workflow_state()
         if not playback:
             self._schedule_video_prefetch(result.frame_ref)
+        self.sam_controller.on_video_frame_changed(
+            self._dataset_generation, result.frame_ref)
 
     def request_next_video_frame(self):
         if self.current_video_frame_ref is None:
