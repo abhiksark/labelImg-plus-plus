@@ -172,6 +172,40 @@ def test_assist_picker_return_commits_and_escape_retains_same_preview(
         window.close()
 
 
+def test_switching_from_assist_picker_does_not_claim_manual_picker_return(
+        monkeypatch, tmp_path):
+    """Catches stale Assist picker ownership swallowing a manual commit."""
+    window = _assist_window(monkeypatch, tmp_path)
+    try:
+        _prepare_image_document(window, tmp_path / 'assist-tool-exit.png')
+        window.show()
+        app.processEvents()
+        _show_preview(window)
+        window.workflow.set_active_class('')
+        assert window.accept_assist_preview() is False
+        app.processEvents()
+        assert window.class_picker.isVisible()
+
+        window.activate_box_tool()
+        window.canvas.commit_rectangle((4.0, 4.0, 24.0, 20.0))
+        app.processEvents()
+        assert window.class_picker.isVisible()
+        window.class_picker.edit.setText('manual vehicle')
+        QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
+        app.processEvents()
+        app.processEvents()
+
+        assert [shape.label for shape in window.canvas.shapes] == [
+            'manual vehicle']
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.assist_preview_shape is None
+        assert window.assist_state.snapshot.phase is AssistPhase.READY
+        assert len(window.undo_stack._undo_stack) == 1
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_assist_review_keys_are_inert_outside_preview(monkeypatch, tmp_path):
     """Catches global Enter/Escape handlers reviewing a non-preview state."""
     window = _assist_window(monkeypatch, tmp_path)

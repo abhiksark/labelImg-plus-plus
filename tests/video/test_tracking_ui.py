@@ -7,6 +7,7 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy, QTest
+from PyQt5.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.assist_state import AssistPhase
@@ -133,6 +134,73 @@ def _show_assist_preview(window):
             polygon=((10.0, 10.0), (40.0, 10.0), (40.0, 30.0)),
             bounds=(10.0, 10.0, 41.0, 31.0)))
     assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+
+
+def _accept_assist_video_anchor(window, video):
+    assert window.open_video(video)
+    window.sam_output_mode = 'box'
+    window.workspace_pages.show_assist()
+    _show_assist_preview(window)
+    window.workflow.set_active_class('vehicle')
+    assert window.accept_assist_preview() is True
+    return next(
+        item for item in window.video_model.observations.values()
+        if item.source == 'manual' and item.review_state == 'accepted'
+        and item.anchor)
+
+
+def _assert_track_forward_offer_hidden(window):
+    button = window.workspace_pages.assist_panel.track_forward_button
+    assert button.isHidden()
+    assert not button.isEnabled()
+    assert window.track_assist_forward() is None
+    assert window._propagation_handle is None
+
+
+def test_undo_accepted_assist_anchor_immediately_hides_track_forward(
+        tmp_path, make_video):
+    """Catches undo leaving a visibly enabled stale propagation offer."""
+    app, window = get_main_app()
+    video = make_video(
+        tmp_path / 'assist-track-undo.mp4', frames=12,
+        width=128, height=96, tracking_stress=True)
+    try:
+        anchor = _accept_assist_video_anchor(window, video)
+        button = window.workspace_pages.assist_panel.track_forward_button
+        assert not button.isHidden()
+        assert button.isEnabled()
+
+        window.undo_action()
+        app.processEvents()
+
+        assert anchor.track_id not in window.video_model.tracks
+        _assert_track_forward_offer_hidden(window)
+    finally:
+        _close_window(app, window)
+
+
+def test_delete_accepted_assist_anchor_immediately_hides_track_forward(
+        tmp_path, make_video):
+    """Catches delete leaving a visibly enabled stale propagation offer."""
+    app, window = get_main_app()
+    video = make_video(
+        tmp_path / 'assist-track-delete.mp4', frames=12,
+        width=128, height=96, tracking_stress=True)
+    try:
+        anchor = _accept_assist_video_anchor(window, video)
+        button = window.workspace_pages.assist_panel.track_forward_button
+        assert not button.isHidden()
+        assert button.isEnabled()
+
+        with patch.object(
+                QMessageBox, 'question', return_value=QMessageBox.Yes):
+            window.delete_selected_track()
+        app.processEvents()
+
+        assert anchor.track_id not in window.video_model.tracks
+        _assert_track_forward_offer_hidden(window)
+    finally:
+        _close_window(app, window)
 
 
 def test_assist_video_accepts_one_manual_anchor_then_tracks_only_on_request(

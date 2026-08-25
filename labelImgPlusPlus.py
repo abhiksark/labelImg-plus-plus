@@ -2909,6 +2909,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def activate_select_tool(self):
         """Return to the neutral canvas selection/editing tool."""
+        self._dismiss_assist_class_picker()
         self.workflow.set_tool(AnnotationTool.SELECT)
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
@@ -2926,6 +2927,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._finish_tool_activation()
 
     def _leave_special_tool_modes(self):
+        self._dismiss_assist_class_picker()
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
@@ -5035,6 +5037,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_box_count()
         self._publish_plugin_document()
         self._mark_continuous_save_dirty(self._document_revision)
+        if (self._assist_track_forward_anchor is not None
+                and not self._assist_track_forward_available()):
+            self._assist_track_forward_anchor = None
+        self._project_assist()
 
     def _shape_geometry(self, shape):
         inverse = (1.0 / self._image_scale_factor
