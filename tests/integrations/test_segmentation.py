@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 
+from libs.core.assist_state import AssistPrompt
 from libs.integrations import model_cache, segmentation
 from libs.integrations.model_manifest import ModelArtifact, ModelManifest
 from libs.integrations.segmentation import SegmentationBackend, sam_available
@@ -48,7 +49,8 @@ def test_predict_before_set_image_raises_clear_error():
     backend = OnnxSamBackend.__new__(OnnxSamBackend)   # skip session loading
     backend._embeddings = None
     with pytest.raises(RuntimeError, match="set_image"):
-        backend.predict([(1, 2)], [1])
+        backend.predict(AssistPrompt(
+            mode='points', positive_points=((1.0, 2.0),)))
 
 
 def test_set_image_clamps_degenerate_aspect_ratio(monkeypatch):

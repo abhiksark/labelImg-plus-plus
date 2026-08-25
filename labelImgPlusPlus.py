@@ -89,7 +89,7 @@ from libs.core.view_transform import ViewMode, ViewTransform
 from libs.core.annotation_workflow import (
     AnnotationTool, AnnotationWorkflow, EscapeOutcome)
 from libs.core.assist_state import (
-    AssistFailureKind, AssistPhase, AssistState)
+    AssistFailureKind, AssistPhase, AssistPreview, AssistState)
 from libs.core.sam_controller import SamController
 from libs.core.sam_types import normalize_sam_output_mode
 from libs.core.annotation_catalog import AnnotationCatalog
@@ -330,6 +330,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.assist_state = AssistState()
         self._assist_download_handle = None
         self._assist_download_progress = None
+        self._assist_prompt = None
         self._initialize_assist_state()
         self.continuous_save = ContinuousSaveCoordinator(
             delay_ms=250, parent=self)
@@ -606,7 +607,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.class_picker.accepted.connect(self._commit_provisional_shape)
         self.class_picker.cancelled.connect(self._cancel_provisional_shape)
         self.sam_controller = SamController(self)
-        self.canvas.samClicked.connect(self._on_legacy_sam_click)
+        self.canvas.assistPrompted.connect(self._on_assist_prompt)
+        self.sam_controller.previewReady.connect(self._on_assist_preview)
+        self.sam_controller.previewFailed.connect(self._on_assist_preview_failed)
         self._sam_available = segmentation.sam_available()
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.polygonVerticesEdited.connect(
@@ -2620,9 +2623,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.sam_controller.segment_at(point)
 
     def activate_smart_box_tool(self):
+        self.canvas.set_assist_prompt_mode('box')
         self._activate_assist_prompt_tool(AnnotationTool.SMART_BOX)
 
     def activate_smart_points_tool(self):
+        self.canvas.set_assist_prompt_mode('points')
         self._activate_assist_prompt_tool(AnnotationTool.SMART_POINTS)
 
     def _activate_assist_prompt_tool(self, tool):
@@ -2643,9 +2648,97 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.editMode.setEnabled(True)
         self._finish_tool_activation()
 
+    def _on_assist_prompt(self, prompt):
+        """Replace the active inference without mutating annotation state."""
+        phase = self.assist_state.snapshot.phase
+        if phase not in (
+                AssistPhase.READY, AssistPhase.RUNNING, AssistPhase.PREVIEW):
+            self.activate_smart_select_tool()
+            return
+        if phase is not AssistPhase.READY:
+            self.assist_state.ready(self.assist_state.snapshot.model_id)
+        self.canvas.clear_assist_preview()
+        self._assist_prompt = prompt
+        self.assist_state.start_run(self._dataset_generation)
+        self._project_assist()
+        try:
+            self.sam_controller.run_prompt(prompt)
+        except Exception as exc:
+            self._on_assist_preview_failed(
+                self._dataset_generation, AssistFailureKind.INFERENCE,
+                str(exc))
+
+    def _on_assist_preview(self, generation, result):
+        """Project a current plain-data result into a paint-only Shape."""
+        if int(generation) != self._dataset_generation:
+            return
+        preview = AssistPreview(result=result, prompt=self._assist_prompt)
+        if not self.assist_state.show_preview(generation, preview):
+            return
+        shape = self._assist_result_shape(result)
+        if shape is None:
+            self.assist_state.fail(
+                AssistFailureKind.INFERENCE,
+                'Assist returned empty preview geometry.')
+            self.canvas.clear_assist_preview()
+        else:
+            self.canvas.set_assist_preview(shape)
+        self._project_assist()
+
+    def _assist_result_shape(self, result):
+        if self.sam_output_mode == 'box':
+            if result.bounds is None or len(result.bounds) != 4:
+                return None
+            left, top, right, bottom = result.bounds
+            if right <= left or bottom <= top:
+                return None
+            values = (
+                (left, top), (right, top),
+                (right, bottom), (left, bottom))
+            shape_type = ShapeType.RECTANGLE
+        else:
+            values = result.polygon
+            if values is None or len(values) < 3:
+                return None
+            shape_type = ShapeType.POLYGON
+        shape = Shape(shape_type=shape_type)
+        for x, y in values:
+            shape.add_point(QPointF(float(x), float(y)))
+        shape.close()
+        return shape
+
+    def _on_assist_preview_failed(self, generation, kind, message):
+        if int(generation) != self._dataset_generation:
+            return
+        self.canvas.clear_assist_preview()
+        if kind == 'setup_required':
+            self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+        else:
+            try:
+                failure_kind = AssistFailureKind(kind)
+            except (TypeError, ValueError):
+                failure_kind = AssistFailureKind.RUNTIME
+            self.assist_state.fail(failure_kind, message)
+        self._project_assist()
+
+    def _on_assist_document_changed(self):
+        """Discard prompt/preview projection when the document is replaced."""
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
+
+    def _reset_assist_preview_state(self):
+        if self.assist_state.snapshot.phase in (
+                AssistPhase.RUNNING, AssistPhase.PREVIEW):
+            self.assist_state.ready(self.assist_state.snapshot.model_id)
+            self._project_assist()
+
     def _close_assist(self):
         """Close provisional Assist work without cancelling model acquisition."""
         self.workspace_pages.hide_assist()
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
         if self.canvas.mode == self.canvas.CREATE_SAM:
             self.activate_select_tool()
         else:
@@ -2658,6 +2751,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
         self.sam_controller.set_enabled(False)
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
         editable = self._video_editable()
         self.actions.create.setEnabled(editable and bool(self.file_path))
         self.actions.create_polygon.setEnabled(
@@ -2671,6 +2767,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
         self.sam_controller.set_enabled(False)
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
 
     def _finish_tool_activation(self):
         self._sync_tool_actions()

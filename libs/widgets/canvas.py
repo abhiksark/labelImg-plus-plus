@@ -2,13 +2,13 @@
 """Canvas widget for drawing and editing bounding box annotations."""
 
 try:
-    from PyQt5.QtGui import (QColor, QPixmap, QPainter, QCursor, QBrush,
+    from PyQt5.QtGui import (QColor, QPixmap, QPainter, QBrush,
                              QPen, QPicture)
     from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
     from PyQt5.QtWidgets import QWidget, QMenu, QApplication
 except ImportError:
     from PyQt4.QtGui import (
-        QColor, QPixmap, QPainter, QCursor, QBrush, QPen, QPicture,
+        QColor, QPixmap, QPainter, QBrush, QPen, QPicture,
         QWidget, QMenu, QApplication
     )
     from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
@@ -16,6 +16,7 @@ except ImportError:
 import math
 from collections import defaultdict
 
+from libs.core.assist_state import AssistPrompt
 from libs.core.shape import Shape, ShapeType
 from libs.core.profiling import recorder as trace_recorder
 from libs.utils.dpi import scale_px
@@ -151,6 +152,7 @@ class Canvas(QWidget):
     # MoveShapeCommand. Polygon edits use polygonVerticesEdited instead.
     shapeMoveFinished = pyqtSignal(object, object)      # (shape, old_points)
     samClicked = pyqtSignal(QPointF)   # left-click in CREATE_SAM mode (image coords)
+    assistPrompted = pyqtSignal(object)  # immutable AssistPrompt
 
     CREATE, EDIT, CREATE_POLYGON, KEYPOINT_MODE, CREATE_SAM = list(range(5))
 
@@ -169,6 +171,15 @@ class Canvas(QWidget):
         # ``shapes`` so saves, inspectors, plugins, dirty state, and undo do
         # not observe it before the user commits a class.
         self.provisional_shape = None
+        # Assist inference output and prompt geometry are paint-only. They
+        # never enter shapes/provisional_shape or the annotation workflow.
+        self.assist_preview_shape = None
+        self._assist_prompt_mode = 'points'
+        self._assist_positive_points = []
+        self._assist_negative_points = []
+        self._assist_box_origin = None
+        self._assist_box_current = None
+        self.assist_box_bounds = None
         self._commit_highlight = None
         # Worker output staged for review while whole-video propagation runs.
         # These shapes are paint-only and never enter canonical collections.
@@ -341,10 +352,50 @@ class Canvas(QWidget):
         if value:
             self.un_highlight()
             self.de_select_shape()
+        else:
+            self.clear_assist_prompt()
         self.prev_point = QPointF()
         self.update()
         if changed:
             self.modeChanged.emit(self.mode)
+
+    def set_assist_prompt_mode(self, mode):
+        """Choose Smart Box or Smart Points and clear prior transient input."""
+        if mode not in ('box', 'points'):
+            raise ValueError('unsupported Assist prompt mode: %s' % mode)
+        self._assist_prompt_mode = mode
+        self.clear_assist_prompt()
+
+    def clear_assist_prompt(self):
+        """Clear paint-only prompt geometry and its provisional result."""
+        self._assist_positive_points = []
+        self._assist_negative_points = []
+        self._assist_box_origin = None
+        self._assist_box_current = None
+        self.assist_box_bounds = None
+        self.clear_assist_preview()
+
+    def set_assist_preview(self, shape):
+        """Publish a paint-only result without touching annotation state."""
+        if shape is not None:
+            shape.line_color = QColor(35, 185, 245, 230)
+            shape.fill = False
+        self.assist_preview_shape = shape
+        self.update()
+
+    def clear_assist_preview(self):
+        """Remove and return the paint-only inference result."""
+        shape = self.assist_preview_shape
+        self.assist_preview_shape = None
+        self.update()
+        return shape
+
+    def _emit_points_prompt(self):
+        self.clear_assist_preview()
+        self.assistPrompted.emit(AssistPrompt(
+            mode='points',
+            positive_points=tuple(self._assist_positive_points),
+            negative_points=tuple(self._assist_negative_points)))
 
     def commit_polygon(self, points):
         """Build a polygon Shape from image-space (x, y) points and finalise it.
@@ -550,6 +601,17 @@ class Canvas(QWidget):
         if self._locked:
             return
         pos = self.transform_pos(ev.pos())
+
+        if (self.mode == self.CREATE_SAM
+                and self._assist_prompt_mode == 'box'
+                and self._assist_box_origin is not None):
+            if Qt.LeftButton & ev.buttons():
+                size = self.pixmap.size()
+                self._assist_box_current = QPointF(
+                    min(max(0.0, pos.x()), float(size.width())),
+                    min(max(0.0, pos.y()), float(size.height())))
+                self.update()
+            return
 
         # Update coordinates in status bar if image is opened
         window = self.parent().window() if self.parent() else self.window()
@@ -841,7 +903,33 @@ class Canvas(QWidget):
                 return
             return
 
-        if ev.button() == Qt.LeftButton and self._locked:
+        if ev.button() in (Qt.LeftButton, Qt.RightButton) and self._locked:
+            return
+
+        if self.mode == self.CREATE_SAM:
+            if self.out_of_pixmap(pos):
+                return
+            if self._assist_prompt_mode == 'box':
+                if ev.button() == Qt.LeftButton:
+                    self.clear_assist_preview()
+                    self.assist_box_bounds = None
+                    self._assist_box_origin = QPointF(pos)
+                    self._assist_box_current = QPointF(pos)
+                    self.update()
+                return
+            if ev.button() in (Qt.LeftButton, Qt.RightButton):
+                point = (float(pos.x()), float(pos.y()))
+                negative = (ev.button() == Qt.RightButton
+                            or bool(ev.modifiers() & Qt.AltModifier))
+                if negative:
+                    self._assist_negative_points.append(point)
+                else:
+                    self._assist_positive_points.append(point)
+                    # Compatibility signal for integrations that still observe
+                    # legacy single-point Smart Select input.
+                    self.samClicked.emit(pos)
+                self._emit_points_prompt()
+                self.update()
             return
 
         if ev.button() == Qt.LeftButton:
@@ -851,10 +939,6 @@ class Canvas(QWidget):
                 # not grab the mouse, so clicking here moves focus off it and
                 # then neither typing nor clicking appears to do anything.
                 self.provisionalClickBlocked.emit()
-                return
-            if self.mode == self.CREATE_SAM:
-                if not self.out_of_pixmap(pos):
-                    self.samClicked.emit(pos)
                 return
             if self.drawing():
                 if self.mode == self.CREATE_POLYGON and ev.modifiers() & Qt.ShiftModifier:
@@ -913,6 +997,32 @@ class Canvas(QWidget):
     def mouseReleaseEvent(self, ev):
         if ev.button() == Qt.MiddleButton:
             self._end_pan()
+            return
+
+        if (self.mode == self.CREATE_SAM
+                and self._assist_prompt_mode == 'box'
+                and ev.button() == Qt.LeftButton
+                and self._assist_box_origin is not None):
+            end = self.transform_pos(ev.pos())
+            size = self.pixmap.size()
+            end = QPointF(
+                min(max(0.0, end.x()), float(size.width())),
+                min(max(0.0, end.y()), float(size.height())))
+            start = self._assist_box_origin
+            self._assist_box_origin = None
+            self._assist_box_current = None
+            left, right = sorted((float(start.x()), float(end.x())))
+            top, bottom = sorted((float(start.y()), float(end.y())))
+            if right > left and bottom > top:
+                self.assist_box_bounds = (left, top, right, bottom)
+                self.assistPrompted.emit(AssistPrompt(
+                    mode='box', box=self.assist_box_bounds))
+            self.update()
+            return
+
+        if (self.mode == self.CREATE_SAM
+                and self._assist_prompt_mode == 'points'
+                and ev.button() == Qt.RightButton):
             return
 
         if self._freehand_active and ev.button() == Qt.LeftButton:
@@ -1491,6 +1601,15 @@ class Canvas(QWidget):
                     self._draw_keypoints(p, shape)
             p.restore()
 
+        if self.assist_preview_shape is not None:
+            p.save()
+            p.setOpacity(.68)
+            self.assist_preview_shape.fill = False
+            self.assist_preview_shape.paint(p)
+            p.restore()
+
+        self._paint_assist_prompt(p)
+
         if self.current:
             self.current.paint(p)
             self.line.paint(p)
@@ -1579,6 +1698,51 @@ class Canvas(QWidget):
             trace_recorder.complete(
                 'canvas.paint', trace_started,
                 args={'shapes': len(self.shapes)})
+
+    def _paint_assist_prompt(self, painter):
+        """Paint semantic point marks or a dashed box above annotations."""
+        if self.mode != self.CREATE_SAM:
+            return
+        painter.save()
+        width = max(1, int(round(2.0 / max(self.scale, 1e-6))))
+        radius = max(3.0, 6.0 / max(self.scale, 1e-6))
+        if (self._assist_prompt_mode == 'box'
+                and self._assist_box_origin is not None
+                and self._assist_box_current is not None):
+            painter.setPen(QPen(QColor(255, 190, 40), width, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(
+                self._assist_box_origin, self._assist_box_current).normalized())
+        elif (self._assist_prompt_mode == 'box'
+              and self.assist_box_bounds is not None):
+            left, top, right, bottom = self.assist_box_bounds
+            painter.setPen(QPen(QColor(255, 190, 40), width, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(
+                QPointF(left, top), QPointF(right, bottom)))
+        for point in self._assist_positive_points:
+            center = QPointF(*point)
+            painter.setPen(QPen(QColor(35, 220, 120), width))
+            painter.setBrush(QColor(35, 220, 120, 80))
+            painter.drawEllipse(center, radius, radius)
+            painter.drawLine(
+                QPointF(center.x() - radius, center.y()),
+                QPointF(center.x() + radius, center.y()))
+            painter.drawLine(
+                QPointF(center.x(), center.y() - radius),
+                QPointF(center.x(), center.y() + radius))
+        for point in self._assist_negative_points:
+            center = QPointF(*point)
+            painter.setPen(QPen(QColor(245, 70, 110), width))
+            painter.setBrush(QColor(245, 70, 110, 70))
+            painter.drawEllipse(center, radius, radius)
+            painter.drawLine(
+                QPointF(center.x() - radius, center.y() - radius),
+                QPointF(center.x() + radius, center.y() + radius))
+            painter.drawLine(
+                QPointF(center.x() - radius, center.y() + radius),
+                QPointF(center.x() + radius, center.y() - radius))
+        painter.restore()
 
     def transform_pos(self, point):
         """Convert from widget-logical coordinates to painter-logical coordinates."""
@@ -1836,6 +2000,7 @@ class Canvas(QWidget):
         self.pixmap = pixmap
         self.shapes = []
         self.provisional_shape = None
+        self.clear_assist_prompt()
         self.propagation_preview_shapes = []
         # An async image commit can land mid-gesture; without this the flag
         # would survive pointing at a self.current that was just cleared.
@@ -1851,6 +2016,7 @@ class Canvas(QWidget):
         self.cancel_edit_drag_draw()
         self.current = None
         self.provisional_shape = None
+        self.clear_assist_prompt()
         self.update()
 
     def set_propagation_preview_shapes(self, shapes):
@@ -1903,6 +2069,12 @@ class Canvas(QWidget):
         self._suppress_context_menu = False
         self.current = None
         self.provisional_shape = None
+        self.assist_preview_shape = None
+        self._assist_positive_points = []
+        self._assist_negative_points = []
+        self._assist_box_origin = None
+        self._assist_box_current = None
+        self.assist_box_bounds = None
         self._commit_highlight = None
         self.propagation_preview_shapes = []
         changed = self.mode != self.EDIT
