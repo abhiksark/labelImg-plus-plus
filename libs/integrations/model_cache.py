@@ -14,12 +14,19 @@ from dataclasses import dataclass
 from libs.integrations.model_manifest import MOBILE_SAM_MANIFEST
 from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
-_CHUNK = 1 << 20
+_HASH_CHUNK = 1 << 20
+_DOWNLOAD_CHUNK = 64 * 1024
 DEFAULT_DOWNLOAD_TIMEOUT = 2.0
 
 
 @dataclass(frozen=True)
 class ModelDownloadProgress:
+    """Current artifact bytes and manifest-complete bytes.
+
+    ``downloaded`` counts network bytes received for ``artifact``.  Reused
+    validated final artifacts contribute to ``total_downloaded`` so callers
+    can truthfully render overall manifest completion on explicit retry.
+    """
     artifact: str
     downloaded: int
     artifact_size: int
@@ -58,7 +65,7 @@ def _cache_dir():
 def _sha256(path):
     digest = hashlib.sha256()
     with open(path, 'rb') as handle:
-        for chunk in iter(lambda: handle.read(_CHUNK), b''):
+        for chunk in iter(lambda: handle.read(_HASH_CHUNK), b''):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -96,14 +103,27 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None,
     """Download, validate, and atomically promote every manifest artifact.
 
     ``timeout`` bounds urllib's connection and response socket operations.
-    There is deliberately no retry loop: callers decide whether to try again.
+    Existing final artifacts are reused only after manifest validation. There
+    is deliberately no retry loop: callers decide whether to try again.
     """
     os.makedirs(cache_dir, exist_ok=True)
     outputs = []
-    total_downloaded = 0
+    targets = []
     for artifact in manifest.artifacts:
         destination = os.path.join(cache_dir, artifact.name)
         temporary = destination + '.part'
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        reusable = _valid_cached(destination, artifact)
+        targets.append((artifact, destination, temporary, reusable))
+
+    total_downloaded = sum(
+        artifact.size for artifact, _destination, _temporary, reusable
+        in targets if reusable)
+    for artifact, destination, temporary, reusable in targets:
+        if reusable:
+            outputs.append(destination)
+            continue
         try:
             with urllib.request.urlopen(
                     artifact.url, timeout=timeout) as response, \
@@ -121,7 +141,7 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None,
                 while True:
                     if cancelled and cancelled():
                         raise ModelDownloadCancelled()
-                    chunk = response.read(_CHUNK)
+                    chunk = response.read(_DOWNLOAD_CHUNK)
                     if not chunk:
                         break
                     output.write(chunk)

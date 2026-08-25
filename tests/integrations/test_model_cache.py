@@ -42,6 +42,20 @@ def fake_manifest():
             len(payload), hashlib.sha256(payload).hexdigest()),))
 
 
+@pytest.fixture
+def pair_manifest():
+    first = b'one!'
+    second = b'two!'
+    return ModelManifest(
+        'pair', 'Pair model', 'Test segmentation', 'Test provider',
+        (ModelArtifact(
+            'first.onnx', 'https://provider.invalid/first.onnx',
+            len(first), hashlib.sha256(first).hexdigest()),
+         ModelArtifact(
+            'second.onnx', 'https://provider.invalid/second.onnx',
+            len(second), hashlib.sha256(second).hexdigest())))
+
+
 def test_cancel_removes_part_and_never_retries(tmp_path, fake_manifest,
                                                 monkeypatch):
     """Catches a downloader that retries cancellation or leaves partial files."""
@@ -213,6 +227,81 @@ def test_builtin_timeout_after_cancel_is_cancelled(
             cancelled=lambda: state['cancelled'], timeout=.01)
     assert not list(tmp_path.glob('*.part'))
     assert not list(tmp_path.glob('*.onnx'))
+
+
+def test_slow_stream_uses_cancellation_responsive_read_size(
+        tmp_path, fake_manifest, monkeypatch):
+    """Catches a 1 MiB read exceeding the two-second socket timeout."""
+    requested_sizes = []
+
+    class SlowResponse(ChunkedResponse):
+        headers = {'Content-Length': '8'}
+
+        def __init__(self):
+            super().__init__([b'aaaa', b'bbbb'])
+
+        def read(self, size):
+            requested_sizes.append(size)
+            if size > 64 * 1024:
+                raise socket.timeout('slow stream timed out')
+            return super().read(size)
+
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen',
+                        lambda request, timeout=None: SlowResponse())
+    paths = model_cache.download_manifest(fake_manifest, str(tmp_path))
+    assert paths == (str(tmp_path / 'fake.onnx'),)
+    assert (tmp_path / 'fake.onnx').read_bytes() == b'aaaabbbb'
+    assert requested_sizes and max(requested_sizes) <= 64 * 1024
+
+
+def test_retry_reuses_valid_first_artifact_and_downloads_missing_second(
+        tmp_path, pair_manifest, monkeypatch):
+    """Catches retrying a valid final artifact instead of only the missing one."""
+    first, second = pair_manifest.artifacts
+    (tmp_path / first.name).write_bytes(b'one!')
+    calls = []
+    progress = []
+
+    def provider(request, timeout=None):
+        calls.append(request)
+        return Response(b'two!')
+
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen', provider)
+    paths = model_cache.download_manifest(
+        pair_manifest, str(tmp_path), progress=progress.append)
+    assert calls == [second.url]
+    assert paths == (str(tmp_path / first.name), str(tmp_path / second.name))
+    assert (tmp_path / first.name).read_bytes() == b'one!'
+    assert (tmp_path / second.name).read_bytes() == b'two!'
+    assert progress == [model_cache.ModelDownloadProgress(
+        second.name, 4, 4, 8, 8)]
+    assert not list(tmp_path.glob('*.part'))
+
+
+def test_retry_redownloads_tampered_artifact_without_reusing_part(
+        tmp_path, pair_manifest, monkeypatch):
+    """Catches trusting an invalid final file or stale partial download on retry."""
+    first, second = pair_manifest.artifacts
+    (tmp_path / first.name).write_bytes(b'bad!')
+    (tmp_path / (first.name + '.part')).write_bytes(b'stale')
+    (tmp_path / second.name).write_bytes(b'two!')
+    calls = []
+    progress = []
+
+    def provider(request, timeout=None):
+        calls.append(request)
+        return Response(b'one!')
+
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen', provider)
+    paths = model_cache.download_manifest(
+        pair_manifest, str(tmp_path), progress=progress.append)
+    assert calls == [first.url]
+    assert paths == (str(tmp_path / first.name), str(tmp_path / second.name))
+    assert (tmp_path / first.name).read_bytes() == b'one!'
+    assert (tmp_path / second.name).read_bytes() == b'two!'
+    assert progress == [model_cache.ModelDownloadProgress(
+        first.name, 4, 4, 8, 8)]
+    assert not list(tmp_path.glob('*.part'))
 
 
 def test_download_promotes_verified_file_and_reports_progress(
