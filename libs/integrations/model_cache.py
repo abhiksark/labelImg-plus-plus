@@ -6,6 +6,7 @@ the only acquisition path through :func:`download_manifest`.
 
 import hashlib
 import os
+import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from libs.integrations.model_manifest import MOBILE_SAM_MANIFEST
 from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
 _CHUNK = 1 << 20
+DEFAULT_DOWNLOAD_TIMEOUT = 2.0
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,12 @@ def _valid_cached(path, artifact):
             and _sha256(path) == artifact.sha256)
 
 
+def _raise_network_error(error, cancelled):
+    if cancelled and cancelled():
+        raise ModelDownloadCancelled()
+    raise ModelOfflineError(str(error))
+
+
 def default_model_paths():
     """Return the conventional MobileSAM cache locations."""
     cache = _cache_dir()
@@ -83,9 +91,11 @@ def cached_model_paths(manifest=MOBILE_SAM_MANIFEST, cache_dir=None):
     return None
 
 
-def download_manifest(manifest, cache_dir, cancelled=None, progress=None):
+def download_manifest(manifest, cache_dir, cancelled=None, progress=None,
+                      timeout=DEFAULT_DOWNLOAD_TIMEOUT):
     """Download, validate, and atomically promote every manifest artifact.
 
+    ``timeout`` bounds urllib's connection and response socket operations.
     There is deliberately no retry loop: callers decide whether to try again.
     """
     os.makedirs(cache_dir, exist_ok=True)
@@ -95,7 +105,8 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None):
         destination = os.path.join(cache_dir, artifact.name)
         temporary = destination + '.part'
         try:
-            with urllib.request.urlopen(artifact.url) as response, \
+            with urllib.request.urlopen(
+                    artifact.url, timeout=timeout) as response, \
                     open(temporary, 'wb') as output:
                 try:
                     header_size = int(response.headers.get('Content-Length') or 0)
@@ -134,9 +145,13 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None):
             os.replace(temporary, destination)
             outputs.append(destination)
         except urllib.error.HTTPError as exc:
+            if cancelled and cancelled():
+                raise ModelDownloadCancelled()
             raise ModelProviderError(str(exc))
+        except socket.timeout as exc:
+            _raise_network_error(exc, cancelled)
         except urllib.error.URLError as exc:
-            raise ModelOfflineError(str(exc))
+            _raise_network_error(exc, cancelled)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
