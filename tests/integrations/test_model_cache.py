@@ -304,6 +304,31 @@ def test_retry_redownloads_tampered_artifact_without_reusing_part(
     assert not list(tmp_path.glob('*.part'))
 
 
+def test_overlong_headerless_retry_never_reports_past_manifest_total(
+        tmp_path, pair_manifest, monkeypatch):
+    """Catches reporting an overlong body before rejecting its byte count."""
+    first, second = pair_manifest.artifacts
+    (tmp_path / first.name).write_bytes(b'one!')
+    progress = []
+
+    class HeaderlessResponse(ChunkedResponse):
+        headers = {}
+
+        def __init__(self):
+            super().__init__([b'two!', b'over'])
+
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen',
+                        lambda request, timeout=None: HeaderlessResponse())
+    with pytest.raises(model_cache.ModelValidationError, match='size'):
+        model_cache.download_manifest(
+            pair_manifest, str(tmp_path), progress=progress.append)
+    assert progress == [model_cache.ModelDownloadProgress(
+        second.name, 4, 4, 8, 8)]
+    assert all(event.total_downloaded <= event.total_size for event in progress)
+    assert not (tmp_path / second.name).exists()
+    assert not list(tmp_path.glob('*.part'))
+
+
 def test_download_promotes_verified_file_and_reports_progress(
         tmp_path, fake_manifest, monkeypatch):
     """Catches non-atomic promotion or reporting bytes unrelated to written data."""

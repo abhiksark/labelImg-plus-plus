@@ -147,6 +147,9 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None,
                     output.write(chunk)
                     digest.update(chunk)
                     artifact_bytes += len(chunk)
+                    if artifact_bytes > artifact.size:
+                        raise ModelValidationError(
+                            'download size does not match manifest')
                     total_downloaded += len(chunk)
                     if progress:
                         progress(ModelDownloadProgress(
