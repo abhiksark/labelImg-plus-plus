@@ -16,6 +16,7 @@ except ImportError:
     )
 
 from libs.utils.dpi import scale_px
+from libs.widgets.assistPanel import AssistPanel
 from libs.widgets.videoSetupCard import VideoSetupCard
 
 
@@ -218,6 +219,11 @@ class WorkspacePages(QWidget):
         self.video_setup_overlay.hide()
         self.stack.installEventFilter(self)
 
+        # Assist is contextual workspace chrome. It floats over the canvas at
+        # the trailing edge and never consumes permanent command-bar space.
+        self.assist_panel = AssistPanel(self.stack)
+        self.assist_panel.hide()
+
         self.status_strip = QWidget(self)
         self.status_strip.setObjectName('workspaceStatusStrip')
         self.status_strip.setFixedHeight(scale_px(24))
@@ -253,7 +259,7 @@ class WorkspacePages(QWidget):
 
     def show_video_setup(self, status):
         self.video_setup_card.set_status(status)
-        self.video_setup_overlay.setGeometry(self.stack.rect())
+        self._layout_overlays()
         self.video_setup_overlay.show()
         self.video_setup_overlay.raise_()
         self.video_setup_card.install_command.setFocus(
@@ -262,10 +268,26 @@ class WorkspacePages(QWidget):
     def hide_video_setup(self):
         self.video_setup_overlay.hide()
 
+    def show_assist(self):
+        self._layout_overlays()
+        self.assist_panel.show()
+        self.assist_panel.raise_()
+        self.assist_panel.state_label.setFocus(Qt.OtherFocusReason)
+
+    def hide_assist(self):
+        self.assist_panel.hide()
+
+    def _layout_overlays(self):
+        self.video_setup_overlay.setGeometry(self.stack.rect())
+        width = min(scale_px(380), max(scale_px(300), self.stack.width()))
+        self.assist_panel.setGeometry(
+            max(0, self.stack.width() - width), 0,
+            width, self.stack.height())
+
     def eventFilter(self, watched, event):
         if watched is self.stack and event.type() in (
                 QEvent.Resize, QEvent.Show):
-            self.video_setup_overlay.setGeometry(self.stack.rect())
+            self._layout_overlays()
         return super(WorkspacePages, self).eventFilter(watched, event)
 
     def set_status_message(self, text):

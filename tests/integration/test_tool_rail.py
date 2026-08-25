@@ -61,8 +61,10 @@ def test_neutral_entry_points_sync_exclusive_state_and_canvas_focus(
         assert window.actions.create_polygon.isChecked()
 
         window.activate_smart_select_tool()
-        assert window.canvas.mode == window.canvas.CREATE_SAM
-        assert window.actions.sam_mode.isChecked()
+        assert window.workspace_pages.assist_panel.isVisible()
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+        assert window.actions.create_polygon.isChecked()
+        assert not window.actions.sam_mode.isChecked()
 
         window.activate_select_tool()
         QApplication.processEvents()

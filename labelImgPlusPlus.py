@@ -88,6 +88,8 @@ from libs.core.workspace_settings import (
 from libs.core.view_transform import ViewMode, ViewTransform
 from libs.core.annotation_workflow import (
     AnnotationTool, AnnotationWorkflow, EscapeOutcome)
+from libs.core.assist_state import (
+    AssistFailureKind, AssistPhase, AssistState)
 from libs.core.sam_controller import SamController
 from libs.core.sam_types import normalize_sam_output_mode
 from libs.core.annotation_catalog import AnnotationCatalog
@@ -131,7 +133,8 @@ from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.widgets.pluginManagerDialog import (
     PluginManagerDialog, QtPluginCommandHost,
 )
-from libs.integrations import segmentation
+from libs.integrations import model_cache, segmentation
+from libs.integrations.model_manifest import MOBILE_SAM_MANIFEST
 from labelimgplusplus.plugins import DocumentDescriptor
 
 # Formats
@@ -324,6 +327,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self._path_to_idx = {}  # O(1) lookup: path -> index
         self._annotation_status_cache = {}  # Cache: path -> status (reduces I/O)
         self.task_coordinator = TaskCoordinator(parent=self)
+        self.assist_state = AssistState()
+        self._assist_download_handle = None
+        self._assist_download_progress = None
+        self._initialize_assist_state()
         self.continuous_save = ContinuousSaveCoordinator(
             delay_ms=250, parent=self)
         self.continuous_save.saveRequested.connect(
@@ -599,7 +606,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.class_picker.accepted.connect(self._commit_provisional_shape)
         self.class_picker.cancelled.connect(self._cancel_provisional_shape)
         self.sam_controller = SamController(self)
-        self.canvas.samClicked.connect(self.sam_controller.segment_at)
+        self.canvas.samClicked.connect(self._on_legacy_sam_click)
         self._sam_available = segmentation.sam_available()
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.polygonVerticesEdited.connect(
@@ -787,12 +794,11 @@ class MainWindow(QMainWindow, WindowMixin):
             'Export accepted tracked frames to the selected image format',
             enabled=False)
         sam_mode_action = action(
-            'SAM Segment',
+            'Smart Select',
             self.toggle_sam_mode,
             self.shortcut_config.get('sam_mode'),
             'tool-smart-select',
-            'Click an object to auto-generate the selected geometry '
-            '(requires: pip install labelimgplusplus[sam])',
+            'Open Smart Box and Smart Points setup and tools',
             enabled=False)
         sam_settings_action = action(
             'SAM Settings…', self.open_sam_settings, None, 'edit',
@@ -1270,6 +1276,19 @@ class MainWindow(QMainWindow, WindowMixin):
             self._choose_another_video_after_setup)
         self.workspace_pages.video_setup_card.dismissRequested.connect(
             self._dismiss_video_runtime_setup)
+        self.workspace_pages.assist_panel.downloadRequested.connect(
+            self._download_assist_model)
+        self.workspace_pages.assist_panel.cancelRequested.connect(
+            self.cancel_assist_download)
+        self.workspace_pages.assist_panel.retryRequested.connect(
+            self._download_assist_model)
+        self.workspace_pages.assist_panel.smartBoxRequested.connect(
+            self.activate_smart_box_tool)
+        self.workspace_pages.assist_panel.smartPointsRequested.connect(
+            self.activate_smart_points_tool)
+        self.workspace_pages.assist_panel.closeRequested.connect(
+            self._close_assist)
+        self._project_assist()
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
             video_cancel_propagation, video_accept_run, video_reject_run)
@@ -1895,7 +1914,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.copyAllToClipboard.setEnabled(True)
         if hasattr(self, 'actions') and hasattr(self.actions, 'sam_mode'):
             self.actions.sam_mode.setEnabled(
-                bool(value) and getattr(self, '_sam_available', False))
+                bool(value) and bool(self.file_path)
+                and self._video_editable()
+                and not bool(getattr(self.canvas, 'locked', False)))
 
     def queue_event(self, function):
         QTimer.singleShot(0, function)
@@ -2376,36 +2397,230 @@ class MainWindow(QMainWindow, WindowMixin):
         self.keypoint_panel.show()
         self._finish_tool_activation()
 
+    def _initialize_assist_state(self):
+        """Project validated local model availability without network work."""
+        try:
+            model_cache.resolve_models(
+                self.settings, manifest=MOBILE_SAM_MANIFEST)
+        except model_cache.ModelSetupRequiredError:
+            self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+        except ValueError as exc:
+            self.assist_state.fail(AssistFailureKind.VALIDATION, str(exc))
+        else:
+            self.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+
+    def _project_assist(self, progress=None):
+        panel = getattr(
+            getattr(self, 'workspace_pages', None), 'assist_panel', None)
+        if panel is None:
+            return
+        snapshot = self.assist_state.snapshot
+        if progress is not None:
+            snapshot = replace(snapshot, message=progress)
+        panel.set_snapshot(snapshot, MOBILE_SAM_MANIFEST)
+
+    @staticmethod
+    def _assist_failure_kind(error):
+        if isinstance(error, model_cache.ModelOfflineError):
+            return AssistFailureKind.OFFLINE
+        if isinstance(error, model_cache.ModelProviderError):
+            return AssistFailureKind.PROVIDER
+        if isinstance(error, model_cache.ModelValidationError):
+            return AssistFailureKind.VALIDATION
+        return AssistFailureKind.RUNTIME
+
+    def _assist_cache_dir(self):
+        paths = model_cache.default_model_paths()
+        return os.path.dirname(paths[0])
+
+    def _assist_part_files(self):
+        cache_dir = self._assist_cache_dir()
+        return tuple(
+            os.path.join(cache_dir, artifact.name + '.part')
+            for artifact in MOBILE_SAM_MANIFEST.artifacts
+            if os.path.exists(os.path.join(
+                cache_dir, artifact.name + '.part')))
+
+    def _download_assist_model(self):
+        """Submit one explicit model download to the serial SAM worker lane."""
+        active = self._assist_download_handle
+        if (active is not None
+                and self.task_coordinator.has_active_handle(active)):
+            return
+        if self.assist_state.snapshot.phase is AssistPhase.READY:
+            return
+        if self.assist_state.snapshot.phase in (
+                AssistPhase.SETUP_REQUIRED, AssistPhase.FAILED):
+            self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+        if self.assist_state.snapshot.phase is not \
+                AssistPhase.READY_TO_DOWNLOAD:
+            return
+
+        self.assist_state.start_download()
+        self._assist_download_progress = None
+        self._project_assist()
+
+        def acquire(job):
+            try:
+                paths = model_cache.download_manifest(
+                    MOBILE_SAM_MANIFEST, self._assist_cache_dir(),
+                    cancelled=job.is_cancelled,
+                    progress=job.report_progress)
+                return 'ready', paths, ''
+            except model_cache.ModelDownloadCancelled:
+                return 'cancelled', None, ''
+            except Exception as exc:
+                return 'failed', self._assist_failure_kind(exc), str(exc)
+
+        handle = self.task_coordinator.submit(
+            'sam', acquire, priority=JobPriority.IMAGE_LOAD,
+            key='assist-model-download', latest=False,
+            generation=self.task_coordinator.generation)
+        self._assist_download_handle = handle
+        handle.progress.connect(
+            lambda value, current=handle:
+            self._on_assist_download_progress(current, value))
+        handle.result.connect(
+            lambda value, current=handle:
+            self._on_assist_download_result(current, value))
+        handle.error.connect(
+            lambda message, current=handle:
+            self._on_assist_download_error(current, message))
+        handle.finished.connect(
+            lambda current=handle:
+            self._on_assist_download_finished(current))
+
+    def _on_assist_download_progress(self, handle, progress):
+        if (self._assist_download_handle is not handle
+                or self.assist_state.snapshot.phase is not
+                AssistPhase.DOWNLOADING):
+            return
+        self._assist_download_progress = progress
+        self._project_assist(progress)
+
+    def _on_assist_download_result(self, handle, outcome):
+        if self._assist_download_handle is not handle:
+            return
+        status, value, message = outcome
+        if status == 'ready':
+            self.sam_controller.reset_backend()
+            self.assist_state.download_ready()
+            self._assist_download_progress = None
+            self._project_assist()
+        elif status == 'failed':
+            self.assist_state.fail(value, message)
+            self._assist_download_progress = None
+            self._project_assist()
+
+    def _on_assist_download_error(self, handle, message):
+        if self._assist_download_handle is not handle:
+            return
+        self.assist_state.fail(AssistFailureKind.RUNTIME, message)
+        self._assist_download_progress = None
+        self._project_assist()
+
+    def _on_assist_download_finished(self, handle):
+        if self._assist_download_handle is not handle:
+            return
+        was_cancelled = handle.is_cancelled()
+        self._assist_download_handle = None
+        self._assist_download_progress = None
+        if (was_cancelled and self.assist_state.snapshot.phase is
+                AssistPhase.DOWNLOADING):
+            cached = model_cache.cached_model_paths(MOBILE_SAM_MANIFEST)
+            partials = self._assist_part_files()
+            if cached is not None:
+                self.sam_controller.reset_backend()
+                self.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+            elif partials:
+                self.assist_state.fail(
+                    AssistFailureKind.VALIDATION,
+                    'Cancellation cleanup left an incomplete model artifact.')
+            else:
+                self.assist_state.ready_to_download(
+                    MOBILE_SAM_MANIFEST.model_id)
+            self._project_assist()
+
+    def cancel_assist_download(self):
+        """Request cancellation without claiming cleanup has finished."""
+        handle = self._assist_download_handle
+        if handle is None or self.assist_state.snapshot.phase is not \
+                AssistPhase.DOWNLOADING:
+            return
+        handle.cancel()
+        self._project_assist('Cancelling…')
+
     def toggle_sam_mode(self):
-        """Enter/leave single-click SAM segmentation mode."""
-        if self.canvas.mode == self.canvas.CREATE_SAM:
-            self.activate_select_tool()
+        """Open the contextual Assist surface from the annotation rail."""
+        if not self.workspace_pages.assist_panel.isHidden():
+            self._close_assist()
             return
         self.activate_smart_select_tool()
 
     def activate_smart_select_tool(self):
-        """Activate Smart Select while keeping optional imports lazy."""
+        """Open Assist even when its optional runtime or model is missing."""
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
             self._sync_tool_actions()
             return
-        if not segmentation.sam_available():
-            QMessageBox.warning(
-                self, "SAM unavailable",
-                "Install with: pip install labelimgplusplus[sam]")
+        # Legacy direct callers may invoke this method with no document; keep
+        # their canvas-mode projection stable. In the real editable flow the
+        # drawer does not guess between Smart Box and Smart Points.
+        if not self.file_path:
+            if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+                self.canvas.exit_keypoint_mode()
+                self.keypoint_panel.hide()
+            self.workflow.set_tool(AnnotationTool.SMART_POINTS)
+            self.canvas.set_sam_mode(True)
+            self.sam_controller.set_enabled(
+                self.assist_state.snapshot.phase is AssistPhase.READY)
+            self.actions.create.setEnabled(True)
+            self.actions.create_polygon.setEnabled(True)
+            self.actions.editMode.setEnabled(True)
+            self._finish_tool_activation()
+        else:
             self._sync_tool_actions()
+        self._project_assist(self._assist_download_progress)
+        self.workspace_pages.show_assist()
+
+    def _on_legacy_sam_click(self, point):
+        """Keep canvas clicks inert until explicit model setup is complete."""
+        if self.assist_state.snapshot.phase is not AssistPhase.READY:
+            self.activate_smart_select_tool()
+            return
+        self.sam_controller.segment_at(point)
+
+    def activate_smart_box_tool(self):
+        self._activate_assist_prompt_tool(AnnotationTool.SMART_BOX)
+
+    def activate_smart_points_tool(self):
+        self._activate_assist_prompt_tool(AnnotationTool.SMART_POINTS)
+
+    def _activate_assist_prompt_tool(self, tool):
+        if self.assist_state.snapshot.phase is not AssistPhase.READY:
+            self.activate_smart_select_tool()
+            return
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
             return
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
+        self.workflow.set_tool(tool)
         self.canvas.set_sam_mode(True)
         self.sam_controller.set_enabled(True)
-        # set_sam_mode does not emit drawingPolygon, so re-enable the mode-switch
-        # actions here (mirroring create_polygon_mode) so the user can leave SAM.
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(True)
         self.actions.editMode.setEnabled(True)
         self._finish_tool_activation()
+
+    def _close_assist(self):
+        """Close provisional Assist work without cancelling model acquisition."""
+        self.workspace_pages.hide_assist()
+        if self.canvas.mode == self.canvas.CREATE_SAM:
+            self.activate_select_tool()
+        else:
+            self._restore_canvas_focus()
 
     def activate_select_tool(self):
         """Return to the neutral canvas selection/editing tool."""
@@ -2440,6 +2655,9 @@ class MainWindow(QMainWindow, WindowMixin):
             AnnotationTool.RECTANGLE: lambda: self.canvas.set_editing(False),
             AnnotationTool.POLYGON:
             lambda: self.canvas.set_polygon_drawing(True),
+            AnnotationTool.SMART_BOX: lambda: self.canvas.set_sam_mode(True),
+            AnnotationTool.SMART_POINTS:
+            lambda: self.canvas.set_sam_mode(True),
         }
         projection.get(state.active_tool, projection[AnnotationTool.SELECT])()
         self.active_class_control.set_active_class(state.active_class)
@@ -2559,6 +2777,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.sam_mode: 'Smart Select',
             self.actions.keypoint_mode: 'Keypoints',
         }
+        if active is self.actions.sam_mode:
+            names[active] = (
+                'Smart Box' if self.workflow.snapshot.active_tool is
+                AnnotationTool.SMART_BOX else 'Smart Points')
         self.label_active_tool.setText(
             '%s%s' % (names.get(active, active.text().replace('&', '')),
                       ' (%s)' % shortcut if shortcut else ''))

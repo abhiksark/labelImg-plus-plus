@@ -6,10 +6,10 @@ canvas on the main thread. Top-level imports are Qt + stdlib only; numpy and the
 libs.integrations heavy modules are imported lazily inside methods so MainWindow
 can import this controller unconditionally.
 
-The first segmentation also loads the model (download + session build) inside
-the worker,
-so the UI never blocks: a click on an unloaded backend shows "Loading SAM…" and
-the model is built off the main thread.
+After explicit Assist setup, the first segmentation loads the cached model and
+builds its session inside the worker, so the UI never blocks: a click on an
+unloaded backend shows "Loading SAM…" and the model is built off the main
+thread. Model acquisition is owned by the Assist download action.
 """
 
 from PyQt5.QtCore import QObject, QPointF, QRunnable, QThreadPool, pyqtSignal
