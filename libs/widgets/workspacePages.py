@@ -180,11 +180,23 @@ class WorkspacePages(QWidget):
         self.setObjectName('workspacePagesColumn')
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.stack = QStackedWidget(self)
+        # Keep managed pages and contextual overlays as siblings. A direct
+        # QStackedWidget child can sit behind its current managed page on the
+        # native Cocoa backend even after show()/raise_().
+        self.page_surface = QWidget(self)
+        self.page_surface.setObjectName('workspacePageSurface')
+        self.page_surface.setMinimumWidth(0)
+        self.page_surface.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Ignored)
+        surface_layout = QVBoxLayout(self.page_surface)
+        surface_layout.setContentsMargins(0, 0, 0, 0)
+        surface_layout.setSpacing(0)
+        self.stack = QStackedWidget(self.page_surface)
         self.timeline = timeline
         self.stack.setObjectName('workspacePageStack')
         self.stack.setMinimumWidth(0)
         self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        surface_layout.addWidget(self.stack)
         self.empty_page = EmptyWorkspacePage(
             actions.open, actions.openDir, actions.openVideo, self.stack)
         self.stack.addWidget(self.empty_page)
@@ -206,7 +218,7 @@ class WorkspacePages(QWidget):
         self.gallery_page = gallery_page
         self.stack.addWidget(gallery_page)
 
-        self.video_setup_overlay = QWidget(self.stack)
+        self.video_setup_overlay = QWidget(self.page_surface)
         self.video_setup_overlay.setObjectName('videoRuntimeSetupOverlay')
         setup_layout = QVBoxLayout(self.video_setup_overlay)
         setup_layout.setContentsMargins(
@@ -217,11 +229,11 @@ class WorkspacePages(QWidget):
             self.video_setup_card, 0, Qt.AlignHCenter)
         setup_layout.addStretch(1)
         self.video_setup_overlay.hide()
-        self.stack.installEventFilter(self)
+        self.page_surface.installEventFilter(self)
 
         # Assist is contextual workspace chrome. It floats over the canvas at
         # the trailing edge and never consumes permanent command-bar space.
-        self.assist_panel = AssistPanel(self.stack)
+        self.assist_panel = AssistPanel(self.page_surface)
         self.assist_panel.hide()
 
         self.status_strip = QWidget(self)
@@ -242,7 +254,7 @@ class WorkspacePages(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self.stack, 1)
+        layout.addWidget(self.page_surface, 1)
         layout.addWidget(self.status_strip)
         self.set_page('empty')
 
@@ -275,17 +287,20 @@ class WorkspacePages(QWidget):
         self.assist_panel.state_label.setFocus(Qt.OtherFocusReason)
 
     def hide_assist(self):
+        exposed_region = self.assist_panel.geometry()
         self.assist_panel.hide()
+        self.stack.update(exposed_region)
 
     def _layout_overlays(self):
-        self.video_setup_overlay.setGeometry(self.stack.rect())
-        width = min(scale_px(380), max(scale_px(300), self.stack.width()))
+        surface = self.page_surface
+        self.video_setup_overlay.setGeometry(surface.rect())
+        width = min(scale_px(380), max(scale_px(300), surface.width()))
         self.assist_panel.setGeometry(
-            max(0, self.stack.width() - width), 0,
-            width, self.stack.height())
+            max(0, surface.width() - width), 0,
+            width, surface.height())
 
     def eventFilter(self, watched, event):
-        if watched is self.stack and event.type() in (
+        if watched is self.page_surface and event.type() in (
                 QEvent.Resize, QEvent.Show):
             self._layout_overlays()
         return super(WorkspacePages, self).eventFilter(watched, event)

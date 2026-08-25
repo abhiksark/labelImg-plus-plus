@@ -201,6 +201,45 @@ def test_editable_document_opens_assist_even_without_optional_runtime(
         window.close()
 
 
+def test_contextual_overlays_are_siblings_above_the_active_page_stack(
+        monkeypatch, tmp_path):
+    """A QStackedWidget child can be hidden behind its managed current page."""
+    window = _window(monkeypatch, tmp_path, cached=False, runtime=False)
+    try:
+        _make_editable_image_projection(window, tmp_path)
+        window.workspace_pages.set_page('canvas')
+        window.resize(900, 640)
+        app.processEvents()
+
+        pages = window.workspace_pages
+        surface = pages.stack.parentWidget()
+        assert surface is not pages.stack
+        assert pages.assist_panel.parentWidget() is surface
+        assert pages.video_setup_overlay.parentWidget() is surface
+        assert surface.layout().indexOf(pages.stack) >= 0
+        assert surface.layout().indexOf(pages.assist_panel) == -1
+        assert surface.layout().indexOf(pages.video_setup_overlay) == -1
+
+        pages.show_assist()
+        app.processEvents()
+        assert pages.assist_panel.geometry().right() == surface.rect().right()
+        assert pages.assist_panel.height() == surface.height()
+        assert pages.video_setup_overlay.geometry() == surface.rect()
+        assert pages.assist_panel.state_label.hasFocus()
+
+        exposed_region = pages.assist_panel.geometry()
+        workspace_updates = []
+        pages.stack.update = lambda *args: workspace_updates.append(args)
+        pages.assist_panel.close_button.click()
+        app.processEvents()
+        assert pages.assist_panel.isHidden()
+        assert workspace_updates == [(exposed_region,)]
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_ready_assist_tools_update_authoritative_workflow(
         monkeypatch, tmp_path):
     """A button that changes only paint state would drift from workflow state."""
