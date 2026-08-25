@@ -9,6 +9,8 @@ from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QSignalSpy, QTest
 
 from labelImgPlusPlus import get_main_app
+from libs.core.assist_state import AssistPhase
+from libs.core.sam_types import SamResult
 from libs.core.video_model import VideoProjectModel
 from libs.core.video_project import load_project
 from libs.core.video_types import (
@@ -120,6 +122,84 @@ def _arm_propagation(window, track, seed, directions=(-1, 1), request_id=17):
     window._propagation_preview_gaps = {}
     window._set_propagation_running(True)
     return request
+
+
+def _show_assist_preview(window):
+    window.assist_state.ready('test-assist')
+    window.assist_state.start_run(window._dataset_generation)
+    window._on_assist_preview(
+        window._dataset_generation,
+        SamResult(
+            polygon=((10.0, 10.0), (40.0, 10.0), (40.0, 30.0)),
+            bounds=(10.0, 10.0, 41.0, 31.0)))
+    assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+
+
+def test_assist_video_accepts_one_manual_anchor_then_tracks_only_on_request(
+        tmp_path, make_video):
+    """Catches video acceptance auto-starting or bypassing the anchor lane."""
+    app, window = get_main_app()
+    video = make_video(
+        tmp_path / 'assist-track-forward.mp4', frames=18,
+        width=128, height=96, tracking_stress=True)
+    gate = threading.Event()
+    started = threading.Event()
+
+    def delayed(_backend, request, _direction, cancelled, _emit):
+        started.set()
+        while not gate.wait(.002) and not cancelled():
+            pass
+        return PropagationResult(
+            request.request_id, request.generation,
+            request.document_revision)
+
+    try:
+        assert window.open_video(video)
+        window.save_changes_automatically.setChecked(True)
+        window.sam_output_mode = 'box'
+        window.workspace_pages.show_assist()
+        _show_assist_preview(window)
+        window.workflow.set_active_class('vehicle')
+        baseline_revision = window._document_revision
+        baseline_undo = len(window.undo_stack._undo_stack)
+        requested = QSignalSpy(window.continuous_save.saveRequested)
+
+        assert window.accept_assist_preview() is True
+
+        manual = [
+            item for item in window.video_model.observations.values()
+            if item.source == 'manual' and item.review_state == 'accepted'
+            and item.anchor]
+        assert len(window.video_model.tracks) == 1
+        assert len(manual) == 1
+        assert manual[0].track_id == window._selected_video_track_id
+        assert len(window.undo_stack._undo_stack) == baseline_undo + 1
+        assert window._document_revision > baseline_revision
+        assert _wait(app, lambda: len(requested) == 1)
+        assert window._propagation_handle is None
+        assert window._active_propagation_request is None
+        assert not window.workspace_pages.assist_panel \
+            .track_forward_button.isHidden()
+        assert window.workspace_pages.assist_panel \
+            .track_forward_button.isEnabled()
+
+        with patch(
+                'labelImgPlusPlus.OpenCVPropagationBackend.propagate',
+                delayed):
+            window.workspace_pages.assist_panel.track_forward_button.click()
+            assert _wait(app, started.is_set)
+            assert window._propagation_handle is not None
+            assert window._active_propagation_request.direction == 1
+            assert tuple(
+                item.track_id
+                for item in window._active_propagation_request.seeds) == (
+                    manual[0].track_id,)
+            window.cancel_video_propagation()
+            gate.set()
+            assert _wait(app, lambda: window._propagation_handle is None)
+    finally:
+        gate.set()
+        _close_window(app, window)
 
 
 def test_final_propagation_is_pending_with_explicit_atomic_review_without_av(

@@ -132,7 +132,8 @@ class AssistPanel(QFrame):
             self.track_forward_button,
         )
 
-    def set_snapshot(self, snapshot, manifest):
+    def set_snapshot(self, snapshot, manifest,
+                     track_forward_available=False):
         """Render exactly one lifecycle phase from immutable domain state."""
         phase = AssistPhase(snapshot.phase)
         for widget in (
@@ -141,6 +142,7 @@ class AssistPanel(QFrame):
             widget.hide()
         for button in self._phase_buttons():
             button.hide()
+        self.track_forward_button.setEnabled(bool(track_forward_available))
 
         titles = {
             AssistPhase.SETUP_REQUIRED: 'Set up Assist',
@@ -167,6 +169,12 @@ class AssistPanel(QFrame):
             self.explanation.show()
             self.smart_box_button.show()
             self.smart_points_button.show()
+            if track_forward_available:
+                self.message.setText(
+                    'Accepted as a manual anchor. Track it forward when '
+                    'you are ready.')
+                self.message.show()
+                self.track_forward_button.show()
         elif phase is AssistPhase.RUNNING:
             self.message.setText(
                 'Assist is working. Your current document is unchanged.')

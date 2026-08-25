@@ -331,6 +331,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self._assist_download_handle = None
         self._assist_download_progress = None
         self._assist_prompt = None
+        self._assist_class_picker_pending = False
+        self._assist_track_forward_anchor = None
         self._initialize_assist_state()
         self.continuous_save = ContinuousSaveCoordinator(
             delay_ms=250, parent=self)
@@ -588,6 +590,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.color_dialog = ColorDialog(parent=self)
 
         self.canvas = Canvas(parent=self)
+        self.canvas.installEventFilter(self)
         self.canvas.zoomRequest.connect(self.zoom_request)
         self.canvas.lightRequest.connect(self.light_request)
         self.canvas.set_drawing_shape_to_square(settings.get(SETTING_DRAW_SQUARE, False))
@@ -604,8 +607,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.canvas.newShape.connect(self.new_shape)
         self.class_picker = InlineClassPicker(self)
-        self.class_picker.accepted.connect(self._commit_provisional_shape)
-        self.class_picker.cancelled.connect(self._cancel_provisional_shape)
+        self.class_picker.accepted.connect(self._class_picker_accepted)
+        self.class_picker.cancelled.connect(self._class_picker_cancelled)
         self.sam_controller = SamController(self)
         self.canvas.assistPrompted.connect(self._on_assist_prompt)
         self.sam_controller.previewReady.connect(self._on_assist_preview)
@@ -1289,6 +1292,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.activate_smart_box_tool)
         self.workspace_pages.assist_panel.smartPointsRequested.connect(
             self.activate_smart_points_tool)
+        self.workspace_pages.assist_panel.acceptRequested.connect(
+            self.accept_assist_preview)
+        self.workspace_pages.assist_panel.rejectRequested.connect(
+            self.reject_assist_preview)
+        self.workspace_pages.assist_panel.trackForwardRequested.connect(
+            self.track_assist_forward)
         self.workspace_pages.assist_panel.closeRequested.connect(
             self._close_assist)
         self._project_assist()
@@ -1508,6 +1517,21 @@ class MainWindow(QMainWindow, WindowMixin):
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
             self.canvas.set_drawing_shape_to_square(False)
+
+    def eventFilter(self, watched, event):
+        if (watched is getattr(self, 'canvas', None)
+                and event.type() == event.KeyPress
+                and self.assist_state.snapshot.phase is AssistPhase.PREVIEW
+                and not self._assist_class_picker_pending):
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self.accept_assist_preview()
+                event.accept()
+                return True
+            if event.key() == Qt.Key_Escape:
+                self.reject_assist_preview()
+                event.accept()
+                return True
+        return super(MainWindow, self).eventFilter(watched, event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -2441,7 +2465,28 @@ class MainWindow(QMainWindow, WindowMixin):
         snapshot = self.assist_state.snapshot
         if progress is not None:
             snapshot = replace(snapshot, message=progress)
-        panel.set_snapshot(snapshot, MOBILE_SAM_MANIFEST)
+        panel.set_snapshot(
+            snapshot, MOBILE_SAM_MANIFEST,
+            track_forward_available=self._assist_track_forward_available())
+
+    def _assist_track_forward_available(self):
+        anchor = self._assist_track_forward_anchor
+        frame_ref = self.current_video_frame_ref
+        model = self.video_model
+        if (anchor is None or self.document_kind != DocumentKind.VIDEO
+                or frame_ref is None or model is None):
+            return False
+        generation, track_id, pts = anchor
+        if (generation != self._dataset_generation
+                or int(frame_ref.pts) != int(pts)):
+            return False
+        observation = model.observations.get((track_id, int(pts)))
+        return bool(
+            observation is not None
+            and observation.source == 'manual'
+            and observation.review_state == 'accepted'
+            and observation.anchor and observation.present
+            and observation.geometry is not None)
 
     @staticmethod
     def _assist_failure_kind(error):
@@ -2657,6 +2702,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if phase is not AssistPhase.READY:
             self.assist_state.ready(self.assist_state.snapshot.model_id)
+        self._dismiss_assist_class_picker()
+        self._assist_track_forward_anchor = None
         self.canvas.clear_assist_preview()
         self._assist_prompt = prompt
         self.assist_state.start_run(self._dataset_generation)
@@ -2723,6 +2770,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _on_assist_document_changed(self):
         """Discard prompt/preview projection when the document is replaced."""
+        self._dismiss_assist_class_picker()
+        self._assist_track_forward_anchor = None
         self._reset_assist_preview_state()
         self._assist_prompt = None
         self.canvas.clear_assist_prompt()
@@ -2735,6 +2784,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _close_assist(self):
         """Close provisional Assist work without cancelling model acquisition."""
+        self._dismiss_assist_class_picker()
+        self._assist_track_forward_anchor = None
         self.workspace_pages.hide_assist()
         self._reset_assist_preview_state()
         self._assist_prompt = None
@@ -2743,6 +2794,118 @@ class MainWindow(QMainWindow, WindowMixin):
             self.activate_select_tool()
         else:
             self._restore_canvas_focus()
+
+    def accept_assist_preview(self):
+        """Accept the current preview or request its missing class."""
+        if self.assist_state.snapshot.phase is not AssistPhase.PREVIEW:
+            return False
+        shape = self.canvas.assist_preview_shape
+        if shape is None:
+            return False
+        label = self.workflow.snapshot.active_class
+        if label:
+            return self._commit_assist_shape(label)
+        if not self._assist_class_picker_pending:
+            self._assist_class_picker_pending = True
+            self.class_picker.open_at(
+                self.label_hist,
+                self._session_last_class or self.prev_label_text,
+                self._provisional_picker_anchor(shape))
+        return False
+
+    def reject_assist_preview(self):
+        """Reject only provisional Assist state without a model mutation."""
+        if self.assist_state.snapshot.phase is not AssistPhase.PREVIEW:
+            return False
+        self._dismiss_assist_class_picker()
+        self.assist_state.reject_preview()
+        self._assist_prompt = None
+        self._assist_track_forward_anchor = None
+        self.canvas.clear_assist_prompt()
+        self._project_assist()
+        self._restore_canvas_focus()
+        return True
+
+    def _commit_assist_shape(self, label):
+        """Transfer one reviewed Assist shape through the normal save lane."""
+        label = str(label).strip()
+        shape = self.canvas.assist_preview_shape
+        if (not label or shape is None
+                or self.assist_state.snapshot.phase is not
+                AssistPhase.PREVIEW):
+            return False
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return False
+
+        video_before = (self.video_model.snapshot_state()
+                        if self.document_kind == DocumentKind.VIDEO else None)
+        self.assist_state.accept_preview()
+        self._dismiss_assist_class_picker()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
+
+        shape.label = label
+        shape.line_color = generate_color_by_text(label)
+        self.canvas.shapes.append(shape)
+        self.canvas.rebuild_spatial_index()
+        self.add_label(shape)
+        self.workflow.set_active_class(label)
+        self._apply_workflow_state()
+
+        if self.document_kind == DocumentKind.VIDEO:
+            pts = int(self.current_video_frame_ref.pts)
+            track_id = self._store_video_shape_as_manual(shape)
+            self._selected_video_track_id = track_id
+            video_after = self.video_model.snapshot_state()
+            self.undo_stack.push(CreateShapeCommand(
+                self, shape, video_before=video_before,
+                video_after=video_after))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(pts)
+            self._assist_track_forward_anchor = (
+                self._dataset_generation, track_id, pts)
+        else:
+            self.undo_stack.push(CreateShapeCommand(self, shape))
+            self.set_dirty()
+            self._assist_track_forward_anchor = None
+
+        self.prev_label_text = label
+        self.lastLabel = label
+        self._session_last_class = label
+        if label not in self.label_hist:
+            self.label_hist.append(label)
+            self.active_class_control.set_choices(self.label_hist)
+        self._update_current_image_stats()
+        self.canvas.de_select_shape()
+        self.shape_selection_changed(False)
+        self.canvas.flash_committed_shape(shape)
+        self._project_assist()
+        self._restore_canvas_focus()
+        return True
+
+    def _dismiss_assist_class_picker(self):
+        if not self._assist_class_picker_pending:
+            return
+        self._assist_class_picker_pending = False
+        blocked = self.class_picker.blockSignals(True)
+        self.class_picker.hide()
+        self.class_picker.blockSignals(blocked)
+
+    def track_assist_forward(self):
+        """Start forward propagation only after the explicit Assist action."""
+        if not self._assist_track_forward_available():
+            self._assist_track_forward_anchor = None
+            self._project_assist()
+            return None
+        _generation, track_id, _pts = self._assist_track_forward_anchor
+        self._selected_video_track_id = track_id
+        self._select_annotation_identity(track_id)
+        handle = self.track_selected_forward()
+        if handle is not None:
+            self._assist_track_forward_anchor = None
+            self._project_assist()
+        return handle
 
     def activate_select_tool(self):
         """Return to the neutral canvas selection/editing tool."""
@@ -3817,6 +3980,21 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.flash_committed_shape(shape)
         self._restore_canvas_focus()
 
+    def _class_picker_accepted(self, text):
+        if self._assist_class_picker_pending:
+            self._assist_class_picker_pending = False
+            self._commit_assist_shape(text)
+            return
+        self._commit_provisional_shape(text)
+
+    def _class_picker_cancelled(self):
+        if self._assist_class_picker_pending:
+            self._assist_class_picker_pending = False
+            self._project_assist()
+            self._restore_canvas_focus()
+            return
+        self._cancel_provisional_shape()
+
     def _cancel_provisional_shape(self):
         self._pending_provisional_shape = None
         self.canvas.discard_provisional_shape()
@@ -3854,6 +4032,7 @@ class MainWindow(QMainWindow, WindowMixin):
             blocked = picker.blockSignals(True)
             picker.hide()
             picker.blockSignals(blocked)
+        self._assist_class_picker_pending = False
         self._pending_provisional_shape = None
         if discard and hasattr(self, 'canvas'):
             self.canvas.discard_provisional_shape()
