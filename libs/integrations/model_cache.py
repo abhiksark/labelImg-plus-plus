@@ -121,14 +121,14 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None):
                         progress(ModelDownloadProgress(
                             artifact.name, artifact_bytes, artifact.size,
                             total_downloaded, manifest.total_size))
+                if artifact_bytes != artifact.size:
+                    raise ModelValidationError(
+                        'download size does not match manifest')
+                if digest.hexdigest() != artifact.sha256:
+                    raise ModelValidationError(
+                        'download checksum does not match manifest')
                 output.flush()
                 os.fsync(output.fileno())
-            if artifact_bytes != artifact.size:
-                raise ModelValidationError(
-                    'download size does not match manifest')
-            if digest.hexdigest() != artifact.sha256:
-                raise ModelValidationError(
-                    'download checksum does not match manifest')
             if cancelled and cancelled():
                 raise ModelDownloadCancelled()
             os.replace(temporary, destination)
@@ -143,7 +143,8 @@ def download_manifest(manifest, cache_dir, cancelled=None, progress=None):
     return tuple(outputs)
 
 
-def resolve_models(settings, progress=None):
+def resolve_models(settings, progress=None, manifest=MOBILE_SAM_MANIFEST,
+                   cache_dir=None):
     """Resolve custom paths or a validated default cache without downloading.
 
     ``progress`` remains accepted for extensions using the old call shape, but
@@ -159,7 +160,7 @@ def resolve_models(settings, progress=None):
             if not os.path.isfile(path):
                 raise ValueError('SAM model file not found: %s' % path)
         return encoder, decoder
-    paths = cached_model_paths()
+    paths = cached_model_paths(manifest, cache_dir)
     if paths is None:
         raise ModelSetupRequiredError(
             'SAM model setup is required; download MobileSAM before using Assist')

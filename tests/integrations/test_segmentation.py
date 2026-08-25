@@ -1,6 +1,9 @@
+import hashlib
+
 import pytest
 
 from libs.integrations import model_cache, segmentation
+from libs.integrations.model_manifest import ModelArtifact, ModelManifest
 from libs.integrations.segmentation import SegmentationBackend, sam_available
 from libs.utils.constants import SETTING_SAM_DECODER, SETTING_SAM_ENCODER
 
@@ -89,36 +92,61 @@ def test_load_backend_uses_complete_custom_paths(tmp_path, monkeypatch):
     assert loaded == [(str(encoder), str(decoder))]
 
 
-def test_load_backend_uses_only_validated_cached_pair(monkeypatch, tmp_path):
-    """Catches backend setup calling the downloader instead of cache lookup."""
-    encoder = tmp_path / 'mobile_sam.encoder.onnx'
-    decoder = tmp_path / 'mobile_sam.decoder.onnx'
-    cached = (str(encoder), str(decoder))
-    monkeypatch.setattr(model_cache, 'cached_model_paths', lambda: cached,
-                        raising=False)
+@pytest.fixture
+def small_manifest():
+    encoder = ModelArtifact(
+        'small.encoder.onnx', 'https://provider.invalid/small.encoder.onnx', 3,
+        hashlib.sha256(b'enc').hexdigest())
+    decoder = ModelArtifact(
+        'small.decoder.onnx', 'https://provider.invalid/small.decoder.onnx', 3,
+        hashlib.sha256(b'dec').hexdigest())
+    return ModelManifest(
+        'small', 'Small', 'Test segmentation', 'Test provider',
+        (encoder, decoder))
+
+
+def _block_network(monkeypatch):
     monkeypatch.setattr(
-        model_cache, 'download_manifest',
-        lambda *args, **kwargs: pytest.fail('backend loading must not download'),
-        raising=False)
+        model_cache.urllib.request, 'urlopen',
+        lambda *args, **kwargs: pytest.fail('backend setup must not download'))
+
+
+def test_load_backend_uses_real_validated_manifest_cache(
+        monkeypatch, tmp_path, small_manifest):
+    """Catches bypassing cache hash validation or downloading during setup."""
+    _block_network(monkeypatch)
+    for artifact, payload in zip(small_manifest.artifacts, (b'enc', b'dec')):
+        (tmp_path / artifact.name).write_bytes(payload)
 
     class FakeBackend:
         def __init__(self, encoder_path, decoder_path):
             self.paths = (encoder_path, decoder_path)
 
     monkeypatch.setattr(segmentation, 'OnnxSamBackend', FakeBackend)
-    backend, error = segmentation.load_backend({})
-    assert backend.paths == cached
+    backend, error = segmentation.load_backend(
+        {}, manifest=small_manifest, cache_dir=str(tmp_path))
+    assert backend.paths == tuple(
+        str(tmp_path / artifact.name) for artifact in small_manifest.artifacts)
     assert error is None
 
 
-def test_load_backend_without_cache_returns_setup_required(monkeypatch):
-    """Catches implicit download when the default model cache is absent."""
-    monkeypatch.setattr(model_cache, 'cached_model_paths', lambda: None,
-                        raising=False)
-    monkeypatch.setattr(
-        model_cache, 'download_manifest',
-        lambda *args, **kwargs: pytest.fail('backend loading must not download'),
-        raising=False)
-    backend, error = segmentation.load_backend({})
+def test_load_backend_empty_real_cache_requires_setup(
+        monkeypatch, tmp_path, small_manifest):
+    """Catches opening the provider when the real model cache is empty."""
+    _block_network(monkeypatch)
+    backend, error = segmentation.load_backend(
+        {}, manifest=small_manifest, cache_dir=str(tmp_path))
+    assert backend is None
+    assert isinstance(error, model_cache.ModelSetupRequiredError)
+
+
+def test_load_backend_tampered_real_cache_requires_setup(
+        monkeypatch, tmp_path, small_manifest):
+    """Catches loading a real cache pair whose pinned checksum was altered."""
+    _block_network(monkeypatch)
+    (tmp_path / small_manifest.artifacts[0].name).write_bytes(b'bad')
+    (tmp_path / small_manifest.artifacts[1].name).write_bytes(b'dec')
+    backend, error = segmentation.load_backend(
+        {}, manifest=small_manifest, cache_dir=str(tmp_path))
     assert backend is None
     assert isinstance(error, model_cache.ModelSetupRequiredError)

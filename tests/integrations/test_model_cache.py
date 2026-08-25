@@ -112,6 +112,20 @@ def test_checksum_mismatch_is_validation_failure(tmp_path, fake_manifest,
     assert not list(tmp_path.glob('*.onnx'))
 
 
+def test_invalid_download_never_fsyncs_temporary_file(tmp_path, fake_manifest,
+                                                      monkeypatch):
+    """Catches making invalid bytes durable before their checksum is checked."""
+    fsync_calls = []
+    monkeypatch.setattr(model_cache.urllib.request, 'urlopen',
+                        lambda request: Response(b'ccccdddd'))
+    monkeypatch.setattr(model_cache.os, 'fsync',
+                        lambda descriptor: fsync_calls.append(descriptor))
+    with pytest.raises(model_cache.ModelValidationError, match='checksum'):
+        model_cache.download_manifest(fake_manifest, str(tmp_path))
+    assert fsync_calls == []
+    assert not list(tmp_path.glob('*.part'))
+
+
 def test_download_promotes_verified_file_and_reports_progress(
         tmp_path, fake_manifest, monkeypatch):
     """Catches non-atomic promotion or reporting bytes unrelated to written data."""

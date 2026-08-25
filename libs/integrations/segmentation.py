@@ -107,13 +107,16 @@ class OnnxSamBackend(SegmentationBackend):
         return self._embeddings is not None
 
 
-def load_backend(settings):
+def load_backend(settings, manifest=None, cache_dir=None):
     """Return (backend, None) on success or (None, error_message) on failure."""
     from libs.integrations.model_cache import (
         ModelSetupRequiredError, resolve_models)
 
     try:
-        encoder_path, decoder_path = resolve_models(settings)
+        resolver_args = {'cache_dir': cache_dir}
+        if manifest is not None:
+            resolver_args['manifest'] = manifest
+        encoder_path, decoder_path = resolve_models(settings, **resolver_args)
     except ModelSetupRequiredError as exc:
         return None, exc
     except Exception as exc:  # invalid custom path pair or cache filesystem error
