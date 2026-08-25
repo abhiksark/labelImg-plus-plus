@@ -18,6 +18,7 @@ from libs.core.assist_state import (
     AssistPhase,
     AssistSnapshot,
 )
+from libs.core.task_coordinator import JobPriority
 from libs.integrations import model_cache, segmentation
 from libs.integrations.model_cache import (
     ModelDownloadCancelled,
@@ -251,6 +252,97 @@ def test_configured_custom_model_projects_ready_without_default_cache(
         window.close()
 
 
+def test_cache_io_failure_projects_runtime_recovery_without_blocking_startup(
+        monkeypatch, tmp_path):
+    """An optional cache failure must not prevent the main window opening."""
+    monkeypatch.setattr(
+        model_cache, 'resolve_models',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError('cache unavailable')))
+
+    window = _window(monkeypatch, tmp_path, cached=False, runtime=True)
+    try:
+        assert window.assist_state.snapshot.phase is AssistPhase.FAILED
+        assert window.assist_state.snapshot.failure_kind is \
+            AssistFailureKind.RUNTIME
+        assert 'cache unavailable' in window.assist_state.snapshot.message
+
+        _make_editable_image_projection(window, tmp_path)
+        window.activate_smart_select_tool()
+        assert window.workspace_pages.assist_panel.retry_button.isVisible()
+        assert 'document' in \
+            window.workspace_pages.assist_panel.message.text().lower()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+@pytest.mark.parametrize('source', ('cache', 'custom'))
+def test_model_files_without_runtime_project_typed_recovery(
+        monkeypatch, tmp_path, source):
+    """Files alone must not expose prompt tools without the SAM runtime."""
+    cached = source == 'cache'
+    if source == 'custom':
+        encoder = tmp_path / 'custom-encoder.onnx'
+        decoder = tmp_path / 'custom-decoder.onnx'
+        encoder.write_bytes(b'encoder')
+        decoder.write_bytes(b'decoder')
+
+        def load_settings(settings):
+            settings.data = {
+                app_mod.SETTING_SAM_ENCODER: str(encoder),
+                app_mod.SETTING_SAM_DECODER: str(decoder),
+            }
+            return True
+
+        monkeypatch.setattr(app_mod.Settings, 'load', load_settings)
+
+    window = _window(monkeypatch, tmp_path, cached=cached, runtime=False)
+    try:
+        assert window.assist_state.snapshot.phase is AssistPhase.FAILED
+        assert window.assist_state.snapshot.failure_kind is \
+            AssistFailureKind.RUNTIME
+
+        _make_editable_image_projection(window, tmp_path)
+        window.activate_smart_select_tool()
+        panel = window.workspace_pages.assist_panel
+        assert panel.isVisible()
+        assert panel.retry_button.isVisible()
+        assert panel.smart_box_button.isHidden()
+        assert panel.smart_points_button.isHidden()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_runtime_retry_rechecks_local_setup_without_downloading_again(
+        monkeypatch, tmp_path):
+    """Installing the runtime must reuse valid files instead of redownloading."""
+    runtime_ready = [False]
+    download_calls = []
+    window = _window(monkeypatch, tmp_path, cached=True, runtime=False)
+    monkeypatch.setattr(
+        segmentation, 'sam_available', lambda: runtime_ready[0])
+    monkeypatch.setattr(
+        model_cache, 'download_manifest',
+        lambda *_args, **_kwargs: download_calls.append(True))
+    try:
+        _make_editable_image_projection(window, tmp_path)
+        window.activate_smart_select_tool()
+        assert window.assist_state.snapshot.phase is AssistPhase.FAILED
+
+        runtime_ready[0] = True
+        window.workspace_pages.assist_panel.retry_button.click()
+        app.processEvents()
+
+        assert window.assist_state.snapshot.phase is AssistPhase.READY
+        assert download_calls == []
+        assert window.workspace_pages.assist_panel.smart_box_button.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_download_starts_only_after_explicit_action_and_resets_backend(
         monkeypatch, tmp_path):
     calls = []
@@ -282,6 +374,74 @@ def test_download_starts_only_after_explicit_action_and_resets_backend(
         assert window.sam_controller._embedded_key is None
         assert window._assist_download_handle is None
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_downloaded_model_without_runtime_projects_typed_recovery(
+        monkeypatch, tmp_path):
+    """A successful file download cannot make an unavailable tool READY."""
+    paths = tuple(str(tmp_path / artifact.name)
+                  for artifact in MOBILE_SAM_MANIFEST.artifacts)
+
+    window = _window(monkeypatch, tmp_path, cached=False, runtime=False)
+    monkeypatch.setattr(
+        model_cache, 'download_manifest',
+        lambda *_args, **_kwargs: paths)
+    try:
+        _make_editable_image_projection(window, tmp_path)
+        window.activate_smart_select_tool()
+        window._download_assist_model()
+
+        assert _wait(lambda: window.assist_state.snapshot.phase
+                     is AssistPhase.FAILED)
+        assert window.assist_state.snapshot.failure_kind is \
+            AssistFailureKind.RUNTIME
+        assert window.workspace_pages.assist_panel.retry_button.isVisible()
+        assert window.workspace_pages.assist_panel.smart_box_button.isHidden()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_cancel_queued_download_reconciles_without_running_worker(
+        monkeypatch, tmp_path):
+    """A job proven pending must leave Cancelling without awaiting cleanup."""
+    blocker_started = threading.Event()
+    release_blocker = threading.Event()
+    download_calls = []
+
+    def blocker(_handle):
+        blocker_started.set()
+        release_blocker.wait(2.0)
+
+    def download(*_args, **_kwargs):
+        download_calls.append(True)
+        return ()
+
+    window = _window(monkeypatch, tmp_path, cached=False, runtime=True)
+    monkeypatch.setattr(model_cache, 'download_manifest', download)
+    try:
+        window.task_coordinator.submit(
+            'sam', blocker, priority=JobPriority.IMAGE_LOAD,
+            key='sam-lane-blocker')
+        assert blocker_started.wait(1.0)
+
+        window._download_assist_model()
+        queued = window._assist_download_handle
+        assert queued is not None
+        assert window.task_coordinator.has_active_handle(queued)
+
+        window.cancel_assist_download()
+        app.processEvents()
+
+        assert window.assist_state.snapshot.phase is \
+            AssistPhase.READY_TO_DOWNLOAD
+        assert window._assist_download_handle is None
+        assert not window.task_coordinator.has_active_handle(queued)
+        assert download_calls == []
+    finally:
+        release_blocker.set()
         window.dirty = False
         window.close()
 

@@ -2406,8 +2406,29 @@ class MainWindow(QMainWindow, WindowMixin):
             self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
         except ValueError as exc:
             self.assist_state.fail(AssistFailureKind.VALIDATION, str(exc))
+        except OSError as exc:
+            self.assist_state.fail(AssistFailureKind.RUNTIME, str(exc))
+        else:
+            self._mark_assist_model_ready()
+
+    def _mark_assist_model_ready(self, downloaded=False):
+        """Require both validated files and the optional inference runtime."""
+        try:
+            runtime_ready = segmentation.sam_available()
+        except Exception as exc:
+            self.assist_state.fail(AssistFailureKind.RUNTIME, str(exc))
+            return False
+        if not runtime_ready:
+            self.assist_state.fail(
+                AssistFailureKind.RUNTIME,
+                'Install the optional Assist runtime with '
+                'labelimgplusplus[sam], then retry.')
+            return False
+        if downloaded:
+            self.assist_state.download_ready()
         else:
             self.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+        return True
 
     def _project_assist(self, progress=None):
         panel = getattr(
@@ -2451,7 +2472,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         if self.assist_state.snapshot.phase in (
                 AssistPhase.SETUP_REQUIRED, AssistPhase.FAILED):
-            self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+            self._initialize_assist_state()
+            self._project_assist()
         if self.assist_state.snapshot.phase is not \
                 AssistPhase.READY_TO_DOWNLOAD:
             return
@@ -2504,7 +2526,7 @@ class MainWindow(QMainWindow, WindowMixin):
         status, value, message = outcome
         if status == 'ready':
             self.sam_controller.reset_backend()
-            self.assist_state.download_ready()
+            self._mark_assist_model_ready(downloaded=True)
             self._assist_download_progress = None
             self._project_assist()
         elif status == 'failed':
@@ -2531,7 +2553,7 @@ class MainWindow(QMainWindow, WindowMixin):
             partials = self._assist_part_files()
             if cached is not None:
                 self.sam_controller.reset_backend()
-                self.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+                self._mark_assist_model_ready(downloaded=True)
             elif partials:
                 self.assist_state.fail(
                     AssistFailureKind.VALIDATION,
@@ -2547,7 +2569,14 @@ class MainWindow(QMainWindow, WindowMixin):
         if handle is None or self.assist_state.snapshot.phase is not \
                 AssistPhase.DOWNLOADING:
             return
-        handle.cancel()
+        disposition = self.task_coordinator.cancel_handle(handle)
+        if disposition == 'pending':
+            self._assist_download_handle = None
+            self._assist_download_progress = None
+            self.assist_state.ready_to_download(
+                MOBILE_SAM_MANIFEST.model_id)
+            self._project_assist()
+            return
         self._project_assist('Cancelling…')
 
     def toggle_sam_mode(self):

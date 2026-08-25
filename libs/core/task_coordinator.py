@@ -246,6 +246,35 @@ class TaskCoordinator(QObject):
         if handle is not None:
             handle.cancel()
 
+    def cancel_handle(self, handle):
+        """Cancel one handle and report whether it was pending or running.
+
+        A pending record is removed synchronously, so its owner can reconcile
+        a never-started operation without waiting for a worker completion that
+        cannot arrive. Running work remains cooperatively cancelled and keeps
+        its normal completion/cleanup boundary.
+        """
+        if handle is None:
+            return 'inactive'
+        for lane in self._lanes.values():
+            for index, record in enumerate(lane.pending):
+                if record.handle is not handle:
+                    continue
+                handle.cancel()
+                del lane.pending[index]
+                heapq.heapify(lane.pending)
+                if (handle.key is not None
+                        and self._latest_by_key.get(handle.key) is handle):
+                    self._latest_by_key.pop(handle.key, None)
+                self._dispatch(lane)
+                return 'pending'
+            if any(record.handle is handle
+                   for record in lane.running.values()):
+                handle.cancel()
+                return 'running'
+        handle.cancel()
+        return 'inactive'
+
     def cancel_generation(self, generation):
         for lane in self._lanes.values():
             for record in lane.pending:

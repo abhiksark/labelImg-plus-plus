@@ -45,6 +45,33 @@ def test_latest_request_cancels_pending_job():
     coordinator.shutdown()
 
 
+def test_cancel_handle_reports_and_removes_pending_job_without_running_it():
+    """Targeted cancellation must expose a never-started reconciliation."""
+    coordinator = TaskCoordinator(logical_cpus=1)
+    gate = threading.Event()
+    started = threading.Event()
+    ran = []
+
+    def blocker(_handle):
+        started.set()
+        gate.wait(1)
+
+    try:
+        coordinator.submit('sam', blocker, priority=0)
+        assert started.wait(1)
+        queued = coordinator.submit(
+            'sam', lambda _handle: ran.append(True), priority=10)
+
+        assert coordinator.cancel_handle(queued) == 'pending'
+
+        assert queued.is_cancelled()
+        assert not coordinator.has_active_handle(queued)
+        assert ran == []
+    finally:
+        gate.set()
+        coordinator.shutdown()
+
+
 def test_pending_jobs_run_in_priority_order():
     coordinator = TaskCoordinator(logical_cpus=1)
     gate = threading.Event()
