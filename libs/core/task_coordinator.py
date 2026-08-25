@@ -156,9 +156,9 @@ class TaskCoordinator(QObject):
     def is_shutting_down(self):
         return self._shutting_down
 
-    def next_generation(self):
+    def next_generation(self, exclude_handles=()):
         self._generation += 1
-        self.cancel_all()
+        self.cancel_all(exclude_handles=exclude_handles)
         return self._generation
 
     def pool(self, lane):

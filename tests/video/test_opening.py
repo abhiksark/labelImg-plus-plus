@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from libs.core.video_decoder import PreparedVideoOpen, VideoDependencyError
 from libs.core.video_model import VideoProjectModel
 from libs.core.video_project import (
     default_project_path, initialize_project, load_project,
-    read_project_source,
+    read_project_source, save_project_delta,
 )
 from libs.core.video_types import (
     ObservationRecord, VideoFingerprint, VideoFrameRef,
@@ -133,6 +134,37 @@ def _add_and_save_video_observation(app, window, project, pts):
         load_project(project).revision == revision
         and not window.video_model.dirty))
     return revision
+
+
+def _add_video_observation(window, pts):
+    track = window.video_model.tracks.get('track-1')
+    if track is None:
+        track = window.video_model.create_track(
+            'car', 'rectangle', (0, 255, 0, 255), track_id='track-1')
+    window.video_model.upsert_manual(
+        track.track_id, pts, [2 + pts, 3, 22 + pts, 23])
+    window._on_video_model_mutation()
+    return window.video_model.revision
+
+
+def _block_background_lane(window):
+    release = Event()
+    started = []
+    handles = []
+
+    for _index in range(
+            window.task_coordinator.pool('background').maxThreadCount()):
+        worker_started = Event()
+        started.append(worker_started)
+
+        def block(_handle, signal=worker_started):
+            signal.set()
+            release.wait(5)
+
+        handles.append(window.task_coordinator.submit(
+            'background', block, priority=0))
+    assert all(signal.wait(1) for signal in started)
+    return release, handles
 
 
 def test_synchronous_open_creates_sidecar_after_first_frame(
@@ -342,6 +374,81 @@ def test_async_publication_failure_rolls_back_prior_video_and_save_owner(
         window.close()
 
 
+def test_async_publication_failure_preserves_pending_save_and_drains_newest(
+        tmp_path):
+    app, window = get_main_app()
+    old_decoder = _RecordingDecoder()
+    candidate_decoder = _RecordingDecoder()
+    prior = _prepared_video(tmp_path, 'pending-prior', old_decoder)
+    candidate = _prepared_video(
+        tmp_path, 'pending-candidate', candidate_decoder, color=0xFF663399)
+    release, blockers = _block_background_lane(window)
+    try:
+        _install_prepared_video(window, prior)
+        first_revision = _add_video_observation(window, 0)
+        window.continuous_save.flush()
+        prior_handle = window._video_save_handle
+        prior_ticket = window.continuous_save._in_flight
+        prior_generation = window._dataset_generation
+        prior_snapshot = window.video_snapshot
+        prior_timeline_snapshot = window.video_timeline._snapshot
+        prior_save_identity = window._save_document_identity()
+        prior_model = window.video_model
+        prior_pixmap_key = window.canvas.pixmap.cacheKey()
+        prior_plugin_generation = window._plugin_document_generation
+        owner = ('video', window._video_open_request_id)
+        window._show_replacement_loading(owner, 'Opening candidate…')
+        original_materialize = window._materialize_video_frame
+
+        assert prior_handle is not None
+        assert prior_ticket.revision == first_revision
+        assert window.task_coordinator.has_active_handle(prior_handle)
+
+        def fail_after_reset(pts):
+            if window.file_path == candidate.snapshot.source_path:
+                raise RuntimeError('pending save publication failure')
+            return original_materialize(pts)
+
+        with patch.object(
+                window, '_materialize_video_frame',
+                side_effect=fail_after_reset):
+            window._on_video_open_result(
+                candidate, window._video_open_request_id,
+                prior_generation, requested_path=candidate.snapshot.source_path)
+
+        _assert_prior_video_restored(
+            window, prior, prior_snapshot, prior_timeline_snapshot,
+            prior_generation, first_revision,
+            prior_save_identity, prior_model, prior_pixmap_key)
+        assert window._plugin_document_generation == prior_plugin_generation
+        assert window.continuous_save._in_flight == prior_ticket
+        assert window._video_save_handle is prior_handle
+        assert not prior_handle.is_cancelled()
+        assert window.task_coordinator.has_active_handle(prior_handle)
+        assert candidate_decoder.close_count == 1
+        assert old_decoder.close_count == 0
+        assert window._loading_veil.isHidden()
+        assert window._replacement_loading_owner is None
+
+        second_revision = _add_video_observation(window, 1)
+        assert second_revision > first_revision
+        release.set()
+        assert _wait(app, lambda: (
+            load_project(prior.snapshot.project_path).revision
+            == second_revision
+            and window.continuous_save.is_drained))
+        durable = load_project(prior.snapshot.project_path)
+        assert durable.revision == second_revision
+        assert len(durable.observations) == 2
+        assert not window.video_model.dirty
+    finally:
+        release.set()
+        for handle in blockers:
+            handle.cancel()
+        window.dirty = False
+        window.close()
+
+
 def test_synchronous_publication_failure_rolls_back_prior_video_and_saves(
         tmp_path):
     app, window = get_main_app()
@@ -392,6 +499,84 @@ def test_synchronous_publication_failure_rolls_back_prior_video_and_saves(
         assert len(load_project(
             prior.snapshot.project_path).observations) == 2
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_sync_publication_failure_preserves_running_save_and_drains_newest(
+        tmp_path):
+    app, window = get_main_app()
+    old_decoder = _RecordingDecoder()
+    candidate_decoder = _RecordingDecoder()
+    prior = _prepared_video(tmp_path, 'running-prior', old_decoder)
+    candidate = _prepared_video(
+        tmp_path, 'running-candidate', candidate_decoder, color=0xFF224466)
+    started = Event()
+    release = Event()
+
+    def blocked_save(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return save_project_delta(*args, **kwargs)
+
+    try:
+        _install_prepared_video(window, prior)
+        with patch('labelImgPlusPlus.save_project_delta', blocked_save):
+            first_revision = _add_video_observation(window, 0)
+            window.continuous_save.flush()
+            assert started.wait(1)
+            prior_handle = window._video_save_handle
+            prior_ticket = window.continuous_save._in_flight
+            prior_generation = window._dataset_generation
+            prior_snapshot = window.video_snapshot
+            prior_timeline_snapshot = window.video_timeline._snapshot
+            prior_save_identity = window._save_document_identity()
+            prior_model = window.video_model
+            prior_pixmap_key = window.canvas.pixmap.cacheKey()
+            original_materialize = window._materialize_video_frame
+
+            def fail_after_reset(pts):
+                if window.file_path == candidate.snapshot.source_path:
+                    raise RuntimeError('running save publication failure')
+                return original_materialize(pts)
+
+            with patch(
+                    'labelImgPlusPlus.prepare_video_open',
+                    return_value=candidate), patch.object(
+                    window, '_video_project_target',
+                    return_value=(candidate.snapshot.project_path, False)), \
+                    patch.object(window, 'may_continue', return_value=True), \
+                    patch.object(
+                        window, '_materialize_video_frame',
+                        side_effect=fail_after_reset):
+                assert window.open_video(
+                    candidate.snapshot.source_path) is False
+
+            _assert_prior_video_restored(
+                window, prior, prior_snapshot, prior_timeline_snapshot,
+                prior_generation, first_revision,
+                prior_save_identity, prior_model, prior_pixmap_key)
+            assert window.continuous_save._in_flight == prior_ticket
+            assert window._video_save_handle is prior_handle
+            assert not prior_handle.is_cancelled()
+            assert window.task_coordinator.has_active_handle(prior_handle)
+            assert candidate_decoder.close_count == 1
+            assert old_decoder.close_count == 0
+            assert window._loading_veil is None or \
+                window._loading_veil.isHidden()
+
+            second_revision = _add_video_observation(window, 1)
+            release.set()
+            assert _wait(app, lambda: (
+                load_project(prior.snapshot.project_path).revision
+                == second_revision
+                and window.continuous_save.is_drained))
+            durable = load_project(prior.snapshot.project_path)
+            assert durable.revision == second_revision
+            assert len(durable.observations) == 2
+            assert not window.video_model.dirty
+    finally:
+        release.set()
         window.dirty = False
         window.close()
 
@@ -473,6 +658,78 @@ def test_successful_publication_closes_old_decoder_after_candidate_commit(
         assert candidate_decoder.close_count == 0
         assert window._dataset_generation != prior_generation
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_successful_publication_identity_gates_preserved_old_save_callback(
+        tmp_path):
+    app, window = get_main_app()
+    old_decoder = _RecordingDecoder()
+    candidate_decoder = _RecordingDecoder()
+    prior = _prepared_video(tmp_path, 'successful-save-prior', old_decoder)
+    candidate = _prepared_video(
+        tmp_path, 'successful-save-candidate', candidate_decoder)
+    started = Event()
+    release = Event()
+
+    def blocked_save(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return save_project_delta(*args, **kwargs)
+
+    try:
+        _install_prepared_video(window, prior)
+        with patch('labelImgPlusPlus.save_project_delta', blocked_save):
+            old_revision = _add_video_observation(window, 0)
+            window.continuous_save.flush()
+            assert started.wait(1)
+            old_handle = window._video_save_handle
+
+            with patch(
+                    'labelImgPlusPlus.prepare_video_open',
+                    return_value=candidate), patch.object(
+                    window, '_video_project_target',
+                    return_value=(candidate.snapshot.project_path, False)), \
+                    patch.object(window, 'may_continue', return_value=True):
+                assert window.open_video(
+                    candidate.snapshot.source_path) is True
+
+            assert not old_handle.is_cancelled()
+            assert window.task_coordinator.has_active_handle(old_handle)
+            candidate_generation = window._dataset_generation
+            candidate_snapshot = window.video_snapshot
+            candidate_model = window.video_model
+            window.continuous_save.set_enabled(False)
+            candidate_revision = _add_video_observation(window, 0)
+            assert candidate_model.dirty
+
+            release.set()
+            assert _wait(app, lambda: (
+                load_project(prior.snapshot.project_path).revision
+                == old_revision
+                and not window.task_coordinator.has_active_handle(old_handle)))
+            assert window.document_kind == DocumentKind.VIDEO
+            assert window.file_path == candidate.snapshot.source_path
+            assert window.video_decoder is candidate_decoder
+            assert window.video_snapshot is candidate_snapshot
+            assert window.video_model is candidate_model
+            assert window._dataset_generation == candidate_generation
+            assert window.video_model.dirty
+            assert window.continuous_save.state == 'pending'
+            assert window.continuous_save._durable_revision == 0
+
+            window.continuous_save.set_enabled(True)
+            assert _wait(app, lambda: (
+                load_project(candidate.snapshot.project_path).revision
+                == candidate_revision
+                and window.continuous_save.is_drained))
+            durable_candidate = load_project(candidate.snapshot.project_path)
+            assert durable_candidate.revision == candidate_revision
+            assert len(durable_candidate.observations) == 1
+            assert not window.video_model.dirty
+    finally:
+        release.set()
         window.dirty = False
         window.close()
 

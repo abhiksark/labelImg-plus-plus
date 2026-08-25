@@ -4273,7 +4273,14 @@ class MainWindow(QMainWindow, WindowMixin):
             snapshot, first, pixmap, model = \
                 self._stage_video_publication(prepared)
             checkpoint = self._capture_video_publication_checkpoint()
-            candidate_generation = self.task_coordinator.next_generation()
+            save_handle = (
+                checkpoint['video_save_handle']
+                if (checkpoint['document_kind'] == DocumentKind.VIDEO
+                    and checkpoint['save_state'][5] is not None)
+                else None)
+            candidate_generation = self.task_coordinator.next_generation(
+                exclude_handles=(() if save_handle is None
+                                 else (save_handle,)))
             # reset_state() is intentionally destructive, so detach the prior
             # decoder first. It stays alive until every candidate projection
             # has succeeded and is restored untouched on rollback.
