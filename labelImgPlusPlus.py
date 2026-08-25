@@ -499,10 +499,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
+        self.combo_box.cb.setAccessibleName(
+            'Filter annotations by class')
         list_layout.addWidget(self.combo_box)
 
         self.annotation_search = QLineEdit()
         self.annotation_search.setObjectName('annotationSearch')
+        self.annotation_search.setAccessibleName('Search annotations')
         self.annotation_search.setPlaceholderText('Search objects…')
         self.annotation_search.setToolTip(
             'Search class, type, provenance, or track ID')
@@ -511,6 +514,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.annotation_proxy.setSourceModel(self.annotation_model)
         self.label_list = UnifiedAnnotationView()
         self.label_list.setObjectName('unifiedAnnotationList')
+        self.label_list.setAccessibleName('Annotations')
         self.label_list.setModel(self.annotation_proxy)
         # Compatibility aliases now intentionally resolve to the one view.
         self.rect_label_list = self.label_list
@@ -548,6 +552,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # File list widget (existing list view)
         self.file_list_widget = QListWidget()
+        self.file_list_widget.setAccessibleName('Dataset files')
         self.file_list_widget.itemDoubleClicked.connect(self.file_item_double_clicked)
         self.file_list_widget.itemClicked.connect(self.file_item_clicked)
 
@@ -566,6 +571,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Status filter combo box
         self.status_filter_combo = QComboBox()
+        self.status_filter_combo.setAccessibleName(
+            'Filter files by annotation status')
         self.status_filter_combo.addItems([
             get_str('filterAll'),
             get_str('filterAnnotated'),

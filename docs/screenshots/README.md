@@ -5,14 +5,19 @@
 `assist-lifecycle-2026-08-25/` contains the controlled production-Qt matrix
 for setup, explicit download/cancel, typed failures, ready/running/preview,
 post-accept Track Forward, and closed-Assist states. Every required state is a
-full-window PNG at exact 800x600 and 1366x768 dimensions. The directory also
-retains four native computer-use JPEGs from the supplied-video pass: preview,
-accepted manual anchor, explicit propagation running, and pending review.
+full-window PNG at exact 800x600 and 1366x768 dimensions. The post-accept state
+is produced through a real task-local video model with one accepted manual
+anchor and timeline marker; it does not inject Track Forward availability. The
+directory also retains four native computer-use JPEGs from the supplied-video
+pass: preview, accepted manual anchor, explicit propagation running, and
+pending review.
 
 The matching acceptance record distinguishes controlled exact-size captures
 from native live evidence and records the real provider manifest, source-file
 integrity, accessibility names, focus behavior, and test gates:
 [`docs/testing/assist-lifecycle-acceptance.md`](../testing/assist-lifecycle-acceptance.md).
+The raw timestamped native provider cancel/no-retry/retry record is retained in
+[`provider-cancel-retry-transcript.md`](assist-lifecycle-2026-08-25/provider-cancel-retry-transcript.md).
 
 ## Video workspace supplied-file acceptance 2026-08-24
 

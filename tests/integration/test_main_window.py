@@ -404,8 +404,18 @@ def test_video_and_project_commits_start_new_workflow_sessions(
         tmp_path, monkeypatch):
     image = QImage(64, 48, QImage.Format_RGB32)
     image.fill(Qt.white)
+    decoders = []
+
+    class ControlledDecoder:
+        def __init__(self):
+            self.close_count = 0
+
+        def close(self):
+            self.close_count += 1
 
     def prepared(source_path, project_path):
+        decoder = ControlledDecoder()
+        decoders.append(decoder)
         frame_ref = SimpleNamespace(pts=0)
         frame = SimpleNamespace(
             image=image, display_width=64, frame_ref=frame_ref,
@@ -417,7 +427,7 @@ def test_video_and_project_commits_start_new_workflow_sessions(
             time_base_num=1, time_base_den=12, duration_pts=2,
             start_pts=0, average_rate_num=12, average_rate_den=1)
         return SimpleNamespace(
-            snapshot=snapshot, decoder=None, tracks=(), observations=(),
+            snapshot=snapshot, decoder=decoder, tracks=(), observations=(),
             frame_states=(), classes=(), gaps=(), warning=None)
 
     app, window = get_main_app()
@@ -438,6 +448,7 @@ def test_video_and_project_commits_start_new_workflow_sessions(
             prepared(tmp_path / 'clip.mp4', tmp_path / 'clip.sqlite'))
         assert window.workflow.snapshot.active_class is None
         assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.video_decoder is decoders[-1]
 
         window._active_class_selected('vehicle')
         window.activate_polygon_tool()
@@ -445,6 +456,8 @@ def test_video_and_project_commits_start_new_workflow_sessions(
             prepared(tmp_path / 'clip.mp4', tmp_path / 'clip.sqlite'))
         assert window.workflow.snapshot.active_class is None
         assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.video_decoder is decoders[-1]
+        assert _wait(app, lambda: decoders[0].close_count == 1)
     finally:
         window.dirty = False
         window.close()

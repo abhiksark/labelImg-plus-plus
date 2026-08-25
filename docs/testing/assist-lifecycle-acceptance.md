@@ -10,19 +10,25 @@ cache. Real image and supplied-video inference stayed provisional until Reject
 or Accept, acceptance used Active class and reached Saved, and video propagation
 did not start until **Track forward** was chosen explicitly.
 
-The fake provider in `tests/integration/test_assist_flow.py` is intentionally an
-orchestration seam only. It coordinates progress, cancellation, cleanup, retry,
-and controlled external inference without weakening the real size/SHA boundary
-owned by `model_cache` and the live manifest check below.
+The controlled acquisition provider and external fake inference backend in
+`tests/integration/test_assist_flow.py` are intentionally orchestration seams
+only. The test retains the real `SamController`, `TaskCoordinator` SAM lane,
+worker signals, prompt ordering, result generation, state, and MainWindow
+review/save flow. Real size/SHA validation remains owned by `model_cache` and
+the live manifest check below.
 
 ## Isolated live environment
 
-- Native wrapper: `/tmp/LabelImgPlusPlusTask6Native.app`, bundle identifier
-  `com.labelimgplusplus.task6.native`.
-- Cache: `/tmp/labelimgpp-task6-live/cache/labelimgpp`.
-- Project and generated annotations:
-  `/tmp/labelimgpp-task6-live/project`.
-- Settings: `/tmp/labelimgpp-task6-live/settings/live-settings.json`.
+- Final provider wrapper: `/tmp/LabelImgPlusPlusTask6Fix1C.app`, bundle
+  identifier `com.labelimgplusplus.task6.fix1c`.
+- Final provider cache:
+  `/tmp/labelimgpp-task6-fix1-live-20260825T182920Z/cache/labelimgpp`.
+- Final provider project/settings:
+  `/tmp/labelimgpp-task6-fix1-live-20260825T182920Z/project` and
+  `/tmp/labelimgpp-task6-fix1-live-20260825T182920Z/settings/settings.json`.
+- The earlier real image/video flow used the separate task-local
+  `/tmp/labelimgpp-task6-live` project/cache and native wrapper; the two runs
+  did not share user state.
 - Optional runtime: task-local `/tmp/labelimgpp-task6-live-venv`; no base
   dependency or user model cache was changed.
 - Image document:
@@ -48,30 +54,35 @@ The empty-cache setup UI exposed these details before any network work:
 | Purpose | Turn box or point prompts into object masks |
 | Provider | LabelImg++ GitHub Releases |
 | Download size | 42.6 MB / 44,658,940 bytes |
-| Storage | `/tmp/labelimgpp-task6-live/cache/labelimgpp` |
+| Storage | `/tmp/labelimgpp-task6-fix1-live-20260825T182920Z/cache/labelimgpp` |
 
-The visible **Download model** action started the real transfer. Progress
-reached 9,437,184 bytes on `mobile_sam.encoder.onnx`, then the visible
-**Cancel** action was chosen. The encoder happened to complete its atomic
-validation/promotion before cancellation landed, so that valid final file was
-retained; the decoder never started, the worker returned to **Ready to
-download** only after cleanup, and there was no incomplete artifact. A fresh
-30-second accessibility/state observation showed the same file set, no
-decoder, no `.part`, and no automatic retry.
+The visible **Download model** action started the bounded cancellation run at
+22:17:13Z. The visible **Cancel** action was chosen at 22:17:14Z, the panel
+truthfully showed **Cancelling…**, and it returned to **Ready to download** only
+after worker cleanup. Filesystem snapshots at 22:17:28Z and 22:18:22Z were both
+empty with no `.part`; an independent UI observation at 22:18:07Z remained
+Ready, proving there was no automatic retry for more than 30 seconds.
 
-The second visible **Download model** action completed the missing artifact.
-`cached_model_paths()` returned both paths and the final files matched the
-immutable provider manifest exactly:
+Explicit Retry was chosen only after that observation. The real provider
+exposed successively corrected finite-timeout/reuse boundaries while retaining
+cleanup on every failure. On reviewed HEAD `fbc74b4`, a full native process
+restart preserved the valid encoder and missing decoder. The explicit Retry at
+22:52:15Z reused the encoder unchanged, requested only the decoder with 64 KiB
+reads and a finite 10-second idle bound, and reached Ready at 22:52:33Z.
+`cached_model_paths()` returned both paths; no `.part` remained; and the final
+files matched the immutable provider manifest exactly:
 
 | Artifact | Bytes | SHA-256 | Result |
 |---|---:|---|---|
 | `mobile_sam.encoder.onnx` | 28,157,203 | `801d81952ee19217632966f7cfe07a8030c115a7fe5bfbec9294bfaf95e44a45` | Match |
 | `mobile_sam.decoder.onnx` | 16,501,737 | `001f6386a4c6036f6fac6a104d18d7c008c7eb188b2936dab749e34cae33e1c8` | Match |
 
-The post-check found `parts=[]`. The first relaunch also truthfully projected a
-typed runtime failure because the native wrapper could not see the task-local
-ONNX Runtime directory. Adding that directory only to the temporary wrapper's
-`LSEnvironment` recovered to Ready without downloading again.
+The encoder mtime remained `1787696443` before and after the decoder-only
+retry, providing direct evidence that it was reused rather than downloaded
+again. The full timestamped AX/filesystem transcript, including the main
+Cancel, cleanup, 30-second no-retry observation, explicit retries, and final
+hashes, is retained in
+[`provider-cancel-retry-transcript.md`](../screenshots/assist-lifecycle-2026-08-25/provider-cancel-retry-transcript.md).
 
 ## Native preview, accept, save, and tracking flow
 
@@ -121,6 +132,11 @@ The native accessibility tree exposed one contextual surface with these names:
 - `Accept Assist preview` and `Reject Assist preview`; and
 - `Track accepted Assist result forward`.
 
+The committed workspace accessibility gate also verifies `Annotation canvas`,
+`Active annotation class`, `Filter annotations by class`, `Search
+annotations`, `Annotations`, `Filter files by annotation status`, `Dataset
+files`, `Inspector`, and `Dataset gallery`.
+
 Opening Assist focused the state heading (`Set up Assist`, `Ready to download`,
 `Choose an Assist tool`, `Creating preview`, or `Review preview` as applicable).
 The native overlay regression verifies that the panel is visible above the
@@ -154,7 +170,7 @@ exists once at 800×600 and once at 1366×768 under
 | Ready | `ready-{size}.png` | Smart Box and Smart Points |
 | Running | `running-{size}.png` | Unchanged-document copy and indeterminate progress |
 | Preview | `preview-{size}.png` | Paint-only polygon, Accept, and Reject |
-| Post-accept | `post-accept-track-forward-{size}.png` | Manual-anchor copy and Track forward |
+| Post-accept | `post-accept-track-forward-{size}.png` | Real task-local video model with one accepted manual anchor/timeline marker; full Smart Box, Smart Points, and Track forward actions; no propagation |
 | Closed Assist | `assist-closed-{size}.png` | Panel absent; canvas focused |
 
 The screenshot integrity gate loaded all 24 files through `QImage`, verified
@@ -164,22 +180,34 @@ filename, and recorded SHA-256 digests. The four native JPEGs were each
 
 ## Deterministic RED / GREEN and offline gates
 
-- RED: the first complete lifecycle node reached the saved manual anchor but
-  failed because Track Forward was hidden. Exact call-order isolation showed
-  that fake ONNX bytes reached the real controller prepare path and correctly
-  projected setup-required instead of pretending to be ready.
-- GREEN: the harness now substitutes only the external inference runtime while
-  keeping real MainWindow, state, cache paths, worker coordination, prompt,
-  preview, reject/accept, video model, save, and propagation ownership. The
-  focused file passes `3 passed`.
+- RED: after removing the direct `SamController.run_prompt` monkeypatch and
+  direct MainWindow preview injection, the controlled external inference
+  backend lacked the planned `prepare_mask` coordination point and the real
+  controller lifecycle failed with `AttributeError`. This proved the test was
+  traversing the controller rather than publishing a preview itself.
+- GREEN: the backend now blocks and releases deterministic masks through its
+  external `set_image`/`predict` boundary. Real `SamController`,
+  `TaskCoordinator` SAM lane, worker signals, prompts, `SamResult` polygon
+  generation, MainWindow state, preview, reject/accept, video model, save, and
+  explicit propagation ownership remain exercised. The focused file passes
+  `3 passed`; the release-finding compatibility/accessibility selection passes
+  `7 passed`.
 - The native QAction/overlay regression initially reproduced a panel that was
   logically visible but painted behind the stacked workspace. After the
   independently reviewed Task 3 overlay fix, the exact native user path is
   GREEN and remains in `test_smart_select_action_opens_visible_focused_assist`.
 - Network-disabled aggregate:
-  `96 passed, 3 skipped in 5.45s` across Task 1–6 Assist state, manifest, cache,
-  segmentation, backend, panel, canvas, controller, MainWindow, and the Task 6
-  flow. A `sitecustomize.py` socket sentinel rejected outbound socket creation.
+  `109 passed, 2 skipped in 33.34s` across Task 1–6 Assist state, manifest,
+  cache, segmentation, backend, panel, canvas, controller, MainWindow, and the
+  Task 6 flow. A `sitecustomize.py` socket sentinel rejected outbound network
+  connections. The count replaces the stale 96/97 evidence after the reviewed
+  provider fixes and release-finding regressions were collected. The exact
+  staged-index export repeated the same result in `29.50s`.
+- A fresh-process segmented release gate exercised every one of the `1,338`
+  collected nodes from the exact staged-index export. Non-plugin segments
+  passed `1,300` nodes with `3` optional skips; four plugin-sensitive files ran
+  in separate normal-environment processes and passed their remaining `35`
+  nodes. Corrected total: `1,335 passed, 3 skipped, 0 failed`.
 
 The bounded integrated hardening, Python 3.8, Ruff F, screenshot, diff, and
 exact-index results are recorded in the Task 6 SDD report.

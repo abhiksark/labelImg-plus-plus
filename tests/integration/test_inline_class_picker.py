@@ -3,6 +3,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app
+from libs.core.assist_state import AssistPhase
 from libs.core.sam_types import SamResult
 from libs.core.shape import Shape, ShapeType
 from libs.core.video_types import DocumentKind
@@ -175,7 +176,8 @@ def test_document_reset_cancels_picker_and_drops_only_provisional_geometry(
         app.processEvents()
 
 
-def test_sam_picker_escape_discards_result_without_mutation(tmp_path):
+def test_assist_picker_escape_keeps_preview_without_document_mutation(
+        tmp_path):
     app, window = get_main_app()
     try:
         _prepare_image(window, tmp_path)
@@ -183,18 +185,29 @@ def test_sam_picker_escape_discards_result_without_mutation(tmp_path):
         result = SamResult(
             polygon=((10.0, 10.0), (80.0, 10.0), (80.0, 60.0)),
             bounds=(10.0, 10.0, 81.0, 61.0))
-        window.sam_controller._on_finished(
-            window.sam_controller._gen, result, None)
-        assert window.canvas.provisional_shape is not None
+        window.assist_state.ready('test-assist')
+        window.assist_state.start_run(window._dataset_generation)
+        window._on_assist_preview(window._dataset_generation, result)
+        assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+        assert window.canvas.assist_preview_shape is not None
+        assert window.canvas.provisional_shape is None
+
+        assert window.accept_assist_preview() is False
         assert window.class_picker.isVisible()
 
         QTest.keyClick(window.class_picker.edit, Qt.Key_Escape)
         app.processEvents()
+        assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+        assert window.canvas.assist_preview_shape is not None
         assert window.canvas.provisional_shape is None
         assert window.canvas.shapes == []
         assert window.annotation_model.rowCount() == 0
         assert not window.dirty
         assert not window.undo_stack.can_undo()
+
+        assert window.reject_assist_preview() is True
+        assert window.assist_state.snapshot.phase is AssistPhase.READY
+        assert window.canvas.assist_preview_shape is None
     finally:
         window.dirty = False
         window.close()

@@ -787,6 +787,7 @@ class GalleryWidget(QWidget):
     def _setup_ui(self):
         """Initialize UI components."""
         self.list_widget = QListWidget(self)
+        self.list_widget.setAccessibleName('Dataset gallery')
         self.list_widget.setViewMode(QListView.IconMode)
         self._apply_icon_size()
         self.list_widget.setResizeMode(QListView.Adjust)

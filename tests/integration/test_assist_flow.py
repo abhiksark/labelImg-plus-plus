@@ -23,7 +23,6 @@ from libs.core.assist_state import (
     AssistPrompt,
     AssistSnapshot,
 )
-from libs.core.sam_types import SamResult
 from libs.core.shape import Shape
 from libs.core.shape import ShapeType
 from libs.core.video_types import PropagationResult
@@ -124,19 +123,41 @@ class ControlledModelProvider:
     def allow_success(self):
         self.succeed = True
 
-    @staticmethod
-    def finish_inference(window, result):
-        window._on_assist_preview(window._dataset_generation, result)
-
-
 class ControlledInferenceBackend:
-    """Minimal external runtime seam used by the controller's prepare job."""
+    """External predictor seam; controller/coordinator/signals stay real."""
 
     def __init__(self):
         self.images = []
+        self.prompts = []
+        self.started = threading.Event()
+        self._release = threading.Event()
+        self._bounds = None
 
     def set_image(self, image):
         self.images.append(image.shape)
+
+    def prepare_mask(self, bounds):
+        self._bounds = tuple(int(value) for value in bounds)
+        self.started.clear()
+        self._release.clear()
+
+    def release_result(self):
+        self._release.set()
+
+    def predict(self, prompt):
+        import numpy as np
+
+        assert self.images
+        assert self._bounds is not None
+        self.prompts.append(prompt)
+        self.started.set()
+        if not self._release.wait(2.0):
+            raise RuntimeError('controlled inference result was not released')
+        height, width = self.images[-1][:2]
+        left, top, right, bottom = self._bounds
+        mask = np.zeros((height, width), dtype=bool)
+        mask[top:bottom, left:right] = True
+        return mask
 
 
 CAPTURE_SIZES = ((800, 600), (1366, 768))
@@ -192,8 +213,6 @@ def _capture_snapshot(name):
         return replace(
             base, phase=AssistPhase.PREVIEW,
             document_generation=1, preview=object()), False
-    if name == 'post-accept-track-forward':
-        return replace(base, phase=AssistPhase.READY), True
     raise ValueError(name)
 
 
@@ -206,6 +225,72 @@ def _capture_preview_shape():
     return shape
 
 
+def _prepare_track_forward_capture(window, video_path, project_path):
+    """Create the post-accept state through a real task-local video model."""
+    assert window.open_video(str(video_path), project_path=str(project_path))
+    inference = ControlledInferenceBackend()
+    window.sam_controller.backend = inference
+    window.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+    window.activate_smart_points_tool()
+    assert _wait(lambda: not window.sam_controller._busy)
+    assert inference.images
+    prompt = AssistPrompt(
+        mode='points', positive_points=((36.0, 32.0),))
+    inference.prepare_mask((18, 14, 55, 51))
+    window._on_assist_prompt(prompt)
+    assert inference.started.wait(1.0)
+    assert inference.prompts == [prompt]
+    inference.release_result()
+    assert _wait(lambda: window.assist_state.snapshot.phase
+                 is AssistPhase.PREVIEW)
+    assert window.assist_state.snapshot.preview.result.bounds == (
+        18.0, 14.0, 55.0, 51.0)
+    window.workflow.set_active_class('vehicle')
+    assert window.accept_assist_preview() is True
+    assert _wait(lambda: window.continuous_save.state == 'saved')
+
+    anchors = tuple(
+        item for item in window.video_model.observations.values()
+        if item.source == 'manual' and item.review_state == 'accepted'
+        and item.anchor)
+    assert len(window.video_model.tracks) == 1
+    assert len(anchors) == 1
+    assert window._propagation_handle is None
+    assert window._assist_track_forward_available()
+    pts = int(anchors[0].pts)
+    assert window.video_timeline._marker_pts_by_kind['accepted'] == (
+        (pts, pts),)
+    assert '1 accepted' in window.video_timeline.slider \
+        .accessibleDescription()
+    window.workspace_pages.show_assist()
+    window._project_assist()
+
+
+_CAPTURE_BUTTONS = {
+    'setup-required': ('Download model',),
+    'ready-to-download': ('Download model',),
+    'downloading-cancel': ('Cancel',),
+    'offline-failure': ('Retry',),
+    'validation-failure': ('Retry',),
+    'ready': ('Smart Box', 'Smart Points'),
+    'running': (),
+    'preview': ('Accept', 'Reject'),
+    'post-accept-track-forward': (
+        'Smart Box', 'Smart Points', 'Track forward'),
+}
+
+
+def _assert_capture_actions(panel, name):
+    visible = tuple(
+        button for button in panel._phase_buttons() if button.isVisible())
+    assert tuple(button.text() for button in visible) == \
+        _CAPTURE_BUTTONS[name]
+    for button in visible:
+        assert panel.rect().contains(button.geometry())
+        text_width = button.fontMetrics().boundingRect(button.text()).width()
+        assert button.width() >= text_width + 16
+
+
 def capture_assist_lifecycle_matrix(output_dir, workspace_dir):
     """Write truthful controlled product states when display size is limited."""
     output_dir = Path(output_dir)
@@ -216,17 +301,23 @@ def capture_assist_lifecycle_matrix(output_dir, workspace_dir):
     image = QImage(640, 480, QImage.Format_RGB32)
     image.fill(QColor('#dce6ee'))
     assert image.save(str(image_path), 'PNG')
+    videos = {
+        size: Path(_make_video(
+            workspace_dir / ('assist-track-forward-%sx%s.mp4' % size)))
+        for size in CAPTURE_SIZES
+    }
 
     app_instance, window = app_mod.get_main_app()
     captured = []
     try:
         window.default_save_dir = str(workspace_dir)
+        window.save_changes_automatically.setChecked(True)
         window.show()
-        assert window.load_file(str(image_path))
-        window._active_class_selected('car')
         panel = window.workspace_pages.assist_panel
 
         for width, height in CAPTURE_SIZES:
+            assert window.load_file(str(image_path))
+            window._active_class_selected('car')
             window.resize(width, height)
             app.processEvents()
             for name in CAPTURE_STATES:
@@ -234,6 +325,14 @@ def capture_assist_lifecycle_matrix(output_dir, workspace_dir):
                 if name == 'assist-closed':
                     window.workspace_pages.hide_assist()
                     window.canvas.setFocus()
+                elif name == 'post-accept-track-forward':
+                    video_path = videos[(width, height)]
+                    project_path = workspace_dir / (
+                        'assist-track-forward-%sx%s.labelimgpp.sqlite' % (
+                            width, height))
+                    _prepare_track_forward_capture(
+                        window, video_path, project_path)
+                    panel.state_label.setFocus()
                 else:
                     snapshot, track_forward = _capture_snapshot(name)
                     window.workspace_pages.show_assist()
@@ -260,6 +359,7 @@ def capture_assist_lifecycle_matrix(output_dir, workspace_dir):
                 else:
                     assert panel.isVisible()
                     assert panel.state_label.hasFocus()
+                    _assert_capture_actions(panel, name)
                 captured.append(path)
     finally:
         window.dirty = False
@@ -325,7 +425,6 @@ def test_explicit_cancel_retry_review_accept_and_track_lifecycle(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError('offline acceptance attempted network access')))
 
-    prompts = []
     app_instance, window = app_mod.get_main_app()
     video = _make_video(tmp_path / 'assist-lifecycle.mp4')
     try:
@@ -374,19 +473,19 @@ def test_explicit_cancel_retry_review_accept_and_track_lifecycle(
         window.activate_smart_points_tool()
         assert _wait(lambda: not window.sam_controller._busy)
         assert inference.images
-        monkeypatch.setattr(
-            window.sam_controller, 'run_prompt', prompts.append)
         first_prompt = AssistPrompt(
             mode='points', positive_points=((20.0, 20.0),))
+        inference.prepare_mask((8, 8, 43, 39))
         window._on_assist_prompt(first_prompt)
-        assert prompts == [first_prompt]
+        assert inference.started.wait(1.0)
+        assert inference.prompts == [first_prompt]
         assert window.assist_state.snapshot.phase is AssistPhase.RUNNING
-
-        first_result = SamResult(
-            polygon=((8.0, 8.0), (42.0, 8.0), (42.0, 38.0)),
-            bounds=(8.0, 8.0, 43.0, 39.0))
-        provider.finish_inference(window, first_result)
-        assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+        inference.release_result()
+        assert _wait(lambda: window.assist_state.snapshot.phase
+                     is AssistPhase.PREVIEW)
+        first_result = window.assist_state.snapshot.preview.result
+        assert first_result.bounds == (8.0, 8.0, 43.0, 39.0)
+        assert first_result.polygon
         assert window.canvas.assist_preview_shape is not None
         protected = (
             window.video_model.snapshot_state(),
@@ -404,12 +503,17 @@ def test_explicit_cancel_retry_review_accept_and_track_lifecycle(
         refined_prompt = AssistPrompt(
             mode='points', positive_points=((20.0, 20.0),),
             negative_points=((6.0, 6.0),))
+        inference.prepare_mask((10, 10, 45, 41))
         window._on_assist_prompt(refined_prompt)
-        assert prompts[-1] == refined_prompt
-        second_result = SamResult(
-            polygon=((10.0, 10.0), (44.0, 10.0), (44.0, 40.0)),
-            bounds=(10.0, 10.0, 45.0, 41.0))
-        provider.finish_inference(window, second_result)
+        assert inference.started.wait(1.0)
+        assert inference.prompts == [first_prompt, refined_prompt]
+        assert window.assist_state.snapshot.phase is AssistPhase.RUNNING
+        inference.release_result()
+        assert _wait(lambda: window.assist_state.snapshot.phase
+                     is AssistPhase.PREVIEW)
+        second_result = window.assist_state.snapshot.preview.result
+        assert second_result.bounds == (10.0, 10.0, 45.0, 41.0)
+        assert second_result.polygon
         window.workflow.set_active_class('vehicle')
         assert window.accept_assist_preview() is True
         assert _wait(lambda: window.continuous_save.state == 'saved')
