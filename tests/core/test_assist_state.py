@@ -35,6 +35,27 @@ def test_stale_preview_cannot_replace_new_document():
     assert assist.snapshot == before
 
 
+def test_stale_preview_after_preview_is_non_mutating_false():
+    assist = AssistState()
+    assist.ready()
+    assist.start_run(document_generation=2)
+    assist.show_preview(document_generation=2, result='current')
+    before = assist.snapshot
+    assert not assist.show_preview(document_generation=1, result='stale')
+    assert assist.snapshot == before
+
+
+def test_stale_preview_after_accept_is_non_mutating_false():
+    assist = AssistState()
+    assist.ready()
+    assist.start_run(document_generation=2)
+    assist.show_preview(document_generation=2, result='current')
+    assist.accept_preview()
+    before = assist.snapshot
+    assert not assist.show_preview(document_generation=1, result='stale')
+    assert assist.snapshot == before
+
+
 def test_invalid_lifecycle_transitions_raise_value_error():
     assist = AssistState()
     with pytest.raises(ValueError):

@@ -89,9 +89,10 @@ class AssistState:
             failure_kind=None, message='')
 
     def show_preview(self, document_generation, result):
-        self._require_phase(AssistPhase.RUNNING)
-        if int(document_generation) != self.snapshot.document_generation:
+        generation = int(document_generation)
+        if generation != self.snapshot.document_generation:
             return False
+        self._require_phase(AssistPhase.RUNNING)
         self.snapshot = replace(
             self.snapshot, phase=AssistPhase.PREVIEW, preview=result)
         return True
