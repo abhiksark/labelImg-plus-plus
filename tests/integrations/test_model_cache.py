@@ -246,7 +246,7 @@ def test_default_timeout_is_forwarded_for_finite_cdn_idle_gap(
 
 def test_slow_stream_uses_cancellation_responsive_read_size(
         tmp_path, fake_manifest, monkeypatch):
-    """Catches a 1 MiB read exceeding the two-second socket timeout."""
+    """Catches a 1 MiB read exceeding a finite socket idle bound."""
     requested_sizes = []
 
     class SlowResponse(ChunkedResponse):
