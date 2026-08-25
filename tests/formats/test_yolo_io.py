@@ -517,6 +517,31 @@ class TestYoloReader(unittest.TestCase):
         self.assertAlmostEqual(x_max, 60, delta=1)
         self.assertAlmostEqual(y_max, 80, delta=1)
 
+    def test_continuous_save_roundtrip_preserves_yolo_box_semantics(self):
+        """A normal rewrite keeps prior boxes while adding the new mutation."""
+        txt_path = os.path.join(self.temp_dir, 'continuous.txt')
+        initial = YOLOWriter(self.temp_dir, 'continuous', (100, 100, 3))
+        initial.add_bnd_box(10, 20, 40, 60, 'cat', difficult=False)
+        initial.save(class_list=['cat'], target_file=txt_path)
+
+        image = MockQImage(100, 100)
+        loaded = YoloReader(txt_path, image)
+        updated = YOLOWriter(self.temp_dir, 'continuous', (100, 100, 3))
+        for label, points, _line, _fill, difficult in loaded.get_shapes():
+            updated.add_bnd_box(
+                points[0][0], points[0][1], points[2][0], points[2][1],
+                label, difficult)
+        updated.add_bnd_box(50, 10, 80, 30, 'dog', difficult=False)
+        updated.save(target_file=txt_path)
+
+        reopened = YoloReader(txt_path, image)
+        self.assertFalse(reopened.verified)
+        self.assertEqual(
+            [(shape[0], shape[1]) for shape in reopened.get_shapes()],
+            [('cat', [(10, 20), (40, 20), (40, 60), (10, 60)]),
+             ('dog', [(50, 10), (80, 10), (80, 30), (50, 30)])],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -91,6 +91,35 @@ class TestCOCOWriter(unittest.TestCase):
             [category['name'] for category in data['categories']],
             ['cat', 'dog'])
 
+    def test_continuous_save_roundtrip_preserves_coco_semantics(self):
+        """A normal rewrite retains existing geometry, labels, and difficulty."""
+        initial = COCOWriter('folder', 'frame.jpg', [100, 100, 3])
+        initial.add_bnd_box(10, 20, 40, 60, 'cat', True)
+        initial.save(self.out_path)
+
+        loaded = COCOReader(self.out_path, 'frame.jpg')
+        updated = COCOWriter('folder', 'frame.jpg', [100, 100, 3])
+        for label, points, _line, _fill, difficult, shape_type, keypoints in \
+                loaded.get_shapes():
+            if shape_type == 'polygon':
+                updated.add_polygon(points, label, difficult, keypoints)
+            else:
+                updated.add_bnd_box(
+                    points[0][0], points[0][1], points[2][0], points[2][1],
+                    label, difficult, keypoints)
+        updated.add_polygon([(50, 10), (80, 10), (65, 30)], 'dog', False)
+        updated.save(self.out_path)
+
+        reopened = COCOReader(self.out_path, 'frame.jpg')
+        self.assertFalse(reopened.verified)
+        self.assertEqual(
+            [(shape[0], shape[1], shape[4], shape[5])
+             for shape in reopened.get_shapes()],
+            [('cat', [(10, 20), (40, 20), (40, 60), (10, 60)],
+              True, 'rectangle'),
+             ('dog', [(50, 10), (80, 10), (65, 30)], False, 'polygon')],
+        )
+
 
 class TestCOCOReader(unittest.TestCase):
 

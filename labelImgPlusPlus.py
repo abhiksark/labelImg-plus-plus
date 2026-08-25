@@ -83,7 +83,7 @@ from libs.core.commands import (
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
-    clamp_inspector_width, load_prompt_policy, load_workspace_settings,
+    clamp_inspector_width, load_workspace_settings, migrate_workflow_settings,
 )
 from libs.core.view_transform import ViewMode, ViewTransform
 from libs.core.annotation_workflow import (
@@ -151,7 +151,7 @@ from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
-    SETTING_AUTO_SAVE, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
+    SETTING_CONTINUOUS_SAVE, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
     SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
@@ -296,7 +296,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.settings = Settings()
         self.settings.load()
         settings = self.settings
-        self.workflow = AnnotationWorkflow(load_prompt_policy(settings))
+        self.workflow_settings = migrate_workflow_settings(settings)
+        self.workflow = AnnotationWorkflow(
+            self.workflow_settings.prompt_policy)
         self.workspace_settings = load_workspace_settings(settings)
         self.sam_output_mode = normalize_sam_output_mode(
             settings.get(SETTING_SAM_OUTPUT_MODE, 'polygon'))
@@ -335,7 +337,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._assist_track_forward_anchor = None
         self._initialize_assist_state()
         self.continuous_save = ContinuousSaveCoordinator(
-            delay_ms=250, parent=self)
+            delay_ms=self.workflow_settings.continuous_delay_ms, parent=self)
         self.continuous_save.saveRequested.connect(
             self._dispatch_continuous_save)
         self.continuous_save.stateChanged.connect(
@@ -1110,7 +1112,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'Save changes automatically', self)
         self.save_changes_automatically.setCheckable(True)
         self.save_changes_automatically.setChecked(
-            settings.get(SETTING_AUTO_SAVE, True))
+            self.workflow_settings.continuous_save)
         self.save_changes_automatically.setToolTip(
             'Save each completed annotation change automatically')
         self.save_changes_automatically.toggled.connect(
@@ -7291,9 +7293,8 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             settings[SETTING_LAST_OPEN_DIR] = ''
 
-        settings[SETTING_AUTO_SAVE] = \
+        settings[SETTING_CONTINUOUS_SAVE] = \
             self.save_changes_automatically.isChecked()
-        settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PROMPT_POLICY] = self.workflow.snapshot.prompt_policy.value
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()

@@ -50,6 +50,30 @@ class TestYOLOSegWriter(unittest.TestCase):
         parts = line.split()
         self.assertEqual(len(parts), 9)  # class + 4 points * 2 coords
 
+    def test_continuous_save_roundtrip_preserves_yolo_polygon_semantics(self):
+        """A normal rewrite keeps prior polygons while adding the mutation."""
+        image = QImage(100, 100, QImage.Format_RGB32)
+        initial = YOLOSegWriter('folder', 'test.jpg', [100, 100, 3])
+        initial.add_polygon([(10, 20), (40, 20), (25, 60)], 'cat', False)
+        initial.save(target_file=self.out_path, class_list=['cat'])
+
+        loaded = YOLOSegReader(self.out_path, image)
+        updated = YOLOSegWriter('folder', 'test.jpg', [100, 100, 3])
+        for label, points, _line, _fill, difficult, _shape_type in \
+                loaded.get_shapes():
+            updated.add_polygon(points, label, difficult)
+        updated.add_polygon([(50, 10), (80, 10), (65, 30)], 'dog', False)
+        updated.save(target_file=self.out_path)
+
+        reopened = YOLOSegReader(self.out_path, image)
+        self.assertFalse(reopened.verified)
+        self.assertEqual(
+            [(shape[0], shape[1], shape[5])
+             for shape in reopened.get_shapes()],
+            [('cat', [(10, 20), (40, 20), (25, 60)], 'polygon'),
+             ('dog', [(50, 10), (80, 10), (65, 30)], 'polygon')],
+        )
+
     def test_existing_class_map_is_preserved_for_old_annotations(self):
         """An existing classes.txt is authoritative for the whole dataset."""
         classes_path = os.path.join(self.tmp_dir, 'classes.txt')

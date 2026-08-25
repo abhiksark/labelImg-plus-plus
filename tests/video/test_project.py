@@ -11,7 +11,8 @@ from libs.core.video_project import (
     save_project_delta, validate_project_source,
 )
 from libs.core.video_types import (
-    ObservationRecord, TrackGapRecord, TrackRecord, VideoSaveRequest,
+    FrameStateRecord, ObservationRecord, TrackGapRecord, TrackRecord,
+    VideoSaveRequest,
 )
 
 
@@ -100,6 +101,35 @@ def test_revision_guard_rolls_back_conflicting_delta(tmp_path):
     assert [track.track_id for track in contents.tracks] == ['track-1']
     assert contents.observations == (observation,)
     assert contents.classes == ('car',)
+
+
+def test_continuous_save_roundtrip_preserves_video_project_semantics(tmp_path):
+    """A second project save preserves prior geometry, class, and verification."""
+    _source, project, _fingerprint = _project(tmp_path)
+    track = TrackRecord('track-1', 'car', 'rectangle', (1, 2, 3, 255))
+    first = ObservationRecord(
+        'track-1', 0, [1, 2, 10, 20], source='manual',
+        review_state='accepted', anchor=True, revision=1)
+    verified = FrameStateRecord(0, True, revision=1)
+    assert save_project_delta(VideoSaveRequest(
+        project, 0, 1, tracks=(track,), observations=(first,),
+        frame_states=(verified,), touched_tracks=('track-1',),
+        classes=('car',))) == 1
+
+    loaded = load_project(project)
+    second = ObservationRecord(
+        'track-1', 5, [2, 3, 12, 24], source='manual',
+        review_state='accepted', anchor=True, revision=2)
+    assert save_project_delta(VideoSaveRequest(
+        project, loaded.revision, 2, observations=(second,),
+        touched_tracks=('track-1',))) == 2
+
+    reopened = load_project(project)
+    assert reopened.revision == 2
+    assert reopened.tracks == (track,)
+    assert reopened.observations == (first, second)
+    assert reopened.frame_states == (verified,)
+    assert reopened.classes == ('car',)
 
 
 def test_gap_delta_insert_replace_delete_and_revision_conflict(tmp_path):
