@@ -1,5 +1,19 @@
 # Screenshots
 
+## Assist lifecycle acceptance 2026-08-25
+
+`assist-lifecycle-2026-08-25/` contains the controlled production-Qt matrix
+for setup, explicit download/cancel, typed failures, ready/running/preview,
+post-accept Track Forward, and closed-Assist states. Every required state is a
+full-window PNG at exact 800x600 and 1366x768 dimensions. The directory also
+retains four native computer-use JPEGs from the supplied-video pass: preview,
+accepted manual anchor, explicit propagation running, and pending review.
+
+The matching acceptance record distinguishes controlled exact-size captures
+from native live evidence and records the real provider manifest, source-file
+integrity, accessibility names, focus behavior, and test gates:
+[`docs/testing/assist-lifecycle-acceptance.md`](../testing/assist-lifecycle-acceptance.md).
+
 ## Video workspace supplied-file acceptance 2026-08-24
 
 `video-workspace-2026-08-24/` contains the 32-state video acceptance matrix at
