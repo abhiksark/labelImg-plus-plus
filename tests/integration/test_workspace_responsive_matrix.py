@@ -25,6 +25,9 @@ from libs.widgets.videoTimelineWidget import VideoTimelineWidget
 app = QApplication.instance() or QApplication([])
 
 _SIZES = ((800, 600), (960, 640), (1366, 768), (1440, 900))
+_VIDEO_PROJECTIONS = tuple((size, False, 'compact') for size in _SIZES) + (
+    ((1600, 900), True, 'wide'),
+)
 _NORMAL_TEXT_PAIRS = (
     ('text', 'background'),
     ('text', 'surface'),
@@ -191,21 +194,22 @@ def _window_rect(widget, window):
     return QRect(widget.mapTo(window, QPoint(0, 0)), widget.size())
 
 
-@pytest.mark.parametrize('size', _SIZES)
-def test_video_transport_projects_essential_controls_without_overlap(
-        window, size):
-    """MainWindow keeps the active video transport reachable at every size."""
+def _show_video_transport(window, size, collapse_inspector):
     window._set_document_kind(DocumentKind.VIDEO)
     timeline = window.video_timeline
     timeline.set_session(_timeline_snapshot())
     timeline.set_markers(accepted=(3400,), pending=(5000,))
     _show(window, size, 'canvas')
+    if collapse_inspector:
+        window.workspace_shell.close_inspector()
+        QApplication.processEvents()
+        QApplication.processEvents()
+    return timeline
 
-    controls = (
-        timeline.previous_button, timeline.play_button, timeline.next_button,
-        timeline.slider, timeline.time_edit, timeline.speed_combo,
-        timeline.track_button, timeline.legend_button,
-    )
+
+def _assert_controls_are_visible_in_timeline(window, timeline, controls):
+    assert not _target_failures(visible_primary_targets(timeline))
+
     rectangles = []
     for control in controls:
         assert control.isVisibleTo(window), control.accessibleName()
@@ -219,6 +223,41 @@ def test_video_transport_projects_essential_controls_without_overlap(
         for other_name, other_rect in rectangles[index + 1:]:
             assert not rect.intersects(other_rect), '%s overlaps %s' % (
                 name, other_name)
+
+
+@pytest.mark.parametrize(
+    ('size', 'collapse_inspector', 'expected_mode'), _VIDEO_PROJECTIONS)
+def test_video_transport_projects_mode_specific_controls_without_overlap(
+        window, size, collapse_inspector, expected_mode):
+    """MainWindow exposes the correct transport action path for its layout."""
+    timeline = _show_video_transport(window, size, collapse_inspector)
+    assert timeline.layout_mode == expected_mode
+
+    shared_controls = (
+        timeline.previous_button, timeline.play_button, timeline.next_button,
+        timeline.slider, timeline.time_edit, timeline.speed_combo,
+        timeline.legend_button,
+    )
+    if timeline.layout_mode == 'compact':
+        assert timeline.track_button.isVisibleTo(window)
+        assert timeline.track_button.menu() is timeline.track_menu
+        assert tuple(
+            action.text() for action in timeline.track_menu.actions()
+            if not action.isSeparator()) == (
+                'Track all anchors', 'Track selected object',
+                'Accept propagated results', 'Reject propagated results',
+                'Cancel',
+            )
+        mode_controls = (timeline.track_button,)
+    else:
+        assert not timeline.track_button.isVisibleTo(window)
+        mode_controls = (
+            timeline.propagate_all_button,
+            timeline.propagate_selected_button,
+        )
+
+    _assert_controls_are_visible_in_timeline(
+        window, timeline, shared_controls + mode_controls)
 
 
 @pytest.mark.parametrize('theme', (Theme.LIGHT, Theme.DARK))

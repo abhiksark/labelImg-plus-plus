@@ -414,13 +414,20 @@ class VideoTimelineWidget(QWidget):
                                 cancel_action, accept_action=None,
                                 reject_action=None):
         self.propagate_all_button.setDefaultAction(all_action)
+        self.propagate_all_button.setAccessibleName(all_action.text())
         self.propagate_selected_button.setDefaultAction(selected_action)
+        self.propagate_selected_button.setAccessibleName(selected_action.text())
         self.cancel_propagation_button.setDefaultAction(cancel_action)
+        self.cancel_propagation_button.setAccessibleName(cancel_action.text())
         self._review_actions_configured = (
             accept_action is not None and reject_action is not None)
         if self._review_actions_configured:
             self.accept_propagation_button.setDefaultAction(accept_action)
+            self.accept_propagation_button.setAccessibleName(
+                accept_action.text())
             self.reject_propagation_button.setDefaultAction(reject_action)
+            self.reject_propagation_button.setAccessibleName(
+                reject_action.text())
         self.track_menu.clear()
         self.track_menu.addAction(all_action)
         self.track_menu.addAction(selected_action)
