@@ -140,6 +140,11 @@ small in-memory video frames and explicit lifecycle values where a network
 provider, downloaded model, decoder, or long worker would otherwise be
 nondeterministic; it neither opens nor changes supplied source media.
 
+Each capture applies its requested theme only while it creates the PNG, then
+restores the window's prior theme. A setup or PNG-write failure releases the
+harness-owned save, menu, Assist, shutdown, and loading projections without
+cancelling application workers.
+
 ## Workspace 3.2
 
 `workspace-3.2-balanced/` contains the accepted browser-lab contract for the

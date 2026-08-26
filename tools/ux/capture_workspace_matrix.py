@@ -148,11 +148,18 @@ def _empty_workspace(window):
 def _first_image_fit(window):
     _clear_capture_save_state(window)
     context = _context(window)
-    if window.file_path != context.image_path:
+    expected_path = os.path.abspath(context.image_path)
+    current_path = (os.path.abspath(window.file_path)
+                    if window.file_path else None)
+    if (window.document_kind != DocumentKind.IMAGE
+            or current_path != expected_path):
         window.default_save_dir = None
         window.label_file_format = LabelFileFormat.PASCAL_VOC
         window.save_changes_automatically.setChecked(True)
-        assert window.import_dir_images(context.dataset_dir)
+        # Publish the declared fixture directly.  The output directory may
+        # share its parent during tests, so scanning it could select a prior
+        # PNG artifact instead of the named sample image.
+        assert window.load_file(expected_path)
     window.workspace_shell.close_inspector()
     window.set_fit_window()
     assert _wait(lambda: window.canvas.pixmap is not None)
@@ -429,7 +436,26 @@ def cleanup_scenario(window):
     window._assist_download_progress = None
     window._assist_prompt = None
     window._assist_document_identity = None
+    # Capture setup never starts a worker.  Settle only its visible loading
+    # projection; this does not cancel or otherwise control a live worker.
+    window._settle_replacement_loading(settle_unowned=True)
     _settle()
+
+
+def _image_projection_is_ready(window):
+    """Return whether the canvas shows the capture context's image document."""
+    context = _context(window)
+    expected_path = os.path.abspath(context.image_path)
+    current_path = (os.path.abspath(window.file_path)
+                    if window.file_path else None)
+    pixmap = window.canvas.pixmap
+    timeline = window.video_timeline
+    return (window.document_kind == DocumentKind.IMAGE
+            and current_path == expected_path
+            and pixmap is not None and not pixmap.isNull()
+            and not timeline.isVisible()
+            and not timeline.isEnabled()
+            and timeline._snapshot is None)
 
 
 def scenario_is_meaningful(window, scenario):
@@ -439,7 +465,12 @@ def scenario_is_meaningful(window, scenario):
         if expected_save_state is not None and \
                 window.continuous_save.state != expected_save_state:
             return False
-        return len(window.canvas.shapes) == SCENARIO_SHAPE_COUNTS[scenario]
+        if scenario == 'empty-workspace':
+            return (window.document_kind == DocumentKind.NONE
+                    and len(window.canvas.shapes) == 0)
+        return (_image_projection_is_ready(window)
+                and len(window.canvas.shapes)
+                == SCENARIO_SHAPE_COUNTS[scenario])
     if scenario == 'video-paused':
         return (window.document_kind == DocumentKind.VIDEO
                 and not window.video_timeline._playing)
@@ -458,21 +489,25 @@ def scenario_is_meaningful(window, scenario):
                 and window.video_timeline._propagation_review_counts[0] == 3)
     panel = window.workspace_pages.assist_panel
     if scenario == 'assist-setup':
-        return (panel.isVisible()
+        return (_image_projection_is_ready(window)
+                and panel.isVisible()
                 and window.assist_state.snapshot.phase
                 is AssistPhase.SETUP_REQUIRED)
     if scenario == 'assist-downloading':
-        return (panel.isVisible()
+        return (_image_projection_is_ready(window)
+                and panel.isVisible()
                 and window.assist_state.snapshot.phase
                 is AssistPhase.DOWNLOADING
                 and window._assist_download_progress is not None)
     if scenario == 'assist-failure':
-        return (panel.isVisible()
+        return (_image_projection_is_ready(window)
+                and panel.isVisible()
                 and window.assist_state.snapshot.phase is AssistPhase.FAILED
                 and window.assist_state.snapshot.failure_kind
                 is AssistFailureKind.OFFLINE)
     if scenario == 'assist-preview':
-        return (panel.isVisible()
+        return (_image_projection_is_ready(window)
+                and panel.isVisible()
                 and window.assist_state.snapshot.phase is AssistPhase.PREVIEW
                 and window.canvas.assist_preview_shape is not None)
     if scenario == 'shutdown-timeout':
@@ -490,6 +525,9 @@ def capture_scenario(window, scenario, size, theme, output_dir):
     if tuple(size) not in SIZES:
         raise ValueError('unsupported capture size: %s' % (size,))
     original_policy = window.workflow.snapshot.prompt_policy
+    original_theme = window._current_theme
+    setup_started = False
+    completed = False
     try:
         cleanup_scenario(window)
         window.active_class_control.confirm_each.setChecked(False)
@@ -499,6 +537,7 @@ def capture_scenario(window, scenario, size, theme, output_dir):
         selected_theme = Theme.DARK if theme == 'dark' else Theme.LIGHT
         window._current_theme = selected_theme
         window._apply_theme(selected_theme)
+        setup_started = True
         SCENARIOS[scenario](window)
         QApplication.processEvents()
         assert scenario_is_meaningful(window, scenario)
@@ -512,10 +551,18 @@ def capture_scenario(window, scenario, size, theme, output_dir):
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
         assert window.grab().save(path, 'PNG')
+        completed = True
         return path
     finally:
-        window.active_class_control.confirm_each.setChecked(
-            original_policy is PromptPolicy.CONFIRM_EACH)
+        try:
+            if setup_started and not completed:
+                cleanup_scenario(window)
+        finally:
+            window.active_class_control.confirm_each.setChecked(
+                original_policy is PromptPolicy.CONFIRM_EACH)
+            if window._current_theme is not original_theme:
+                window._current_theme = original_theme
+                window._apply_theme(original_theme)
 
 
 def _write_sample_image(path):

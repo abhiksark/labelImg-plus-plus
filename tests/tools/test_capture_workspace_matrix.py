@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,7 @@ from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from labelImgPlusPlus import DocumentKind, get_main_app  # noqa: E402
 import capture_workspace_matrix as matrix  # noqa: E402
+from libs.utils.styles import Theme  # noqa: E402
 
 
 EXPECTED_SCENARIOS = (
@@ -41,6 +43,14 @@ EXPECTED_SCENARIOS = (
     'assist-preview',
     'shutdown-timeout',
 )
+
+ASSIST_PHASES = {
+    'assist-setup': matrix.AssistPhase.SETUP_REQUIRED,
+    'assist-downloading': matrix.AssistPhase.DOWNLOADING,
+    'assist-failure': matrix.AssistPhase.FAILED,
+    'assist-preview': matrix.AssistPhase.PREVIEW,
+}
+FULL_MATRIX_MAX_SECONDS = 180.0
 
 
 @pytest.fixture
@@ -112,3 +122,151 @@ def test_extended_scenarios_project_meaningful_real_state(
         assert window.workspace_pages.assist_panel.isVisible()
     if scenario == 'shutdown-timeout':
         assert window._shutdown_surface.isVisible()
+
+
+def test_video_then_assist_states_republish_the_image_workspace(
+        window, tmp_path):
+    """A stale VIDEO kind after capture must not label an Assist PNG as image."""
+    expected_path = window._ux_capture_context.image_path
+    matrix.capture_scenario(
+        window, 'first-image-fit', (800, 600), 'light', tmp_path)
+
+    for scenario, expected_phase in ASSIST_PHASES.items():
+        matrix.capture_scenario(
+            window, 'video-paused', (800, 600), 'light', tmp_path)
+        assert window.document_kind == DocumentKind.VIDEO
+        assert window.file_path == expected_path
+
+        matrix.capture_scenario(
+            window, scenario, (800, 600), 'light', tmp_path)
+
+        assert window.document_kind == DocumentKind.IMAGE
+        assert window.file_path == expected_path
+        assert window.canvas.pixmap is not None
+        assert (window.canvas.pixmap.width(), window.canvas.pixmap.height()) \
+            == (640, 480)
+        assert not window.video_timeline.isVisible()
+        assert not window.video_timeline.isEnabled()
+        assert window.workspace_pages.assist_panel.isVisible()
+        assert window.assist_state.snapshot.phase is expected_phase
+        assert matrix.scenario_is_meaningful(window, scenario)
+
+
+def _assert_capture_failure_cleanup(window, original_theme,
+                                    original_stylesheet, original_policy):
+    """Check the visible ownership state a failed capture must release."""
+    assert window._current_theme is original_theme
+    assert window.styleSheet() == original_stylesheet
+    assert window.workflow.snapshot.prompt_policy is original_policy
+    assert not hasattr(window, '_ux_capture_save')
+    assert window.continuous_save._in_flight is None
+    assert not window.video_timeline.track_menu.isVisible()
+    assert not hasattr(window, '_ux_capture_track_menu_flags')
+    assert not window.workspace_pages.assist_panel.isVisible()
+    assert window.canvas.assist_preview_shape is None
+    assert window._assist_download_progress is None
+    assert window._assist_prompt is None
+    assert window._assist_document_identity is None
+    assert (window._shutdown_surface is None
+            or not window._shutdown_surface.isVisible())
+    assert window._replacement_loading_owner is None
+    assert (window._loading_veil is None
+            or not window._loading_veil.isVisible())
+
+
+@pytest.mark.parametrize(
+    'scenario', ('saving', 'video-track-menu', 'assist-downloading',
+                 'shutdown-timeout'))
+def test_post_setup_error_cleans_every_capture_projection_and_restores_theme(
+        window, tmp_path, monkeypatch, scenario):
+    """A setup exception must not leave a dark or held transient UI behind."""
+    window._current_theme = Theme.LIGHT
+    window._apply_theme(Theme.LIGHT)
+    window.active_class_control.confirm_each.setChecked(True)
+    original_theme = window._current_theme
+    original_stylesheet = window.styleSheet()
+    original_policy = window.workflow.snapshot.prompt_policy
+    original_setup = matrix.SCENARIOS[scenario]
+
+    def fail_after_real_setup(target):
+        original_setup(target)
+        target._show_replacement_loading(
+            ('capture-test', scenario), 'Capture setup failed')
+        raise RuntimeError('forced post-setup failure')
+
+    monkeypatch.setitem(matrix.SCENARIOS, scenario, fail_after_real_setup)
+    with pytest.raises(RuntimeError, match='post-setup'):
+        matrix.capture_scenario(
+            window, scenario, (800, 600), 'dark', tmp_path)
+
+    _assert_capture_failure_cleanup(
+        window, original_theme, original_stylesheet, original_policy)
+
+
+def test_png_save_error_cleans_assist_projection_and_restores_theme(
+        window, tmp_path, monkeypatch):
+    """A failed PNG save must unwind a completed Assist setup transaction."""
+    window._current_theme = Theme.LIGHT
+    window._apply_theme(Theme.LIGHT)
+    original_theme = window._current_theme
+    original_stylesheet = window.styleSheet()
+    original_policy = window.workflow.snapshot.prompt_policy
+
+    class FailedGrab(object):
+        def save(self, *_args):
+            return False
+
+    monkeypatch.setattr(window, 'grab', lambda: FailedGrab())
+    with pytest.raises(AssertionError):
+        matrix.capture_scenario(
+            window, 'assist-preview', (800, 600), 'dark', tmp_path)
+
+    _assert_capture_failure_cleanup(
+        window, original_theme, original_stylesheet, original_policy)
+
+
+def test_cleanup_scenario_is_idempotent_without_cancelling_live_workers(
+        window, monkeypatch):
+    """Capture cleanup releases only UI projections, never task-owner work."""
+    matrix._video_track_menu(window)
+    window._show_replacement_loading(('capture-test', 'cleanup'), 'Cleanup')
+
+    def unexpected_worker_cancellation(*_args, **_kwargs):
+        raise AssertionError('capture cleanup must not cancel live workers')
+
+    monkeypatch.setattr(
+        window.task_coordinator, 'cancel_key', unexpected_worker_cancellation)
+    matrix.cleanup_scenario(window)
+    matrix.cleanup_scenario(window)
+
+    assert window._replacement_loading_owner is None
+    assert not window.video_timeline.track_menu.isVisible()
+    assert not hasattr(window, '_ux_capture_track_menu_flags')
+
+
+def test_full_matrix_writes_every_named_1x_artifact(tmp_path):
+    """A loop or filename regression must not silently omit release evidence."""
+    started = time.monotonic()
+    paths = matrix._capture_matrix(tmp_path)
+    elapsed = time.monotonic() - started
+
+    expected_dimensions = {
+        '%s-%s-%sx%s.png' % (scenario, theme, width, height):
+        (width, height)
+        for scenario in EXPECTED_SCENARIOS
+        for theme in matrix.THEMES
+        for width, height in matrix.SIZES
+    }
+    assert elapsed < FULL_MATRIX_MAX_SECONDS, (
+        'full workspace matrix exceeded %.1fs (%.1fs)'
+        % (FULL_MATRIX_MAX_SECONDS, elapsed))
+    assert len(paths) == 144
+    assert len(set(paths)) == 144
+    assert {os.path.basename(path) for path in paths} == \
+        set(expected_dimensions)
+    for path in paths:
+        screenshot = QImage(path)
+        assert os.path.getsize(path) > 0
+        assert not screenshot.isNull()
+        assert (screenshot.width(), screenshot.height()) == \
+            expected_dimensions[os.path.basename(path)]
