@@ -1,6 +1,7 @@
 """Contracts for deterministic workspace screenshot captures."""
 
 import os
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -11,6 +12,8 @@ import pytest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 HARNESS_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..', 'tools', 'ux'))
+REPOSITORY_ROOT = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..'))
 if HARNESS_DIR not in sys.path:
     sys.path.insert(0, HARNESS_DIR)
 
@@ -244,10 +247,22 @@ def test_cleanup_scenario_is_idempotent_without_cancelling_live_workers(
     assert not hasattr(window, '_ux_capture_track_menu_flags')
 
 
-def test_full_matrix_writes_every_named_1x_artifact(tmp_path):
-    """A loop or filename regression must not silently omit release evidence."""
+def test_full_matrix_cli_writes_every_named_1x_artifact(tmp_path):
+    """The standalone capture command must finish and retain every artifact."""
+    environment = os.environ.copy()
+    environment['LABELIMGPP_SETTINGS_PATH'] = str(
+        tmp_path / 'subprocess-settings.json')
+    command = (
+        sys.executable,
+        os.path.join(HARNESS_DIR, 'capture_workspace_matrix.py'),
+        '--output-dir',
+        str(tmp_path),
+    )
     started = time.monotonic()
-    paths = matrix._capture_matrix(tmp_path)
+    completed = subprocess.run(
+        command, cwd=REPOSITORY_ROOT, env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        universal_newlines=True, timeout=FULL_MATRIX_MAX_SECONDS)
     elapsed = time.monotonic() - started
 
     expected_dimensions = {
@@ -260,10 +275,12 @@ def test_full_matrix_writes_every_named_1x_artifact(tmp_path):
     assert elapsed < FULL_MATRIX_MAX_SECONDS, (
         'full workspace matrix exceeded %.1fs (%.1fs)'
         % (FULL_MATRIX_MAX_SECONDS, elapsed))
+    assert completed.returncode == 0, completed.stderr
+    paths = [os.path.join(str(tmp_path), name)
+             for name in os.listdir(str(tmp_path)) if name.endswith('.png')]
     assert len(paths) == 144
     assert len(set(paths)) == 144
-    assert {os.path.basename(path) for path in paths} == \
-        set(expected_dimensions)
+    assert {os.path.basename(path) for path in paths} == set(expected_dimensions)
     for path in paths:
         screenshot = QImage(path)
         assert os.path.getsize(path) > 0

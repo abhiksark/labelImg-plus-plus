@@ -20,12 +20,12 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 
 try:  # noqa: E402
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import QEvent, Qt
     from PyQt5.QtGui import QColor, QImage, QPixmap
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
 except ImportError:  # noqa: E402
-    from PyQt4.QtCore import Qt
+    from PyQt4.QtCore import QEvent, Qt
     from PyQt4.QtGui import QApplication, QColor, QImage, QPixmap
     from PyQt4.QtTest import QTest
 
@@ -604,7 +604,11 @@ def _capture_matrix(output_dir):
                     window.continuous_save.set_enabled(False)
                     window.dirty = False
                     window.close()
+                    window.deleteLater()
+                    QApplication.sendPostedEvents(
+                        window, QEvent.DeferredDelete)
                     QApplication.processEvents()
+                    del window
     expected = len(SIZES) * len(THEMES) * len(SCENARIO_ORDER)
     assert len(captured) == expected
     return captured
