@@ -802,6 +802,8 @@ def test_missing_project_source_can_be_located_and_relinked(
                 'labelImgPlusPlus.QFileDialog.getOpenFileName',
                 return_value=(str(moved), 'Video files')):
             window.request_open_video(project, skip_prompt=True)
+            assert _wait(app, window.inline_open_error.isVisible)
+            window.inline_open_error.choose_button.click()
             assert _wait(
                 app, lambda: window.video_snapshot is not None
                 and window.video_snapshot.source_path == str(moved))
@@ -820,12 +822,12 @@ def test_changed_source_can_create_a_separate_project(
     make_video(tmp_path / 'clip.mp4', width=80, height=64)
     new_project = str(tmp_path / 'changed.labelimgpp.sqlite')
     try:
-        with patch.object(
-                window, '_video_source_changed_choice',
-                return_value='create'), patch(
+        with patch(
                 'labelImgPlusPlus.QFileDialog.getSaveFileName',
                 return_value=(new_project, 'LabelImg++ video project')):
             window.request_open_video(video, skip_prompt=True)
+            assert _wait(app, window.inline_open_error.isVisible)
+            window.inline_open_error.choose_button.click()
             assert _wait(
                 app, lambda: window.video_snapshot is not None
                 and window.video_snapshot.project_path == new_project)
@@ -1200,7 +1202,7 @@ def test_missing_runtime_supersedes_blocked_image_and_restores_canvas(
                 side_effect=blocked_load):
             window.request_load_file(str(replacement), skip_prompt=True)
             assert started.wait(1)
-            assert not window.canvas.isEnabled()
+            assert window.canvas.isEnabled()
             assert not window._loading_veil.isHidden()
 
             with patch(

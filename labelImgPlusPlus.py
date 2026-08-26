@@ -72,6 +72,7 @@ from libs.widgets.annotationInspector import (
 )
 from libs.widgets.workspacePages import WorkspacePages
 from libs.widgets.inlineClassPicker import InlineClassPicker
+from libs.widgets.inlineErrorBanner import InlineErrorBanner
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -99,6 +100,7 @@ from libs.core.save_pipeline import (
     SaveRequest, target_path as annotation_target_path, write_save_request,
 )
 from libs.core.continuous_save import ContinuousSaveCoordinator
+from libs.core.document_identity import DocumentIdentity
 from libs.core.shutdown_coordinator import ShutdownCoordinator
 from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.plugin_manager import PluginManager
@@ -335,6 +337,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._assist_prompt = None
         self._assist_class_picker_pending = False
         self._assist_track_forward_anchor = None
+        self._assist_document_identity = None
         self._initialize_assist_state()
         self.continuous_save = ContinuousSaveCoordinator(
             delay_ms=self.workflow_settings.continuous_delay_ms, parent=self)
@@ -407,6 +410,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._image_save_target_overrides = {}
         self._loading_veil = None
         self._replacement_loading_owner = None
+        self._inline_open_retry = None
+        self._inline_open_chooser = None
+        self.last_inline_error = None
         self._shutdown_activity = None
         self._shutdown_coordinator = None
         self._shutdown_surface = None
@@ -1301,6 +1307,12 @@ class MainWindow(QMainWindow, WindowMixin):
              self.label_zoom, self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.inline_open_error = InlineErrorBanner(
+            self.workspace_pages.page_surface)
+        self.inline_open_error.retryRequested.connect(
+            self._retry_inline_open)
+        self.inline_open_error.chooseAnotherRequested.connect(
+            self._choose_another_inline_open)
         self.workspace_pages.video_setup_card.chooseAnotherRequested.connect(
             self._choose_another_video_after_setup)
         self.workspace_pages.video_setup_card.dismissRequested.connect(
@@ -1938,6 +1950,24 @@ class MainWindow(QMainWindow, WindowMixin):
             return 'image:%s@%d' % (
                 os.path.abspath(ustr(self.file_path or '')), epoch)
         return ''
+
+    @property
+    def document_identity(self):
+        """Return the immutable identity of the committed workspace document."""
+        kind = getattr(self, 'document_kind', DocumentKind.NONE)
+        key = ''
+        if kind == DocumentKind.VIDEO:
+            snapshot = getattr(self, 'video_snapshot', None)
+            if snapshot is not None:
+                key = snapshot.project_path or snapshot.source_path
+        elif kind == DocumentKind.IMAGE:
+            key = getattr(self, 'file_path', None) or ''
+        return DocumentIdentity(
+            kind.value, key, getattr(self, '_dataset_generation', 0))
+
+    def _is_current_document(self, identity):
+        """Whether a callback still belongs to the committed document."""
+        return identity == self.document_identity
 
     def _publish_plugin_document(self, new_generation=False, force=False):
         manager = getattr(self, 'plugin_manager', None)
@@ -2730,6 +2760,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._assist_track_forward_anchor = None
         self.canvas.clear_assist_preview()
         self._assist_prompt = prompt
+        self._assist_document_identity = self.document_identity
         self.assist_state.start_run(self._dataset_generation)
         self._project_assist()
         try:
@@ -2741,7 +2772,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _on_assist_preview(self, generation, result):
         """Project a current plain-data result into a paint-only Shape."""
-        if int(generation) != self._dataset_generation:
+        if not self._assist_callback_is_current(generation):
             return
         preview = AssistPreview(result=result, prompt=self._assist_prompt)
         if not self.assist_state.show_preview(generation, preview):
@@ -2779,7 +2810,7 @@ class MainWindow(QMainWindow, WindowMixin):
         return shape
 
     def _on_assist_preview_failed(self, generation, kind, message):
-        if int(generation) != self._dataset_generation:
+        if not self._assist_callback_is_current(generation):
             return
         self.canvas.clear_assist_preview()
         if kind == 'setup_required':
@@ -2792,10 +2823,18 @@ class MainWindow(QMainWindow, WindowMixin):
             self.assist_state.fail(failure_kind, message)
         self._project_assist()
 
+    def _assist_callback_is_current(self, generation):
+        """Reject inference callbacks after any same-generation replacement."""
+        return (
+            int(generation) == self._dataset_generation
+            and self._assist_document_identity is not None
+            and self._is_current_document(self._assist_document_identity))
+
     def _on_assist_document_changed(self):
         """Discard prompt/preview projection when the document is replaced."""
         self._dismiss_assist_class_picker()
         self._assist_track_forward_anchor = None
+        self._assist_document_identity = None
         self._reset_assist_preview_state()
         self._assist_prompt = None
         self.canvas.clear_assist_prompt()
@@ -2987,6 +3026,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self._sync_view_actions()
         self._schedule_view_projection()
         self._apply_workflow_state()
+
+    def _start_interaction_session_for(self, key):
+        """Start a committed document session without creating identity state."""
+        # ``key`` records the caller's publication boundary; identity remains
+        # derived solely from the authoritative committed generation.
+        del key
+        self._start_interaction_session()
+        return self.document_identity
 
     def _active_class_selected(self, label):
         """Make a class choice available immediately and across navigation."""
@@ -4273,6 +4320,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # document generation intact until the candidate is ready to publish,
         # so a failed open cannot stale the visible document's save identity.
         generation = self._dataset_generation
+        identity = self.document_identity
         request_id = self._video_open_request_id
         loading_owner = ('video', request_id)
         self._show_replacement_loading(
@@ -4308,31 +4356,48 @@ class MainWindow(QMainWindow, WindowMixin):
             on_discard=discard_prepared)
         handle.result.connect(
             lambda prepared, rid=request_id, gen=generation,
-            requested=path, project=target, override=source_override:
+            requested=path, project=target, override=source_override,
+            origin=identity:
             self._on_video_open_result(
-                prepared, rid, gen, requested, project, override))
+                prepared, rid, gen, requested, project, override, origin))
         handle.error.connect(
-            lambda message, rid=request_id, gen=generation:
-            self._on_video_open_error(message, rid, gen))
+            lambda message, rid=request_id, gen=generation,
+            requested=path, project=target, override=source_override,
+            origin=identity:
+            self._on_video_open_error(
+                message, rid, gen, requested, project, override, origin))
         return handle
 
-    def _on_video_open_error(self, message, request_id, generation):
+    def _on_video_open_error(self, message, request_id, generation,
+                             requested_path=None, project_path=None,
+                             source_override=None, identity=None):
         if (request_id != self._video_open_request_id
-                or generation != self._dataset_generation):
+                or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
         self._settle_replacement_loading(
             ('video', request_id), settle_unowned=True)
-        self.status('Error opening video: ' + message, delay=10000)
+        text = 'Error opening video: ' + message
+        self.status(text, delay=10000)
+        self._show_inline_open_error(
+            text,
+            lambda: self.request_open_video(
+                requested_path, project_path=project_path, skip_prompt=True,
+                source_override=source_override),
+            self.open_video_dialog)
 
     def _on_video_open_result(self, prepared, request_id, generation,
                               requested_path=None, project_path=None,
-                              source_override=None):
+                              source_override=None, identity=None):
         if prepared is None:
             return
         owner = ('video', request_id)
         try:
             if (request_id != self._video_open_request_id
-                    or generation != self._dataset_generation):
+                    or generation != self._dataset_generation
+                    or (identity is not None
+                        and not self._is_current_document(identity))):
                 decoder = getattr(prepared, 'decoder', None)
                 if decoder is not None:
                     decoder.close()
@@ -4347,8 +4412,21 @@ class MainWindow(QMainWindow, WindowMixin):
                     self._show_video_runtime_setup(
                         requested_path, runtime_status)
                     return
-                self._resolve_video_open_problem(
-                    prepared, requested_path, project_path, source_override)
+                text = 'Error opening video: ' + prepared.message
+                self.status(text, delay=10000)
+                self._show_inline_open_error(
+                    text,
+                    lambda: self.request_open_video(
+                        requested_path, project_path=project_path,
+                        skip_prompt=True, source_override=source_override),
+                    (partial(self._choose_video_source_for_project,
+                             project_path)
+                     if prepared.kind == 'missing' and project_path
+                     else partial(self._choose_new_video_project,
+                                  requested_path, project_path,
+                                  source_override)
+                     if prepared.kind == 'changed'
+                     else self.open_video_dialog))
                 return
             self._commit_video_open(prepared)
         except Exception as exc:
@@ -4356,7 +4434,14 @@ class MainWindow(QMainWindow, WindowMixin):
                 decoder = getattr(prepared, 'decoder', None)
                 if decoder is not None:
                     decoder.close()
-            self.status('Error opening video: %s' % exc, delay=10000)
+            text = 'Error opening video: %s' % exc
+            self.status(text, delay=10000)
+            self._show_inline_open_error(
+                text,
+                lambda: self.request_open_video(
+                    requested_path, project_path=project_path,
+                    skip_prompt=True, source_override=source_override),
+                self.open_video_dialog)
         finally:
             self._settle_replacement_loading(
                 owner, settle_unowned=True)
@@ -4379,6 +4464,28 @@ class MainWindow(QMainWindow, WindowMixin):
     def _choose_another_video_after_setup(self):
         self._dismiss_video_runtime_setup()
         self.open_video_dialog()
+
+    def _choose_video_source_for_project(self, project_path):
+        """Relink a missing project source through the banner's chooser."""
+        located = self._locate_video_source(project_path)
+        if located:
+            self.request_open_video(
+                project_path, skip_prompt=True, source_override=located)
+
+    def _choose_new_video_project(self, requested_path, project_path,
+                                   source_override=None):
+        """Create a fresh sidecar without asking a destructive modal choice."""
+        source_path = source_override
+        if source_path is None and not is_video_project(requested_path):
+            source_path = requested_path
+        if source_path is None and project_path:
+            source_path = self._locate_video_source(project_path)
+        if source_path is None:
+            return
+        new_project = self._new_video_project_path(source_path, project_path)
+        if new_project:
+            self.request_open_video(
+                source_path, project_path=new_project, skip_prompt=True)
 
     def _is_meaningful_workspace_focus(self, widget):
         if widget is None:
@@ -4430,6 +4537,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.task_coordinator.cancel_key('image-load')
         self.task_coordinator.cancel_key('video-open')
         self._settle_replacement_loading()
+        self._clear_inline_open_error()
 
     def _locate_video_source(self, project_path):
         source, _selected = QFileDialog.getOpenFileName(
@@ -4851,15 +4959,16 @@ class MainWindow(QMainWindow, WindowMixin):
             self.video_gaps = prepared.gaps
             self.video_model = model
             self._document_revision = snapshot.revision
-            self.continuous_save.reset(
-                self._continuous_document_key(), candidate_generation,
-                snapshot.revision)
             self.m_img_list = []
             self._path_to_idx = {}
             self.img_count = 0
             self.cur_img_idx = 0
             self.file_list_widget.clear()
             self.file_path = snapshot.source_path
+            self._dataset_generation = candidate_generation
+            self.continuous_save.reset(
+                self._continuous_document_key(), candidate_generation,
+                snapshot.revision)
             self.image_data = None
             self.image = first.image
             self._image_scale_factor = (
@@ -4921,7 +5030,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.setWindowTitle(
                 '%s %s%s' % (__appname__, snapshot.source_path, suffix))
             self.update_status_bar()
-            self._start_interaction_session()
+            self._start_interaction_session_for(snapshot.source_path)
             self.canvas.setFocus(True)
             if prepared.warning:
                 self.status(prepared.warning, delay=15000)
@@ -4929,7 +5038,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.status(
                     'Opened video %s' % os.path.basename(
                         snapshot.source_path))
-            self._dataset_generation = candidate_generation
             self._plugin_document_ready = True
             sync_verification = getattr(self, '_sync_verification_ui', None)
             if sync_verification is not None:
@@ -6429,6 +6537,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_frame_request_id += 1
         request_id = self._video_frame_request_id
         generation = self._dataset_generation
+        identity = self.document_identity
         if playback:
             self._video_decode_in_flight = True
 
@@ -6440,21 +6549,25 @@ class MainWindow(QMainWindow, WindowMixin):
             'video', decode, priority=JobPriority.IMAGE_LOAD,
             key='video-frame', latest=True, generation=generation)
         handle.result.connect(
-            lambda result, rid=request_id, gen=generation, playing=playback:
-            self._on_video_frame_result(result, rid, gen, playing))
+            lambda result, rid=request_id, gen=generation, playing=playback,
+            origin=identity:
+            self._on_video_frame_result(
+                result, rid, gen, playing, origin))
         handle.error.connect(
-            lambda message, rid=request_id:
-            self._on_video_frame_error(message, rid))
+            lambda message, rid=request_id, origin=identity:
+            self._on_video_frame_error(message, rid, origin))
         handle.finished.connect(
             lambda rid=request_id:
             self._on_video_decode_finished(rid))
         return handle
 
     def _on_video_frame_result(self, result, request_id, generation,
-                               playback=False):
+                               playback=False, identity=None):
         snapshot = self.video_snapshot
         if (request_id != self._video_frame_request_id
                 or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))
                 or snapshot is None):
             return
         if result is None:
@@ -6465,8 +6578,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.frame_cache.put(result)
         self._commit_video_frame(result, playback=playback)
 
-    def _on_video_frame_error(self, message, request_id):
-        if request_id != self._video_frame_request_id:
+    def _on_video_frame_error(self, message, request_id, identity=None):
+        if (request_id != self._video_frame_request_id
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
         self.pause_video()
         self.status('Error decoding video frame: ' + message, delay=10000)
@@ -6677,12 +6792,10 @@ class MainWindow(QMainWindow, WindowMixin):
                         file_path, skip_prompt=True))
                 return None
         previous_snapshot = self.dataset_snapshot
-        self._dataset_generation = self.task_coordinator.next_generation()
-        generation = self._dataset_generation
         save_dir = self.default_save_dir or os.path.dirname(file_path)
         replacement = DatasetSnapshot.from_images(
             (file_path,), root_dir=os.path.dirname(file_path),
-            save_dir=save_dir, generation=generation)
+            save_dir=save_dir, generation=self._dataset_generation)
         return self.request_load_file(
             file_path, skip_prompt=skip_prompt,
             replacement_snapshot=replacement,
@@ -6721,21 +6834,22 @@ class MainWindow(QMainWindow, WindowMixin):
                         previous_snapshot=previous_snapshot))
                 return None
 
-        self._discard_workflow_draft()
+        if replacement_snapshot is None:
+            self._discard_workflow_draft()
 
         request_id = self._load_request_id
         generation = self._dataset_generation
+        identity = self.document_identity
         cached = (None if replacement_snapshot is not None
                   else self.frame_cache.get(file_path))
         loading_owner = ('image', request_id)
         self._show_replacement_loading(
-            loading_owner, 'Loading %s…' % os.path.basename(file_path),
-            disable_canvas=True)
+            loading_owner, 'Loading %s…' % os.path.basename(file_path))
         if cached is not None:
             QTimer.singleShot(
                 0, lambda: self._on_image_result(
-                    cached, request_id, generation,
-                    replacement_snapshot))
+                    cached, request_id, generation, replacement_snapshot,
+                    identity))
             return None
 
         resolver = (replacement_snapshot.resolver
@@ -6760,36 +6874,54 @@ class MainWindow(QMainWindow, WindowMixin):
             'interactive', load, priority=JobPriority.IMAGE_LOAD,
             key='image-load', latest=True, generation=generation)
         handle.result.connect(
-            lambda result, rid=request_id, gen=generation:
+            lambda result, rid=request_id, gen=generation, origin=identity:
             self._on_image_result(
-                result, rid, gen, replacement_snapshot))
+                result, rid, gen, replacement_snapshot, origin))
         handle.error.connect(
-            lambda message, rid=request_id, gen=generation:
+            lambda message, rid=request_id, gen=generation, target=file_path,
+            replacement=replacement_snapshot, previous=previous_snapshot,
+            origin=identity:
             self._on_image_load_error(
-                message, rid, gen, previous_snapshot))
+                message, rid, gen, target, replacement, previous, origin))
         return handle
 
     def _on_image_load_error(self, message, request_id, generation,
-                             previous_snapshot=None):
+                             requested_path=None, replacement_snapshot=None,
+                             previous_snapshot=None, identity=None):
         if (request_id != self._load_request_id
-                or generation != self._dataset_generation):
+                or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
         self._pending_navigation_index = None
         self._settle_replacement_loading(
             ('image', request_id), settle_unowned=True)
-        if previous_snapshot is not None:
-            self.dataset_snapshot = previous_snapshot.with_generation(
-                generation)
-            if self.dataset_snapshot.image_paths:
-                self.annotation_catalog.start(self.dataset_snapshot)
-        self.status('Error reading image: ' + message)
+        text = 'Error reading image: ' + message
+        self.status(text)
+        self._show_inline_open_error(
+            text,
+            lambda: self.request_load_file(
+                requested_path, skip_prompt=True,
+                replacement_snapshot=replacement_snapshot,
+                previous_snapshot=previous_snapshot),
+            self.open_file)
 
     def _on_image_result(self, result, request_id, generation,
-                         replacement_snapshot=None):
+                         replacement_snapshot=None, identity=None):
         if (result is None or request_id != self._load_request_id
-                or generation != self._dataset_generation):
+                or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
         if replacement_snapshot is not None:
+            save_handle = getattr(self, '_save_handle', None)
+            candidate_generation = self.task_coordinator.next_generation(
+                exclude_handles=(() if save_handle is None
+                                 else (save_handle,)))
+            self._dataset_generation = candidate_generation
+            replacement_snapshot = replacement_snapshot.with_generation(
+                candidate_generation)
+            self._discard_workflow_draft()
             self._commit_dataset_snapshot(replacement_snapshot)
         center_after_projection = bool(
             replacement_snapshot is None
@@ -6799,7 +6931,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._commit_image_result(
             result, center_after_projection=center_after_projection)
         if replacement_snapshot is not None:
-            self._start_interaction_session()
+            self._start_interaction_session_for(result.path)
         self.frame_cache.put(result)
         self._pending_navigation_index = None
         self._settle_replacement_loading(
@@ -7154,6 +7286,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._schedule_view_projection()
         if self._loading_veil is not None and self._loading_veil.isVisible():
             self._loading_veil.setGeometry(self.centralWidget().rect())
+        if (getattr(self, 'inline_open_error', None) is not None
+                and self.inline_open_error.isVisible()):
+            self._layout_inline_open_error()
 
     def paint_canvas(self):
         assert not self.image.isNull(), "cannot paint null image"
@@ -8330,6 +8465,52 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.setEnabled(False)
         self._show_loading_veil(text)
 
+    def _layout_inline_open_error(self):
+        banner = getattr(self, 'inline_open_error', None)
+        pages = getattr(self, 'workspace_pages', None)
+        if banner is None or pages is None:
+            return
+        surface = pages.page_surface
+        margin = scale_px(8)
+        banner.setGeometry(
+            margin, margin, max(0, surface.width() - 2 * margin),
+            max(scale_px(40), banner.sizeHint().height()))
+
+    def _show_inline_open_error(self, message, retry, chooser):
+        """Keep a failed replacement recoverable above the live document."""
+        previous_focus = QApplication.focusWidget()
+        self._inline_open_retry = retry
+        self._inline_open_chooser = chooser
+        self.last_inline_error = str(message)
+        self._layout_inline_open_error()
+        self.inline_open_error.show_error(message)
+        self.inline_open_error.raise_()
+        # The retry is reachable and receives focus when no live workspace
+        # control owns it.  On a transactional rollback, preserve the
+        # restored document focus instead of stealing it for the banner.
+        if self._is_meaningful_workspace_focus(previous_focus):
+            previous_focus.setFocus(Qt.OtherFocusReason)
+
+    def _clear_inline_open_error(self):
+        self._inline_open_retry = None
+        self._inline_open_chooser = None
+        self.last_inline_error = None
+        banner = getattr(self, 'inline_open_error', None)
+        if banner is not None:
+            banner.clear()
+
+    def _retry_inline_open(self):
+        retry = self._inline_open_retry
+        self._clear_inline_open_error()
+        if retry is not None:
+            retry()
+
+    def _choose_another_inline_open(self):
+        chooser = self._inline_open_chooser
+        self._clear_inline_open_error()
+        if chooser is not None:
+            chooser()
+
     def _settle_replacement_loading(self, owner=None,
                                     settle_unowned=False):
         if self._replacement_loading_owner is None:
@@ -8703,8 +8884,15 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 self.status('Error saving annotation: no durable path')
             return
-        if (generation is not None
-                and generation != self._dataset_generation):
+        if ((generation is not None
+             and generation != self._dataset_generation)
+                or (continuous_ticket is not None
+                    and continuous_ticket.document_key
+                    != self._continuous_document_key())):
+            # The immutable write can still improve the old dataset entry;
+            # it must never mark the newly committed document clean.
+            self._record_annotation_written(
+                path, image_path=request.image_path)
             if continuous_ticket is not None:
                 self.continuous_save.complete(continuous_ticket)
             self.status('Saved superseded document to %s' % path)
