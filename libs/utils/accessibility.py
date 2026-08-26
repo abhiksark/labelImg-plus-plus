@@ -2,11 +2,13 @@
 
 try:
     from PyQt5.QtWidgets import (
-        QAbstractButton, QAbstractSlider, QComboBox, QLineEdit, QWidget,
+        QAbstractButton, QAbstractSlider, QAbstractSpinBox, QComboBox,
+        QLineEdit, QWidget,
     )
 except ImportError:
     from PyQt4.QtGui import (
-        QAbstractButton, QAbstractSlider, QComboBox, QLineEdit, QWidget,
+        QAbstractButton, QAbstractSlider, QAbstractSpinBox, QComboBox,
+        QLineEdit, QWidget,
     )
 
 
@@ -41,7 +43,10 @@ def visible_primary_targets(root):
     action.  Hidden controls are excluded because they cannot be reached by a
     pointer or a keyboard user in the current workspace projection.
     """
-    target_types = (QAbstractButton, QAbstractSlider, QComboBox, QLineEdit)
+    target_types = (
+        QAbstractButton, QAbstractSlider, QAbstractSpinBox, QComboBox,
+        QLineEdit,
+    )
     return tuple(
         widget for widget in root.findChildren(QWidget)
         if isinstance(widget, target_types)

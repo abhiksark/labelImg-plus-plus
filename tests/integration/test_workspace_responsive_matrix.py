@@ -6,12 +6,16 @@ import pytest
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QPoint, QRect, Qt
+from PyQt5.QtGui import QImage
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
-from labelImgPlusPlus import MainWindow
+from labelImgPlusPlus import DocumentKind, MainWindow
 from libs.core.assist_state import AssistPhase, AssistSnapshot
+from libs.core.video_types import (
+    VideoFingerprint, VideoFrameRef, VideoFrameResult, VideoSessionSnapshot,
+)
 from libs.integrations.model_manifest import MOBILE_SAM_MANIFEST
 from libs.utils.accessibility import contrast_ratio, visible_primary_targets
 from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
@@ -76,6 +80,8 @@ def test_primary_targets_are_visible_named_and_large(window, size, page):
     _show(window, size, page)
     targets = visible_primary_targets(window)
     assert targets
+    if page == 'canvas':
+        assert window.zoom_widget in targets
     assert not _target_failures(targets)
 
 
@@ -88,21 +94,28 @@ def test_primary_tool_projection_has_exactly_one_checked_action(window):
     assert len(checked) == 1
 
 
-def test_hidden_command_is_not_reachable_in_narrow_focus_chain(window):
+def test_hidden_format_command_never_receives_real_tab_focus(window):
+    """A hidden Format command must not become focused during real Tab input."""
     _show(window, (800, 600), 'canvas')
     hidden = window.command_bar.format_button
     assert hidden.isHidden()
 
-    current = window.command_bar.application_button
-    reachable = []
+    window.command_bar.application_button.setFocus(Qt.TabFocusReason)
+    QApplication.processEvents()
+    assert QApplication.focusWidget() is window.command_bar.application_button
+
+    visited = []
     for _index in range(128):
-        current = current.nextInFocusChain()
-        if (current.isVisibleTo(window) and current.isEnabled()
-                and current.focusPolicy() != Qt.NoFocus):
-            reachable.append(current)
-        if current is window.command_bar.application_button:
+        focused = QApplication.focusWidget()
+        assert focused is not hidden
+        visited.append(focused)
+        QTest.keyClick(focused, Qt.Key_Tab)
+        QApplication.processEvents()
+        if (QApplication.focusWidget()
+                is window.command_bar.application_button and len(visited) > 1):
             break
-    assert hidden not in reachable
+    assert len(visited) > 1
+    assert hidden not in visited
 
 
 def test_drawer_traps_tab_and_restores_reopen_focus(window):
@@ -158,6 +171,54 @@ def test_timeline_accessibility_tracks_current_action_and_marker_meaning():
         assert not _target_failures(visible_primary_targets(timeline))
     finally:
         timeline.close()
+
+
+def _timeline_snapshot():
+    fingerprint = VideoFingerprint(1024, 123, 'responsive-timeline')
+    frame_ref = VideoFrameRef(fingerprint, 0, 3400, 1, 1000)
+    image = QImage(96, 64, QImage.Format_RGB32)
+    byte_size = (image.sizeInBytes() if hasattr(image, 'sizeInBytes')
+                 else image.byteCount())
+    first = VideoFrameResult(
+        frame_ref, image, 96, 64, 96, 64, 0,
+        byte_size, 'responsive-timeline:0:3400')
+    return VideoSessionSnapshot(
+        'responsive-timeline.mp4', None, fingerprint, 0, 1, 1000,
+        96, 64, 0, 'fixture', 10_000, 900, 12, 1, 0, first)
+
+
+def _window_rect(widget, window):
+    return QRect(widget.mapTo(window, QPoint(0, 0)), widget.size())
+
+
+@pytest.mark.parametrize('size', _SIZES)
+def test_video_transport_projects_essential_controls_without_overlap(
+        window, size):
+    """MainWindow keeps the active video transport reachable at every size."""
+    window._set_document_kind(DocumentKind.VIDEO)
+    timeline = window.video_timeline
+    timeline.set_session(_timeline_snapshot())
+    timeline.set_markers(accepted=(3400,), pending=(5000,))
+    _show(window, size, 'canvas')
+
+    controls = (
+        timeline.previous_button, timeline.play_button, timeline.next_button,
+        timeline.slider, timeline.time_edit, timeline.speed_combo,
+        timeline.track_button, timeline.legend_button,
+    )
+    rectangles = []
+    for control in controls:
+        assert control.isVisibleTo(window), control.accessibleName()
+        rect = _window_rect(control, window)
+        assert window.rect().contains(rect), control.accessibleName()
+        assert _window_rect(timeline, window).contains(rect), (
+            control.accessibleName())
+        rectangles.append((control.accessibleName(), rect))
+
+    for index, (name, rect) in enumerate(rectangles):
+        for other_name, other_rect in rectangles[index + 1:]:
+            assert not rect.intersects(other_rect), '%s overlaps %s' % (
+                name, other_name)
 
 
 @pytest.mark.parametrize('theme', (Theme.LIGHT, Theme.DARK))
