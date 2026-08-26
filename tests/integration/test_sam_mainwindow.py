@@ -50,6 +50,7 @@ def _prepare_image_document(window, path):
 
 def _show_preview(window):
     window.assist_state.ready('test-assist')
+    window._assist_document_identity = window.document_identity
     window.assist_state.start_run(window._dataset_generation)
     window._on_assist_preview(
         window._dataset_generation,

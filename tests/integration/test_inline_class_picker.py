@@ -186,6 +186,7 @@ def test_assist_picker_escape_keeps_preview_without_document_mutation(
             polygon=((10.0, 10.0), (80.0, 10.0), (80.0, 60.0)),
             bounds=(10.0, 10.0, 81.0, 61.0))
         window.assist_state.ready('test-assist')
+        window._assist_document_identity = window.document_identity
         window.assist_state.start_run(window._dataset_generation)
         window._on_assist_preview(window._dataset_generation, result)
         assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW

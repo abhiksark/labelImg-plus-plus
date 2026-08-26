@@ -76,6 +76,7 @@ def test_video_assist_box_is_preview_then_commits_as_manual_anchor(
             polygon=((10.0, 10.0), (40.0, 10.0), (40.0, 30.0)),
             bounds=(10.0, 10.0, 41.0, 31.0))
         window.assist_state.ready('test-assist')
+        window._assist_document_identity = window.document_identity
         window.assist_state.start_run(window._dataset_generation)
         window._on_assist_preview(window._dataset_generation, result)
         preview = window.canvas.assist_preview_shape
