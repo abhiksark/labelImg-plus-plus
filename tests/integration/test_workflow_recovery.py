@@ -94,6 +94,91 @@ def test_failed_image_replacement_keeps_committed_workspace_and_identity(
         window.close()
 
 
+def test_sync_missing_image_replacement_preserves_dirty_workspace(tmp_path):
+    """The public synchronous loader must stage a missing replacement first."""
+    application, window = get_main_app()
+    current = tmp_path / 'current.png'
+    _image(current)
+    assert window.load_file(str(current))
+    try:
+        window.canvas.setFocus(Qt.OtherFocusReason)
+        application.processEvents()
+        window.set_dirty()
+        before_identity = window.document_identity
+        before_pixmap = window.canvas.pixmap.cacheKey()
+        before_snapshot = window.dataset_snapshot
+
+        assert window.load_file(str(tmp_path / 'missing.png')) is False
+
+        assert window.document_identity == before_identity
+        assert window.dataset_snapshot is before_snapshot
+        assert window.canvas.pixmap.cacheKey() == before_pixmap
+        assert window.dirty is True
+        assert window.canvas.isEnabled()
+        assert window.actions.create.isEnabled()
+        assert window.canvas.hasFocus()
+        assert window.inline_open_error.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_sync_annotation_failure_preserves_dirty_workspace(tmp_path):
+    """A bad sidecar is a failed candidate, not a partly published image."""
+    _application, window = get_main_app()
+    current = tmp_path / 'current.png'
+    candidate = tmp_path / 'candidate.png'
+    _image(current)
+    _image(candidate)
+    candidate.with_suffix('.xml').write_text('<annotation>')
+    assert window.load_file(str(current))
+    try:
+        window.set_dirty()
+        before_identity = window.document_identity
+        before_pixmap = window.canvas.pixmap.cacheKey()
+
+        assert window.load_file(str(candidate)) is False
+
+        assert window.document_identity == before_identity
+        assert window.canvas.pixmap.cacheKey() == before_pixmap
+        assert window.dirty is True
+        assert window.canvas.isEnabled()
+        assert window.inline_open_error.isVisible()
+        assert 'Annotation error' in window.inline_open_error.message.text()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_sync_image_publication_exception_restores_prior_workspace(tmp_path):
+    """A GUI publication exception cannot strand a post-generation candidate."""
+    _application, window = get_main_app()
+    current = tmp_path / 'current.png'
+    replacement = tmp_path / 'replacement.png'
+    _image(current)
+    _image(replacement)
+    assert window.load_file(str(current))
+    try:
+        window.set_dirty()
+        before_identity = window.document_identity
+        before_pixmap = window.canvas.pixmap.cacheKey()
+        before_snapshot = window.dataset_snapshot
+        with patch.object(
+                window, '_commit_image_result',
+                side_effect=RuntimeError('commit exploded')):
+            assert window.load_file(str(replacement)) is False
+
+        assert window.document_identity == before_identity
+        assert window.dataset_snapshot is before_snapshot
+        assert window.canvas.pixmap.cacheKey() == before_pixmap
+        assert window.dirty is True
+        assert window.canvas.isEnabled()
+        assert window.inline_open_error.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_stale_assist_failure_for_a_previous_same_generation_image_is_ignored(
         tmp_path):
     """Assist callbacks carry document identity, not only dataset generation."""

@@ -399,6 +399,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._regeneration_runs = {}
         self._video_export_handle = None
         self._load_request_id = 0
+        self._directory_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
         self._navigation_direction = 0
@@ -4534,8 +4535,11 @@ class MainWindow(QMainWindow, WindowMixin):
         """Invalidate image/video candidates without changing the document."""
         self._load_request_id += 1
         self._video_open_request_id += 1
+        self._directory_request_id += 1
         self.task_coordinator.cancel_key('image-load')
         self.task_coordinator.cancel_key('video-open')
+        self.task_coordinator.cancel_key('directory-scan')
+        self.task_coordinator.cancel_key('directory-first-image')
         self._settle_replacement_loading()
         self._clear_inline_open_error()
 
@@ -6834,9 +6838,6 @@ class MainWindow(QMainWindow, WindowMixin):
                         previous_snapshot=previous_snapshot))
                 return None
 
-        if replacement_snapshot is None:
-            self._discard_workflow_draft()
-
         request_id = self._load_request_id
         generation = self._dataset_generation
         identity = self.document_identity
@@ -6849,7 +6850,7 @@ class MainWindow(QMainWindow, WindowMixin):
             QTimer.singleShot(
                 0, lambda: self._on_image_result(
                     cached, request_id, generation, replacement_snapshot,
-                    identity))
+                    identity, file_path, previous_snapshot))
             return None
 
         resolver = (replacement_snapshot.resolver
@@ -6874,9 +6875,11 @@ class MainWindow(QMainWindow, WindowMixin):
             'interactive', load, priority=JobPriority.IMAGE_LOAD,
             key='image-load', latest=True, generation=generation)
         handle.result.connect(
-            lambda result, rid=request_id, gen=generation, origin=identity:
+            lambda result, rid=request_id, gen=generation, origin=identity,
+            target=file_path, previous=previous_snapshot:
             self._on_image_result(
-                result, rid, gen, replacement_snapshot, origin))
+                result, rid, gen, replacement_snapshot, origin, target,
+                previous))
         handle.error.connect(
             lambda message, rid=request_id, gen=generation, target=file_path,
             replacement=replacement_snapshot, previous=previous_snapshot,
@@ -6907,36 +6910,91 @@ class MainWindow(QMainWindow, WindowMixin):
             self.open_file)
 
     def _on_image_result(self, result, request_id, generation,
-                         replacement_snapshot=None, identity=None):
+                         replacement_snapshot=None, identity=None,
+                         requested_path=None, previous_snapshot=None):
         if (result is None or request_id != self._load_request_id
                 or generation != self._dataset_generation
                 or (identity is not None
                     and not self._is_current_document(identity))):
             return
-        if replacement_snapshot is not None:
-            save_handle = getattr(self, '_save_handle', None)
-            candidate_generation = self.task_coordinator.next_generation(
-                exclude_handles=(() if save_handle is None
-                                 else (save_handle,)))
-            self._dataset_generation = candidate_generation
-            replacement_snapshot = replacement_snapshot.with_generation(
-                candidate_generation)
-            self._discard_workflow_draft()
-            self._commit_dataset_snapshot(replacement_snapshot)
+        if result.annotation_error:
+            self._on_image_load_error(
+                'Annotation error: ' + result.annotation_error,
+                request_id, generation, requested_path or result.path,
+                replacement_snapshot, previous_snapshot, identity)
+            return
         center_after_projection = bool(
             replacement_snapshot is None
             and self.document_kind == DocumentKind.IMAGE
             and self.file_path
             and result.path != self.file_path)
-        self._commit_image_result(
-            result, center_after_projection=center_after_projection)
-        if replacement_snapshot is not None:
-            self._start_interaction_session_for(result.path)
-        self.frame_cache.put(result)
+        try:
+            self._publish_staged_image_result(
+                result, replacement_snapshot=replacement_snapshot,
+                center_after_projection=center_after_projection)
+        except Exception as exc:
+            self._on_image_load_error(
+                'Error opening image: %s' % exc,
+                request_id, generation, requested_path or result.path,
+                replacement_snapshot, previous_snapshot, identity)
+            return
         self._pending_navigation_index = None
         self._settle_replacement_loading(
             ('image', request_id), settle_unowned=True)
         self._schedule_prefetch(result.path)
+
+    def _capture_image_publication_checkpoint(self):
+        """Capture the image projections that a replacement may overwrite."""
+        checkpoint = self._capture_video_publication_checkpoint()
+        checkpoint.update({
+            'dataset_snapshot': self.dataset_snapshot,
+            'last_open_dir': self.last_open_dir,
+            'dir_name': self.dir_name,
+            'default_save_dir': self.default_save_dir,
+        })
+        return checkpoint
+
+    def _restore_image_publication_checkpoint(self, checkpoint):
+        """Restore an image workspace after a failed GUI publication."""
+        self._restore_video_publication_checkpoint(checkpoint)
+        self.dataset_snapshot = checkpoint['dataset_snapshot']
+        self.last_open_dir = checkpoint['last_open_dir']
+        self.dir_name = checkpoint['dir_name']
+        self.default_save_dir = checkpoint['default_save_dir']
+        self.gallery_widget.set_dataset_snapshot(self.dataset_snapshot)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
+        self.annotation_catalog.cancel()
+        if self.dataset_snapshot.image_paths:
+            self.annotation_catalog.start(self.dataset_snapshot)
+
+    def _publish_staged_image_result(self, result, replacement_snapshot=None,
+                                     center_after_projection=False):
+        """Commit a completely validated image candidate or restore live work."""
+        if result.annotation_error:
+            raise ValueError('Annotation error: %s' % result.annotation_error)
+        checkpoint = self._capture_image_publication_checkpoint()
+        try:
+            if replacement_snapshot is not None:
+                save_handle = getattr(self, '_save_handle', None)
+                candidate_generation = self.task_coordinator.next_generation(
+                    exclude_handles=(() if save_handle is None
+                                     else (save_handle,)))
+                self._dataset_generation = candidate_generation
+                replacement_snapshot = replacement_snapshot.with_generation(
+                    candidate_generation)
+                self._discard_workflow_draft()
+                self._commit_dataset_snapshot(replacement_snapshot)
+            else:
+                self._discard_workflow_draft()
+            self._commit_image_result(
+                result, center_after_projection=center_after_projection)
+            if replacement_snapshot is not None:
+                self._start_interaction_session_for(result.path)
+            self.frame_cache.put(result)
+        except Exception:
+            self._restore_image_publication_checkpoint(checkpoint)
+            raise
 
     def _commit_image_result(self, result, center_after_projection=False):
         """Apply worker data; this method is the GUI-thread mutation boundary."""
@@ -7089,6 +7147,72 @@ class MainWindow(QMainWindow, WindowMixin):
             self.frame_cache.put(result)
 
     def load_file(self, file_path=None):
+        """Synchronously stage and publish an image without clearing live work."""
+        requested = (file_path if file_path is not None
+                     else self.settings.get(SETTING_FILENAME))
+        if not requested:
+            return False
+        requested = os.path.abspath(ustr(requested))
+        if (is_video_project(requested)
+                or requested.lower().endswith(VIDEO_EXTENSIONS)):
+            return self.open_video(requested)
+        if LabelFile.is_label_file(requested):
+            message = ('Cannot open annotation file %s; open the image it '
+                       'describes instead.' % requested)
+            # Preserve the legacy startup feedback only when there is no live
+            # workspace to protect. Replacement failures use the one inline
+            # recovery surface rather than a second modal interruption.
+            if self.file_path is None:
+                self.error_message(u'Cannot open annotation file', message)
+            return self._sync_image_candidate_failed(message, requested)
+
+        resolver = self._active_annotation_resolver(requested)
+        try:
+            result = load_image_result(
+                requested, resolver=resolver,
+                image_list=tuple(self.m_img_list),
+                save_dir=self.default_save_dir,
+                label_file_format=self.label_file_format)
+            if result is None:
+                raise ValueError('image loading was cancelled')
+            if result.annotation_error:
+                raise ValueError('Annotation error: %s' % result.annotation_error)
+        except Exception as exc:
+            return self._sync_image_candidate_failed(
+                'Error reading image: %s' % exc, requested)
+
+        starts_new_session = requested not in self._path_to_idx
+        center_after_projection = bool(
+            not starts_new_session
+            and self.document_kind == DocumentKind.IMAGE
+            and self.file_path
+            and requested != self.file_path)
+        replacement = None
+        if starts_new_session:
+            save_dir = self.default_save_dir or os.path.dirname(requested)
+            replacement = DatasetSnapshot.from_images(
+                (requested,), root_dir=os.path.dirname(requested),
+                save_dir=save_dir, generation=self._dataset_generation)
+        try:
+            self._publish_staged_image_result(
+                result, replacement_snapshot=replacement,
+                center_after_projection=center_after_projection)
+        except Exception as exc:
+            return self._sync_image_candidate_failed(
+                'Error opening image: %s' % exc, requested)
+        self.status('Loaded %s' % os.path.basename(requested))
+        return True
+
+    def _sync_image_candidate_failed(self, message, requested_path):
+        """Report an uncommitted synchronous candidate without touching live UI."""
+        self.status(str(message))
+        self._show_inline_open_error(
+            str(message),
+            lambda path=requested_path: self.load_file(path),
+            self.open_file)
+        return False
+
+    def _load_file_destructive_compatibility(self, file_path=None):
         """Load the specified file, or the last opened file if None."""
         requested = (file_path if file_path is not None
                      else self.settings.get(SETTING_FILENAME))
@@ -8348,12 +8472,13 @@ class MainWindow(QMainWindow, WindowMixin):
                     on_success=lambda: self.request_import_dir_images(
                         dir_path, skip_prompt=True))
                 return None
-        previous_snapshot = self.dataset_snapshot
-        self._dataset_generation = self.task_coordinator.next_generation()
+        request_id = self._directory_request_id
         generation = self._dataset_generation
+        identity = self.document_identity
         save_dir = self.default_save_dir or dir_path
         extensions = self._supported_image_extensions()
-        self._show_loading_veil('Scanning directory…')
+        owner = ('directory', request_id)
+        self._show_replacement_loading(owner, 'Scanning directory…')
 
         def scan(handle):
             with trace_span('directory.scan', args={'root': hash_path(dir_path)}):
@@ -8368,15 +8493,19 @@ class MainWindow(QMainWindow, WindowMixin):
             'background', scan, priority=JobPriority.CATALOG,
             key='directory-scan', latest=True, generation=generation)
         handle.progress.connect(
-            lambda value, g=generation:
+            lambda value, rid=request_id, g=generation, origin=identity:
             self.status('Scanning: %d files, %d images' % value)
-            if g == self._dataset_generation else None)
+            if (rid == self._directory_request_id
+                and g == self._dataset_generation
+                and self._is_current_document(origin)) else None)
         handle.result.connect(
-            lambda snapshot, g=generation:
-            self._on_directory_snapshot(snapshot, g))
+            lambda snapshot, rid=request_id, g=generation, root=dir_path,
+            origin=identity:
+            self._on_directory_snapshot(snapshot, rid, g, root, origin))
         handle.error.connect(
-            lambda message, g=generation, previous=previous_snapshot:
-            self._on_directory_scan_error(message, g, previous))
+            lambda message, rid=request_id, g=generation, root=dir_path,
+            origin=identity:
+            self._on_directory_scan_error(message, rid, g, root, origin))
         return handle
 
     def _supported_image_extensions(self):
@@ -8384,26 +8513,82 @@ class MainWindow(QMainWindow, WindowMixin):
             '.%s' % fmt.data().decode('ascii').lower()
             for fmt in QImageReader.supportedImageFormats())
 
-    def _on_directory_snapshot(self, snapshot, generation):
-        if generation != self._dataset_generation or snapshot is None:
+    def _on_directory_snapshot(self, snapshot, request_id, generation,
+                               dir_path, identity):
+        """Stage the first image before committing a scanned directory."""
+        if (request_id != self._directory_request_id
+                or generation != self._dataset_generation
+                or not self._is_current_document(identity)):
             return
-        self._commit_dataset_snapshot(snapshot)
-        self._hide_loading_veil()
-        if snapshot.image_paths:
-            self.cur_img_idx = 0
-            self.request_load_file(snapshot.image_paths[0], skip_prompt=True)
+        if snapshot is None or not snapshot.image_paths:
+            self._on_directory_scan_error(
+                'no displayable images were found', request_id, generation,
+                dir_path, identity)
+            return
+        first_path = snapshot.image_paths[0]
 
-    def _on_directory_scan_error(self, message, generation,
-                                 previous_snapshot=None):
-        if generation != self._dataset_generation:
+        def load_first(handle):
+            return load_image_result(
+                first_path, resolver=snapshot.resolver,
+                image_list=snapshot.image_paths, save_dir=snapshot.save_dir,
+                label_file_format=self.label_file_format,
+                cancelled=handle.is_cancelled)
+
+        handle = self.task_coordinator.submit(
+            'interactive', load_first, priority=JobPriority.IMAGE_LOAD,
+            key='directory-first-image', latest=True, generation=generation)
+        handle.result.connect(
+            lambda result, rid=request_id, g=generation, candidate=snapshot,
+            root=dir_path, origin=identity:
+            self._on_directory_first_image(
+                result, candidate, rid, g, root, origin))
+        handle.error.connect(
+            lambda message, rid=request_id, g=generation, root=dir_path,
+            origin=identity:
+            self._on_directory_scan_error(message, rid, g, root, origin))
+
+    def _on_directory_first_image(self, result, snapshot, request_id,
+                                  generation, dir_path, identity):
+        if (request_id != self._directory_request_id
+                or generation != self._dataset_generation
+                or not self._is_current_document(identity)):
             return
-        self._hide_loading_veil()
-        if previous_snapshot is not None:
-            self.dataset_snapshot = previous_snapshot.with_generation(
-                generation)
-            if self.dataset_snapshot.image_paths:
-                self.annotation_catalog.start(self.dataset_snapshot)
-        self.status('Directory scan failed: ' + message)
+        if result is None:
+            self._on_directory_scan_error(
+                'first image did not finish loading', request_id, generation,
+                dir_path, identity)
+            return
+        if result.annotation_error:
+            self._on_directory_scan_error(
+                'Annotation error: ' + result.annotation_error,
+                request_id, generation, dir_path, identity)
+            return
+        try:
+            self._publish_staged_image_result(
+                result, replacement_snapshot=snapshot)
+        except Exception as exc:
+            self._on_directory_scan_error(
+                'Error opening first image: %s' % exc,
+                request_id, generation, dir_path, identity)
+            return
+        self._settle_replacement_loading(
+            ('directory', request_id), settle_unowned=True)
+        self._schedule_prefetch(result.path)
+
+    def _on_directory_scan_error(self, message, request_id, generation,
+                                 dir_path, identity):
+        if (request_id != self._directory_request_id
+                or generation != self._dataset_generation
+                or not self._is_current_document(identity)):
+            return
+        self._settle_replacement_loading(
+            ('directory', request_id), settle_unowned=True)
+        text = 'Directory scan failed: ' + message
+        self.status(text)
+        self._show_inline_open_error(
+            text,
+            lambda: self.request_import_dir_images(dir_path, skip_prompt=True),
+            self.open_dir_dialog)
 
     def _commit_dataset_snapshot(self, snapshot):
         """Atomically replace all dataset-facing widgets on the GUI thread."""

@@ -355,12 +355,16 @@ def test_directory_scan_is_transactional_and_latest_request_wins(tmp_path):
         window.close()
 
 
-def test_failed_directory_scan_keeps_dataset_and_rebases_generation(tmp_path):
+def test_failed_directory_scan_keeps_committed_generation_and_identity(tmp_path):
+    """A failed scan is only a candidate and cannot rebase live work."""
     app, window = get_main_app()
     first = str(tmp_path / 'first.png')
     _image(first, 0xFFFFFFFF)
     window.import_dir_images(str(tmp_path))
     old_paths = window.dataset_snapshot.image_paths
+    old_snapshot = window.dataset_snapshot
+    old_identity = window.document_identity
+    old_generation = window._dataset_generation
 
     try:
         with patch(
@@ -374,9 +378,100 @@ def test_failed_directory_scan_keeps_dataset_and_rebases_generation(tmp_path):
             app.processEvents()
         assert window.file_path == first
         assert window.dataset_snapshot.image_paths == old_paths
-        assert window.dataset_snapshot.generation == \
-            window._dataset_generation
+        assert window.dataset_snapshot is old_snapshot
+        assert window.document_identity == old_identity
+        assert window._dataset_generation == old_generation
+        assert window.canvas.isEnabled()
+        assert window.inline_open_error.isVisible()
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_unreadable_first_directory_candidate_keeps_live_workspace(tmp_path):
+    """Directory publication waits for the first image to be fully staged."""
+    app, window = get_main_app()
+    current_dir = tmp_path / 'current'
+    bad_dir = tmp_path / 'bad'
+    current_dir.mkdir()
+    bad_dir.mkdir()
+    current = str(current_dir / 'current.png')
+    _image(current, 0xFFFFFFFF)
+    (bad_dir / 'bad.png').write_bytes(b'not an image')
+    window.import_dir_images(str(current_dir))
+    try:
+        before_identity = window.document_identity
+        before_pixmap = window.canvas.pixmap.cacheKey()
+        before_snapshot = window.dataset_snapshot
+
+        window.request_import_dir_images(str(bad_dir), skip_prompt=True)
+        assert _wait(
+            app,
+            lambda: not window.task_coordinator.queue_depths()['background']
+            and not window.task_coordinator.queue_depths()['interactive'])
+
+        assert window.document_identity == before_identity
+        assert window.dataset_snapshot is before_snapshot
+        assert window.canvas.pixmap.cacheKey() == before_pixmap
+        assert window.canvas.isEnabled()
+        assert window.inline_open_error.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_superseded_running_image_and_directory_keep_live_workspace(tmp_path):
+    """Cancellation reconciles a live candidate without disabling the old image."""
+    app, window = get_main_app()
+    current_dir = tmp_path / 'current'
+    candidate_dir = tmp_path / 'candidate'
+    current_dir.mkdir()
+    candidate_dir.mkdir()
+    current = str(current_dir / 'current.png')
+    candidate = str(candidate_dir / 'candidate.png')
+    _image(current, 0xFFFFFFFF)
+    _image(candidate, 0xFF000000)
+    window.import_dir_images(str(current_dir))
+    started = threading.Event()
+    release = threading.Event()
+    original_load = load_image_result
+
+    def blocked_load(path, *args, **kwargs):
+        if os.path.abspath(path) == os.path.abspath(candidate):
+            started.set()
+            release.wait(1)
+        return original_load(path, *args, **kwargs)
+
+    try:
+        window.show()
+        app.processEvents()
+        window.canvas.setFocus()
+        app.processEvents()
+        assert window.canvas.hasFocus()
+        before_identity = window.document_identity
+        before_pixmap = window.canvas.pixmap.cacheKey()
+        with patch('labelImgPlusPlus.load_image_result', side_effect=blocked_load), \
+                patch('labelImgPlusPlus.DatasetSnapshot.scan',
+                      side_effect=OSError('directory unavailable')):
+            window.request_open_file(candidate, skip_prompt=True)
+            assert started.wait(1)
+            window.request_import_dir_images(str(tmp_path / 'missing'),
+                                               skip_prompt=True)
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()['background'])
+            release.set()
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()['interactive'])
+
+        assert window.document_identity == before_identity
+        assert window.canvas.pixmap.cacheKey() == before_pixmap
+        assert window.canvas.isEnabled()
+        assert window.canvas.hasFocus()
+        assert window.inline_open_error.isVisible()
+    finally:
+        release.set()
         window.dirty = False
         window.close()
 
