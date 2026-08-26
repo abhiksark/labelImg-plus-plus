@@ -6542,8 +6542,10 @@ class MainWindow(QMainWindow, WindowMixin):
         request_id = self._video_frame_request_id
         generation = self._dataset_generation
         identity = self.document_identity
-        if playback:
-            self._video_decode_in_flight = True
+        # Every serialized decoder operation owns the session until finished.
+        # `pause_video()` is also the close/replacement cancellation boundary,
+        # so manual PTS seeks must be visible there just like playback ticks.
+        self._video_decode_in_flight = True
 
         def decode(handle):
             handle.check_cancelled()
