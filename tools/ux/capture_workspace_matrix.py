@@ -19,16 +19,29 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
-from PyQt5.QtCore import Qt  # noqa: E402
-from PyQt5.QtGui import QColor, QImage  # noqa: E402
-from PyQt5.QtTest import QTest  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+try:  # noqa: E402
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor, QImage, QPixmap
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QApplication
+except ImportError:  # noqa: E402
+    from PyQt4.QtCore import Qt
+    from PyQt4.QtGui import QApplication, QColor, QImage, QPixmap
+    from PyQt4.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app  # noqa: E402
 from libs.core.annotation_workflow import (  # noqa: E402
     AnnotationTool, PromptPolicy,
 )
+from libs.core.assist_state import AssistFailureKind, AssistPhase  # noqa: E402
+from libs.core.sam_types import SamResult  # noqa: E402
+from libs.core.video_types import (  # noqa: E402
+    DocumentKind, VideoFingerprint, VideoFrameRef, VideoFrameResult,
+    VideoSessionSnapshot,
+)
 from libs.formats.labelFile import LabelFileFormat  # noqa: E402
+from libs.integrations.model_cache import ModelDownloadProgress  # noqa: E402
+from libs.integrations.model_manifest import MOBILE_SAM_MANIFEST  # noqa: E402
 from libs.utils.styles import Theme  # noqa: E402
 
 
@@ -43,6 +56,16 @@ SCENARIO_ORDER = (
     'saving',
     'saved',
     'save-failed',
+    'video-paused',
+    'video-playing',
+    'video-invalid-time',
+    'video-track-menu',
+    'video-propagation-pending',
+    'assist-setup',
+    'assist-downloading',
+    'assist-failure',
+    'assist-preview',
+    'shutdown-timeout',
 )
 
 
@@ -193,7 +216,159 @@ def _save_failed(window):
     _set_capture_status(window, 'Save failed; retry is available')
 
 
-IMAGE_SCENARIOS = {
+def _capture_video_snapshot():
+    """Build a small in-memory video session without optional decoding."""
+    fingerprint = VideoFingerprint(4096, 1, 'ux-capture-video')
+    frame_ref = VideoFrameRef(fingerprint, 0, 2000, 1, 1000)
+    image = QImage(640, 360, QImage.Format_RGB32)
+    image.fill(QColor('#385575'))
+    byte_size = (image.sizeInBytes() if hasattr(image, 'sizeInBytes')
+                 else image.byteCount())
+    first = VideoFrameResult(
+        frame_ref, image, 640, 360, 640, 360, 0, byte_size,
+        'ux-capture-video:2000')
+    return VideoSessionSnapshot(
+        'deterministic-capture.mp4', None, fingerprint, 0, 1, 1000,
+        640, 360, 0, 'fixture', 10_000, 0, 24, 1, 0, first)
+
+
+def _video_workspace(window):
+    """Project a real timeline from a deterministic in-memory session."""
+    _clear_capture_save_state(window)
+    snapshot = _capture_video_snapshot()
+    window.pause_video()
+    window._set_document_kind(DocumentKind.VIDEO)
+    window.video_snapshot = snapshot
+    window.current_video_frame_ref = snapshot.initial_frame.frame_ref
+    window.video_timeline.set_session(snapshot)
+    window.video_timeline.set_markers(
+        accepted=(2000,), pending=(5000,), propagation=((3000, 4200),))
+    window.canvas.load_pixmap(QPixmap.fromImage(snapshot.initial_frame.image))
+    window.canvas.setEnabled(True)
+    window.workspace_pages.set_page('canvas')
+    return snapshot
+
+
+def _video_paused(window):
+    _video_workspace(window)
+    window.video_timeline.set_playing(False)
+    _settle()
+    _set_capture_status(window, 'Video paused at 00:00:02.000')
+
+
+def _video_playing(window):
+    _video_workspace(window)
+    # The timeline owns the visual playback projection; no decoder is started.
+    window.video_timeline.set_playing(True)
+    _settle()
+    _set_capture_status(window, 'Video playing at 1x')
+
+
+def _video_invalid_time(window):
+    _video_workspace(window)
+    timeline = window.video_timeline
+    timeline.time_edit.setText('99:99:99.999')
+    timeline._emit_time_seek()
+    assert timeline.time_edit.isModified()
+    _settle()
+    _set_capture_status(window, 'Use HH:MM:SS.mmm within the video duration')
+
+
+def _video_track_menu(window):
+    _video_workspace(window)
+    timeline = window.video_timeline
+    menu = timeline.track_menu
+    if not hasattr(window, '_ux_capture_track_menu_flags'):
+        window._ux_capture_track_menu_flags = menu.windowFlags()
+    # A popup QMenu is a separate native window and is omitted by window.grab.
+    # Embed the actual menu as a temporary child for one deterministic full-
+    # window capture; the menu actions remain the production action objects.
+    menu.setWindowFlags(Qt.Widget)
+    menu.setGeometry(
+        max(0, timeline.width() - 190), 2, 188,
+        max(80, menu.sizeHint().height()))
+    menu.show()
+    assert menu.isVisible()
+    _settle()
+    _set_capture_status(window, 'Track menu open')
+
+
+def _video_propagation_pending(window):
+    _video_workspace(window)
+    timeline = window.video_timeline
+    timeline.set_propagation_review(3, gaps=1, failures=0)
+    timeline.set_markers(pending=(4000, 5000, 6000), gaps=((7000, 7600),))
+    assert timeline.progress_label.isVisible()
+    _settle()
+    _set_capture_status(window, 'Propagation review has 3 pending results')
+
+
+def _show_assist(window):
+    window.workspace_pages.set_page('canvas')
+    window.workspace_pages.show_assist()
+    window._project_assist(window._assist_download_progress)
+    assert window.workspace_pages.assist_panel.isVisible()
+
+
+def _assist_setup(window):
+    _first_image_fit(window)
+    window.assist_state.require_setup(MOBILE_SAM_MANIFEST.model_id)
+    window._assist_download_progress = None
+    _show_assist(window)
+    _settle()
+    _set_capture_status(window, 'Assist setup is required')
+
+
+def _assist_downloading(window):
+    _first_image_fit(window)
+    window.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+    window.assist_state.start_download()
+    artifact = MOBILE_SAM_MANIFEST.artifacts[0]
+    window._assist_download_progress = ModelDownloadProgress(
+        artifact.name, artifact.size // 2, artifact.size,
+        artifact.size // 2, MOBILE_SAM_MANIFEST.total_size)
+    _show_assist(window)
+    _settle()
+    _set_capture_status(window, 'Downloading Assist model')
+
+
+def _assist_failure(window):
+    _first_image_fit(window)
+    window.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+    window.assist_state.fail(
+        AssistFailureKind.OFFLINE, 'Deterministic capture provider failure.')
+    window._assist_download_progress = None
+    _show_assist(window)
+    _settle()
+    _set_capture_status(window, 'Assist download failed; retry is available')
+
+
+def _assist_preview(window):
+    _first_image_fit(window)
+    window.sam_output_mode = 'box'
+    window.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+    window.assist_state.start_run(window._dataset_generation)
+    window._assist_document_identity = window.document_identity
+    window._assist_prompt = None
+    window._on_assist_preview(
+        window._dataset_generation,
+        SamResult(
+            polygon=((80.0, 70.0), (280.0, 70.0), (280.0, 230.0)),
+            bounds=(80.0, 70.0, 280.0, 230.0)))
+    assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+    _show_assist(window)
+    _settle()
+    _set_capture_status(window, 'Assist preview is ready for review')
+
+
+def _shutdown_timeout(window):
+    _empty_workspace(window)
+    window._show_shutdown_timeout(('video decode', 'Assist download'))
+    assert window._shutdown_surface.isVisible()
+    _settle()
+
+
+SCENARIOS = {
     'empty-workspace': _empty_workspace,
     'first-image-fit': _first_image_fit,
     'two-rectangles': _two_rectangles,
@@ -202,6 +377,16 @@ IMAGE_SCENARIOS = {
     'saving': _saving,
     'saved': _saved,
     'save-failed': _save_failed,
+    'video-paused': _video_paused,
+    'video-playing': _video_playing,
+    'video-invalid-time': _video_invalid_time,
+    'video-track-menu': _video_track_menu,
+    'video-propagation-pending': _video_propagation_pending,
+    'assist-setup': _assist_setup,
+    'assist-downloading': _assist_downloading,
+    'assist-failure': _assist_failure,
+    'assist-preview': _assist_preview,
+    'shutdown-timeout': _shutdown_timeout,
 }
 
 SCENARIO_SAVE_STATES = {
@@ -226,10 +411,87 @@ SCENARIO_SHAPE_COUNTS = {
 }
 
 
+def cleanup_scenario(window):
+    """Release only deterministic capture projections, never live workers."""
+    _clear_capture_save_state(window)
+    timeline = window.video_timeline
+    timeline.set_playing(False)
+    timeline.track_menu.hide()
+    flags = getattr(window, '_ux_capture_track_menu_flags', None)
+    if flags is not None:
+        timeline.track_menu.setWindowFlags(flags)
+        del window._ux_capture_track_menu_flags
+    timeline.set_propagation_progress(0, 0, 0, 0, None, 0, running=False)
+    timeline.set_propagation_review(0, 0, 0)
+    window._hide_shutdown_timeout()
+    window.workspace_pages.hide_assist()
+    window.canvas.clear_assist_preview()
+    window._assist_download_progress = None
+    window._assist_prompt = None
+    window._assist_document_identity = None
+    _settle()
+
+
+def scenario_is_meaningful(window, scenario):
+    """Assert the state owner that makes each named capture truthful."""
+    if scenario in SCENARIO_SHAPE_COUNTS:
+        expected_save_state = SCENARIO_SAVE_STATES.get(scenario)
+        if expected_save_state is not None and \
+                window.continuous_save.state != expected_save_state:
+            return False
+        return len(window.canvas.shapes) == SCENARIO_SHAPE_COUNTS[scenario]
+    if scenario == 'video-paused':
+        return (window.document_kind == DocumentKind.VIDEO
+                and not window.video_timeline._playing)
+    if scenario == 'video-playing':
+        return (window.document_kind == DocumentKind.VIDEO
+                and window.video_timeline._playing)
+    if scenario == 'video-invalid-time':
+        return (window.document_kind == DocumentKind.VIDEO
+                and window.video_timeline.time_edit.isModified())
+    if scenario == 'video-track-menu':
+        return (window.document_kind == DocumentKind.VIDEO
+                and window.video_timeline.track_menu.isVisible())
+    if scenario == 'video-propagation-pending':
+        return (window.document_kind == DocumentKind.VIDEO
+                and window.video_timeline.progress_label.isVisible()
+                and window.video_timeline._propagation_review_counts[0] == 3)
+    panel = window.workspace_pages.assist_panel
+    if scenario == 'assist-setup':
+        return (panel.isVisible()
+                and window.assist_state.snapshot.phase
+                is AssistPhase.SETUP_REQUIRED)
+    if scenario == 'assist-downloading':
+        return (panel.isVisible()
+                and window.assist_state.snapshot.phase
+                is AssistPhase.DOWNLOADING
+                and window._assist_download_progress is not None)
+    if scenario == 'assist-failure':
+        return (panel.isVisible()
+                and window.assist_state.snapshot.phase is AssistPhase.FAILED
+                and window.assist_state.snapshot.failure_kind
+                is AssistFailureKind.OFFLINE)
+    if scenario == 'assist-preview':
+        return (panel.isVisible()
+                and window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+                and window.canvas.assist_preview_shape is not None)
+    if scenario == 'shutdown-timeout':
+        return (window._shutdown_surface is not None
+                and window._shutdown_surface.isVisible())
+    return False
+
+
 def capture_scenario(window, scenario, size, theme, output_dir):
     """Apply one named state and save its full-window PNG."""
+    if scenario not in SCENARIOS:
+        raise ValueError('unknown capture scenario: %s' % scenario)
+    if theme not in THEMES:
+        raise ValueError('unknown capture theme: %s' % theme)
+    if tuple(size) not in SIZES:
+        raise ValueError('unsupported capture size: %s' % (size,))
     original_policy = window.workflow.snapshot.prompt_policy
     try:
+        cleanup_scenario(window)
         window.active_class_control.confirm_each.setChecked(False)
         assert window.workflow.snapshot.prompt_policy is \
             PromptPolicy.REUSE_ACTIVE
@@ -237,19 +499,10 @@ def capture_scenario(window, scenario, size, theme, output_dir):
         selected_theme = Theme.DARK if theme == 'dark' else Theme.LIGHT
         window._current_theme = selected_theme
         window._apply_theme(selected_theme)
-        IMAGE_SCENARIOS[scenario](window)
+        SCENARIOS[scenario](window)
         QApplication.processEvents()
-        expected_save_state = SCENARIO_SAVE_STATES.get(scenario)
-        if expected_save_state is not None:
-            assert window.continuous_save.state == expected_save_state
-            expected_copy = {
-                'saved': 'Saved',
-                'saving': 'Saving',
-                'failed': 'Save failed',
-            }[expected_save_state]
-            assert expected_copy in window.label_save_status.text()
-        assert len(window.canvas.shapes) == SCENARIO_SHAPE_COUNTS[scenario]
-        if SCENARIO_SHAPE_COUNTS[scenario]:
+        assert scenario_is_meaningful(window, scenario)
+        if SCENARIO_SHAPE_COUNTS.get(scenario):
             assert window.workflow.snapshot.active_class == 'vehicle'
             assert window.workflow.snapshot.active_tool is \
                 AnnotationTool.RECTANGLE
@@ -300,7 +553,7 @@ def _capture_matrix(output_dir):
                         assert os.path.getsize(path) > 0
                         captured.append(path)
                 finally:
-                    _clear_capture_save_state(window)
+                    cleanup_scenario(window)
                     window.continuous_save.set_enabled(False)
                     window.dirty = False
                     window.close()

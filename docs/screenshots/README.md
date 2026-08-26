@@ -114,6 +114,32 @@ The harness verifies all 64 PNGs are non-empty and match the dimensions in
 their filenames. The matching acceptance record is
 [`docs/testing/ux-remediation-2026-08-23.md`](../testing/ux-remediation-2026-08-23.md#continuous-image-workflow-acceptance--2026-08-24).
 
+## Deterministic workspace matrix harness
+
+`tools/ux/capture_workspace_matrix.py` is the single 1x offscreen-Qt harness
+for the workspace review matrix. It writes files as
+`<scenario>-<theme>-<width>x<height>.png` and rejects unknown scenarios,
+themes, and sizes rather than silently producing mislabeled evidence.
+
+Run it with:
+
+```bash
+QT_QPA_PLATFORM=offscreen QT_AUTO_SCREEN_SCALE_FACTOR=0 QT_SCALE_FACTOR=1 \
+  python tools/ux/capture_workspace_matrix.py
+```
+
+The registry has 18 states: the existing empty, fit, rectangle, inspector,
+Saving, Saved, and save-failed image states; video paused, playing, invalid
+time, Track menu, and pending propagation; Assist setup, download, failure,
+and preview; plus shutdown timeout. Each is captured at 800x600, 960x640,
+1366x768, and 1440x900 in light and dark themes, for **144 PNGs**.
+
+The harness projects real MainWindow, timeline, AssistState/AssistPanel,
+canvas-preview, continuous-save, and shutdown-surface owners. It uses only
+small in-memory video frames and explicit lifecycle values where a network
+provider, downloaded model, decoder, or long worker would otherwise be
+nondeterministic; it neither opens nor changes supplied source media.
+
 ## Workspace 3.2
 
 `workspace-3.2-balanced/` contains the accepted browser-lab contract for the
