@@ -25,8 +25,18 @@ def _action_button(action, parent):
     button.setDefaultAction(action)
     button.setToolButtonStyle(Qt.ToolButtonIconOnly)
     button.setAutoRaise(True)
+    button.setFocusPolicy(Qt.StrongFocus)
     button.setFixedSize(scale_px(32), scale_px(32))
+    _sync_action_accessible_name(button, action)
+    action.changed.connect(
+        lambda b=button, a=action: _sync_action_accessible_name(b, a))
     return button
+
+
+def _sync_action_accessible_name(button, action):
+    """Keep a chrome button's spoken name aligned with its QAction."""
+    name = action.text().replace('&', '').replace('...', '').strip()
+    button.setAccessibleName(name or action.toolTip().strip())
 
 
 class SamOutputModeToggle(QWidget):
@@ -53,9 +63,11 @@ class SamOutputModeToggle(QWidget):
             button.setText(text)
             button.setCheckable(True)
             button.setAutoRaise(True)
+            button.setFocusPolicy(Qt.StrongFocus)
             button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-            button.setFixedHeight(scale_px(28))
+            button.setFixedHeight(scale_px(32))
             button.setMinimumWidth(scale_px(48 if value == 'box' else 68))
+            button.setAccessibleName('Smart Select output: %s' % text)
             button.setProperty('outputMode', value)
             button.clicked.connect(self._emit_mode)
             self.group.addButton(button)
@@ -93,6 +105,8 @@ class EmptyWorkspacePage(QWidget):
                 ('Open Video', open_video)):
             button = QPushButton(label)
             button.setDefault(False)
+            button.setAccessibleName(label)
+            button.setMinimumHeight(scale_px(32))
             button.clicked.connect(action.trigger)
             self.action_buttons.append(button)
             actions.addWidget(button)
@@ -131,9 +145,12 @@ class EmptyWorkspacePage(QWidget):
                 button.setProperty('path', path)
                 button.setText(os.path.basename(path.rstrip(os.sep)) or path)
                 button.setToolTip(path)
+                button.setAccessibleName('Open recent document: %s' % (
+                    os.path.basename(path.rstrip(os.sep)) or path))
                 button.setVisible(True)
             else:
                 button.setProperty('path', '')
+                button.setAccessibleName('')
                 button.setVisible(False)
 
 
@@ -147,6 +164,12 @@ class CanvasChrome(QWidget):
             scale_px(6), scale_px(2), scale_px(6), scale_px(2))
         layout.setSpacing(scale_px(2))
         layout.addWidget(_action_button(zoom_out, self))
+        zoom_widget.setAccessibleName('Zoom level')
+        zoom_widget.setFocusPolicy(Qt.StrongFocus)
+        zoom_widget.setMinimumHeight(scale_px(32))
+        zoom_line_edit = zoom_widget.lineEdit()
+        zoom_line_edit.setAccessibleName('Zoom level value')
+        zoom_line_edit.setProperty('secondaryAction', True)
         zoom_widget.setFixedWidth(scale_px(56))
         layout.addWidget(zoom_widget)
         layout.addWidget(_action_button(zoom_in, self))
@@ -160,6 +183,8 @@ class CanvasChrome(QWidget):
         visibility.setObjectName('annotationVisibilityButton')
         visibility.setIcon(show_all.icon())
         visibility.setToolTip('Annotation visibility')
+        visibility.setAccessibleName('Annotation visibility')
+        visibility.setFocusPolicy(Qt.StrongFocus)
         visibility.setFixedSize(scale_px(32), scale_px(32))
         visibility.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(visibility)

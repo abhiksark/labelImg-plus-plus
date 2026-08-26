@@ -36,6 +36,7 @@ class WorkspaceInspector(QWidget):
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName('inspectorTabs')
         self.tabs.setAccessibleName('Inspector')
+        self.tabs.setUsesScrollButtons(False)
         self.tabs.addTab(objects_widget, 'Objects')
         self.tabs.addTab(files_widget, 'Files')
         self.tabs.currentChanged.connect(self._tab_changed)
@@ -45,6 +46,7 @@ class WorkspaceInspector(QWidget):
         self.collapse_button.setAccessibleName('Collapse inspector')
         self.collapse_button.setToolTip('Collapse inspector')
         self.collapse_button.setFocusPolicy(Qt.StrongFocus)
+        self.collapse_button.setFixedSize(scale_px(32), scale_px(32))
         self.collapse_button.clicked.connect(self.collapseRequested)
         self.tabs.setCornerWidget(self.collapse_button, Qt.TopRightCorner)
 
@@ -119,7 +121,7 @@ class WorkspaceSplitterShell(QWidget):
         self.reopen_button.setToolTip('Open inspector')
         self.reopen_button.setFocusPolicy(Qt.StrongFocus)
         self.reopen_button.setIcon(themed_icon('prev', Theme.LIGHT))
-        self.reopen_button.setFixedWidth(scale_px(32))
+        self.reopen_button.setFixedSize(scale_px(32), scale_px(32))
         self.reopen_button.clicked.connect(self.open_inspector)
 
         self.scrim = _DrawerScrim(self)

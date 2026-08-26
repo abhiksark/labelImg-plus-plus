@@ -487,12 +487,26 @@ class MainWindow(QMainWindow, WindowMixin):
         self.active_class_control.policyChanged.connect(
             self._active_class_policy_changed)
 
+        self.active_class_control.combo.setMinimumHeight(scale_px(32))
+        self.active_class_control.combo.lineEdit().setAccessibleName(
+            'Active annotation class value')
+        self.active_class_control.combo.lineEdit().setProperty(
+            'secondaryAction', True)
+        self.active_class_control.confirm_each.setAccessibleName(
+            'Prompt for every annotation')
+        self.active_class_control.confirm_each.setMinimumHeight(scale_px(32))
+
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
+        self.diffc_button.setAccessibleName(
+            'Mark selected annotation difficult')
+        self.diffc_button.setMinimumHeight(scale_px(32))
         self.diffc_button.stateChanged.connect(self.button_state)
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.edit_button.setAccessibleName('Edit selected annotation')
+        self.edit_button.setMinimumHeight(scale_px(32))
 
         # Add some of widgets to list_layout
         list_layout.addWidget(self.edit_button)

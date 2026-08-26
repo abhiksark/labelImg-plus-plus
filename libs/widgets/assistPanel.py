@@ -62,6 +62,7 @@ class AssistPanel(QFrame):
         heading.addStretch(1)
         self.close_button = QPushButton('Close', self)
         self.close_button.setAccessibleName('Close Assist')
+        self.close_button.setMinimumHeight(scale_px(32))
         self.close_button.clicked.connect(self.closeRequested)
         heading.addWidget(self.close_button)
 
