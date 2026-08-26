@@ -163,9 +163,17 @@ def test_sync_image_publication_exception_restores_prior_workspace(tmp_path):
         before_identity = window.document_identity
         before_pixmap = window.canvas.pixmap.cacheKey()
         before_snapshot = window.dataset_snapshot
+        original_publish = window._publish_plugin_document
+
+        def fail_after_reset(*args, **kwargs):
+            if (window.document_kind == DocumentKind.IMAGE
+                    and window.file_path == str(replacement)):
+                raise RuntimeError('commit exploded after reset')
+            return original_publish(*args, **kwargs)
+
         with patch.object(
-                window, '_commit_image_result',
-                side_effect=RuntimeError('commit exploded')):
+                window, '_publish_plugin_document',
+                side_effect=fail_after_reset):
             assert window.load_file(str(replacement)) is False
 
         assert window.document_identity == before_identity

@@ -623,6 +623,51 @@ def test_failed_video_publication_restores_existing_image_workspace(
         window.close()
 
 
+def test_failed_image_publication_does_not_close_restored_video_decoder(
+        tmp_path):
+    """A post-reset image failure must leave the live video decoder usable."""
+    app, window = get_main_app()
+    old_decoder = _RecordingDecoder()
+    prior = _prepared_video(tmp_path, 'image-rollback-prior', old_decoder)
+    candidate = tmp_path / 'image-rollback-candidate.png'
+    _image(candidate)
+    try:
+        _install_prepared_video(window, prior)
+        prior_generation = window._dataset_generation
+        prior_snapshot = window.video_snapshot
+        prior_timeline_snapshot = window.video_timeline._snapshot
+        prior_save_identity = window._save_document_identity()
+        prior_model = window.video_model
+        prior_pixmap_key = window.canvas.pixmap.cacheKey()
+        prior_identity = window.document_identity
+        original_publish = window._publish_plugin_document
+
+        def fail_after_reset(*args, **kwargs):
+            if (window.document_kind == DocumentKind.IMAGE
+                    and window.file_path == str(candidate)):
+                raise RuntimeError('image publication failed after reset')
+            return original_publish(*args, **kwargs)
+
+        with patch.object(
+                window, '_publish_plugin_document',
+                side_effect=fail_after_reset):
+            assert window.load_file(str(candidate)) is False
+
+        assert _wait(
+            app,
+            lambda: not window.task_coordinator.queue_depths()['video'])
+        _assert_prior_video_restored(
+            window, prior, prior_snapshot, prior_timeline_snapshot,
+            prior_generation, 0, prior_save_identity, prior_model,
+            prior_pixmap_key)
+        assert window.document_identity == prior_identity
+        assert old_decoder.close_count == 0
+        assert window.inline_open_error.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_successful_publication_closes_old_decoder_after_candidate_commit(
         tmp_path):
     app, window = get_main_app()

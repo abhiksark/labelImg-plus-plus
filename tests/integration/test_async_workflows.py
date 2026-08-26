@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.image_pipeline import load_image_result
+from libs.core.video_types import DocumentKind
 from libs.formats.labelFile import LabelFileFormat
 
 
@@ -420,6 +421,57 @@ def test_unreadable_first_directory_candidate_keeps_live_workspace(tmp_path):
         window.close()
 
 
+def test_directory_first_image_publication_failure_restores_retry_binding(
+        tmp_path):
+    """A post-reset directory failure keeps its exact retry request alive."""
+    app, window = get_main_app()
+    current_dir = tmp_path / 'current'
+    candidate_dir = tmp_path / 'candidate'
+    current_dir.mkdir()
+    candidate_dir.mkdir()
+    current = str(current_dir / 'current.png')
+    candidate = str(candidate_dir / 'candidate.png')
+    _image(current, 0xFFFFFFFF)
+    _image(candidate, 0xFF000000)
+    window.import_dir_images(str(current_dir))
+    try:
+        before_identity = window.document_identity
+        before_snapshot = window.dataset_snapshot
+        original_publish = window._publish_plugin_document
+
+        def fail_after_reset(*args, **kwargs):
+            if (window.document_kind == DocumentKind.IMAGE
+                    and window.file_path == candidate):
+                raise RuntimeError('directory publication exploded after reset')
+            return original_publish(*args, **kwargs)
+
+        with patch.object(
+                window, '_publish_plugin_document',
+                side_effect=fail_after_reset):
+            window.request_import_dir_images(str(candidate_dir),
+                                             skip_prompt=True)
+            assert _wait(app, lambda: window.inline_open_error.isVisible())
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()[
+                    'background']
+                and not window.task_coordinator.queue_depths()['interactive'])
+
+        assert window.document_identity == before_identity
+        assert window.dataset_snapshot is before_snapshot
+        assert window.canvas.isEnabled()
+        assert window.inline_open_error.isVisible()
+        assert 'directory publication exploded after reset' in \
+            window.inline_open_error.message.text()
+        with patch.object(window, 'request_import_dir_images') as retry:
+            window.inline_open_error.retry_button.click()
+            retry.assert_called_once_with(
+                os.path.abspath(str(candidate_dir)), skip_prompt=True)
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_superseded_running_image_and_directory_keep_live_workspace(tmp_path):
     """Cancellation reconciles a live candidate without disabling the old image."""
     app, window = get_main_app()
@@ -470,6 +522,8 @@ def test_superseded_running_image_and_directory_keep_live_workspace(tmp_path):
         assert window.canvas.isEnabled()
         assert window.canvas.hasFocus()
         assert window.inline_open_error.isVisible()
+        assert window._loading_veil is None or window._loading_veil.isHidden()
+        assert window._replacement_loading_owner is None
     finally:
         release.set()
         window.dirty = False

@@ -6951,6 +6951,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'last_open_dir': self.last_open_dir,
             'dir_name': self.dir_name,
             'default_save_dir': self.default_save_dir,
+            'directory_request_id': self._directory_request_id,
         })
         return checkpoint
 
@@ -6961,6 +6962,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.last_open_dir = checkpoint['last_open_dir']
         self.dir_name = checkpoint['dir_name']
         self.default_save_dir = checkpoint['default_save_dir']
+        self._directory_request_id = checkpoint['directory_request_id']
         self.gallery_widget.set_dataset_snapshot(self.dataset_snapshot)
         if hasattr(self, 'full_gallery') and self.full_gallery:
             self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
@@ -6974,7 +6976,13 @@ class MainWindow(QMainWindow, WindowMixin):
         if result.annotation_error:
             raise ValueError('Annotation error: %s' % result.annotation_error)
         checkpoint = self._capture_image_publication_checkpoint()
+        old_decoder = checkpoint['video_decoder']
         try:
+            # reset_state() schedules decoder shutdown. Keep a live video
+            # decoder detached until every image projection is committed so a
+            # rollback never reattaches a decoder already queued to close.
+            if old_decoder is not None:
+                self.video_decoder = None
             if replacement_snapshot is not None:
                 save_handle = getattr(self, '_save_handle', None)
                 candidate_generation = self.task_coordinator.next_generation(
@@ -6995,6 +7003,8 @@ class MainWindow(QMainWindow, WindowMixin):
         except Exception:
             self._restore_image_publication_checkpoint(checkpoint)
             raise
+        self._queue_replaced_video_decoder_close(
+            old_decoder, self._dataset_generation)
 
     def _commit_image_result(self, result, center_after_projection=False):
         """Apply worker data; this method is the GUI-thread mutation boundary."""
