@@ -20,12 +20,12 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 
 try:  # noqa: E402
-    from PyQt5.QtCore import QEvent, Qt
+    from PyQt5.QtCore import QEvent, QPoint, Qt
     from PyQt5.QtGui import QColor, QImage, QPixmap
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
 except ImportError:  # noqa: E402
-    from PyQt4.QtCore import QEvent, Qt
+    from PyQt4.QtCore import QEvent, QPoint, Qt
     from PyQt4.QtGui import QApplication, QColor, QImage, QPixmap
     from PyQt4.QtTest import QTest
 
@@ -285,16 +285,29 @@ def _video_track_menu(window):
     _video_workspace(window)
     timeline = window.video_timeline
     menu = timeline.track_menu
-    if not hasattr(window, '_ux_capture_track_menu_flags'):
-        window._ux_capture_track_menu_flags = menu.windowFlags()
+    if not hasattr(window, '_ux_capture_track_menu_state'):
+        window._ux_capture_track_menu_state = SimpleNamespace(
+            parent=menu.parentWidget(), flags=menu.windowFlags(),
+            geometry=menu.geometry())
     # A popup QMenu is a separate native window and is omitted by window.grab.
     # Embed the actual menu as a temporary child for one deterministic full-
     # window capture; the menu actions remain the production action objects.
+    menu.hide()
     menu.setWindowFlags(Qt.Widget)
+    menu.setParent(window)
+    menu.setWindowFlags(Qt.Widget)
+    size_hint = menu.sizeHint()
+    menu_width = min(size_hint.width(), window.width())
+    menu_height = min(size_hint.height(), window.height())
+    track_origin = timeline.track_button.mapTo(window, QPoint(0, 0))
+    x = min(max(0, track_origin.x() + timeline.track_button.width()
+                - menu_width), max(0, window.width() - menu_width))
+    y = min(max(0, track_origin.y() - menu_height - 4),
+            max(0, window.height() - menu_height))
     menu.setGeometry(
-        max(0, timeline.width() - 190), 2, 188,
-        max(80, menu.sizeHint().height()))
+        x, y, menu_width, menu_height)
     menu.show()
+    menu.raise_()
     assert menu.isVisible()
     _settle()
     _set_capture_status(window, 'Track menu open')
@@ -424,10 +437,12 @@ def cleanup_scenario(window):
     timeline = window.video_timeline
     timeline.set_playing(False)
     timeline.track_menu.hide()
-    flags = getattr(window, '_ux_capture_track_menu_flags', None)
-    if flags is not None:
-        timeline.track_menu.setWindowFlags(flags)
-        del window._ux_capture_track_menu_flags
+    state = getattr(window, '_ux_capture_track_menu_state', None)
+    if state is not None:
+        timeline.track_menu.setParent(state.parent)
+        timeline.track_menu.setWindowFlags(state.flags)
+        timeline.track_menu.setGeometry(state.geometry)
+        del window._ux_capture_track_menu_state
     timeline.set_propagation_progress(0, 0, 0, 0, None, 0, running=False)
     timeline.set_propagation_review(0, 0, 0)
     window._hide_shutdown_timeout()

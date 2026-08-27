@@ -18,6 +18,7 @@ if HARNESS_DIR not in sys.path:
     sys.path.insert(0, HARNESS_DIR)
 
 
+from PyQt5.QtCore import QPoint  # noqa: E402
 from PyQt5.QtGui import QImage  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
@@ -127,6 +128,52 @@ def test_extended_scenarios_project_meaningful_real_state(
         assert window._shutdown_surface.isVisible()
 
 
+@pytest.mark.parametrize(
+    'size, theme', (
+        ((800, 600), 'light'),
+        ((800, 600), 'dark'),
+        ((1440, 900), 'light'),
+        ((1440, 900), 'dark'),
+    ))
+def test_video_track_menu_capture_contains_real_menu_action_pixels(
+        window, tmp_path, size, theme):
+    """A parent-clipped non-native QMenu must not pass as visible evidence."""
+    path = matrix.capture_scenario(
+        window, 'video-track-menu', size, theme, tmp_path)
+
+    menu = window.video_timeline.track_menu
+    actions = [action for action in menu.actions()
+               if not action.isSeparator()]
+    assert [action.text() for action in actions] == [
+        'Track all anchors', 'Track selected object',
+        'Accept propagated results', 'Reject propagated results', 'Cancel',
+    ]
+
+    screenshot = QImage(path)
+    origin = menu.mapTo(window, QPoint(0, 0))
+    assert origin.x() >= 0
+    assert origin.y() >= 0
+    assert origin.x() + menu.width() <= screenshot.width()
+    assert origin.y() + menu.height() <= screenshot.height()
+    assert menu.visibleRegion().boundingRect() == menu.rect()
+
+    original_theme = window._current_theme
+    selected_theme = Theme.DARK if theme == 'dark' else Theme.LIGHT
+    try:
+        window._current_theme = selected_theme
+        window._apply_theme(selected_theme)
+        QApplication.processEvents()
+        menu_image = menu.grab().toImage()
+        for action in actions:
+            center = menu.actionGeometry(action).center()
+            point = menu.mapTo(window, center)
+            assert screenshot.pixelColor(point) == \
+                menu_image.pixelColor(center)
+    finally:
+        window._current_theme = original_theme
+        window._apply_theme(original_theme)
+
+
 def test_video_then_assist_states_republish_the_image_workspace(
         window, tmp_path):
     """A stale VIDEO kind after capture must not label an Assist PNG as image."""
@@ -231,6 +278,10 @@ def test_png_save_error_cleans_assist_projection_and_restores_theme(
 def test_cleanup_scenario_is_idempotent_without_cancelling_live_workers(
         window, monkeypatch):
     """Capture cleanup releases only UI projections, never task-owner work."""
+    menu = window.video_timeline.track_menu
+    original_parent = menu.parentWidget()
+    original_flags = menu.windowFlags()
+    original_geometry = menu.geometry()
     matrix._video_track_menu(window)
     window._show_replacement_loading(('capture-test', 'cleanup'), 'Cleanup')
 
@@ -244,7 +295,10 @@ def test_cleanup_scenario_is_idempotent_without_cancelling_live_workers(
 
     assert window._replacement_loading_owner is None
     assert not window.video_timeline.track_menu.isVisible()
-    assert not hasattr(window, '_ux_capture_track_menu_flags')
+    assert menu.parentWidget() is original_parent
+    assert menu.windowFlags() == original_flags
+    assert menu.geometry() == original_geometry
+    assert not hasattr(window, '_ux_capture_track_menu_state')
 
 
 def test_full_matrix_cli_writes_every_named_1x_artifact(tmp_path):
