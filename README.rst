@@ -358,6 +358,21 @@ suggestion. **Space** continues to verify the current frame.
 | Ctrl + Shift + T   | Toggle dark mode theme                     |
 +--------------------+--------------------------------------------+
 
+Continuous annotation workflow
+------------------------------
+
+1. **Open** an image or directory.
+2. Choose an **Active class**, then choose a drawing tool.
+3. Draw repeatedly; the selected class and tool stay active until you change
+   them.
+4. Press **A** or **D** to move between images, and wait for the **Saved**
+   indicator after each completed mutation.
+
+Video support is optional. When it is available, open a video and use the
+timeline to play, seek, and manage tracks. Assist is optional too: its panel
+explains any required setup and offers an explicit download action when a
+model is absent. Neither feature installs or downloads anything automatically.
+
 Configuration
 -------------
 

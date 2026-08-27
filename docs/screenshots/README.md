@@ -284,3 +284,24 @@ inspector slice.
 ## Alternative: Placeholder Images
 
 Until actual screenshots are captured, the documentation uses placeholder references. The application is fully functional, and users can see the actual themes by using the feature.
+
+## Continuous annotation release evidence — 2026-08-27
+
+[`continuous-annotation-release-2026-08-24/`](continuous-annotation-release-2026-08-24/)
+is the final deterministic full-window matrix: 18 named states at 800×600,
+960×640, 1366×768, and 1440×900 in light and dark themes, for exactly 144
+PNGs. The real capture CLI completed twice in isolated settings environments
+(19s and 18s); the sorted per-file manifests were byte-identical. Every image
+is nonempty and matches its 1× named dimensions.
+
+[`SHA256SUMS`](continuous-annotation-release-2026-08-24/SHA256SUMS) lists the
+144 sorted PNG basenames and SHA-256 digests. Its own SHA-256 is
+`0c2a2ba62822711628694334bdad44940fd3886e2592b9b18c0f9ed36b5aea9d`.
+Visual review confirmed all five actual Track-menu actions in light/dark
+800×600 and 1440×900 captures, plus an elided pending-propagation summary
+with transport, Legend, and Track still visible at 800×600.
+
+The matching release record, including automated results, source-media
+fingerprints, prepared task-local copies, and the explicitly pending
+Mac-locked native rows, is
+[`docs/testing/continuous-annotation-release-matrix.md`](../testing/continuous-annotation-release-matrix.md).
