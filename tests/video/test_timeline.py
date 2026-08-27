@@ -184,6 +184,99 @@ def test_compact_timeline_keeps_essential_controls_visible():
         widget.close()
 
 
+def _configure_propagation_actions(widget):
+    """Install the real direct/menu action split used by compact transport."""
+    propagate_all = QAction('Track all anchors', widget)
+    propagate_selected = QAction('Track selected object', widget)
+    cancel = QAction('Cancel', widget)
+    accept = QAction('Accept propagated results', widget)
+    reject = QAction('Reject propagated results', widget)
+    widget.set_propagation_actions(
+        propagate_all, propagate_selected, cancel, accept, reject)
+    return propagate_all, propagate_selected, cancel, accept, reject
+
+
+def _assert_compact_transport_is_available(widget):
+    """The progress text must never displace the compact transport path."""
+    assert widget.layout_mode == 'compact'
+    assert all(control.isVisible() for control in (
+        widget.previous_button, widget.play_button, widget.next_button,
+        widget.time_edit, widget.speed_combo, widget.slider,
+        widget.track_button,
+    ))
+    assert not widget.cancel_propagation_button.isVisible()
+
+
+def test_compact_running_progress_elides_without_losing_action_metadata():
+    """A running summary must not raw-clip or hide its compact Cancel path."""
+    widget = VideoTimelineWidget()
+    _, _, cancel, _, _ = _configure_propagation_actions(widget)
+    try:
+        widget.resize(748, 96)
+        widget.show()
+        QApplication.processEvents()
+        widget.set_propagation_progress(
+            123, 456, 5, 117, 75.25, 4, running=True)
+        QApplication.processEvents()
+
+        summary = '123/456 frames · 5 active · 117 complete · ETA ' \
+            '00:01:15.250 · 4 gaps/failures'
+        _assert_compact_transport_is_available(widget)
+        assert widget.progress_label.isVisible()
+        assert widget.progress_label.text().endswith(u'…')
+        assert widget.progress_label.toolTip() == summary
+        assert widget.progress_label.accessibleDescription() == summary
+        assert cancel in widget.track_menu.actions()
+
+        widget.resize(680, 96)
+        QApplication.processEvents()
+        narrower_text = widget.progress_label.text()
+        assert narrower_text == widget.progress_label.fontMetrics().elidedText(
+            summary, Qt.ElideRight, widget.progress_label.width())
+        assert widget.progress_label.toolTip() == summary
+        assert widget.progress_label.accessibleDescription() == summary
+
+        widget.resize(748, 96)
+        QApplication.processEvents()
+        wider_text = widget.progress_label.text()
+        assert wider_text == widget.progress_label.fontMetrics().elidedText(
+            summary, Qt.ElideRight, widget.progress_label.width())
+        assert wider_text != narrower_text
+        assert widget.progress_label.toolTip() == summary
+        assert widget.progress_label.accessibleDescription() == summary
+
+        widget.resize(max(1400, widget._wide_required_width()), 96)
+        QApplication.processEvents()
+        assert widget.layout_mode == 'wide'
+        assert widget.progress_label.text() == summary
+    finally:
+        widget.close()
+
+
+def test_compact_review_progress_elides_and_keeps_review_actions_in_track():
+    """A completed review retains every recovery action in compact Track."""
+    widget = VideoTimelineWidget()
+    _, _, cancel, accept, reject = _configure_propagation_actions(widget)
+    try:
+        widget.resize(748, 96)
+        widget.show()
+        QApplication.processEvents()
+        widget.set_propagation_review(12, gaps=3, failures=2)
+        QApplication.processEvents()
+
+        summary = 'Propagation review · 12 pending · 3 gaps · 2 failures'
+        _assert_compact_transport_is_available(widget)
+        assert widget.progress_label.isVisible()
+        assert widget.progress_label.text().endswith(u'…')
+        assert widget.progress_label.toolTip() == summary
+        assert widget.progress_label.accessibleDescription() == summary
+        assert accept in widget.track_menu.actions()
+        assert reject in widget.track_menu.actions()
+        assert cancel in widget.track_menu.actions()
+    finally:
+        widget.close()
+
+
 def test_marker_legend_stays_keyboard_reachable_in_compact_timeline():
     widget = VideoTimelineWidget()
     assert hasattr(widget, 'legend_button')

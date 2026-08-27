@@ -925,7 +925,10 @@ def test_explicit_unavailable_sam2_stages_failed_span_for_review(
         assert gap.reason == 'failed'
         assert gap.backend == 'sam2'
         assert window._pending_propagation_failures == 1
-        assert '1 failures' in window.video_timeline.progress_label.text()
+        summary = window.video_timeline.progress_label.toolTip()
+        assert '1 failures' in summary
+        assert window.video_timeline.progress_label.accessibleDescription() \
+            == summary
         assert not window._propagation_preview
         assert 'SAM 2 propagation is unavailable' \
             in window.statusBar().currentMessage()

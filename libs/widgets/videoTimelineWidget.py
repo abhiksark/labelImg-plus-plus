@@ -330,11 +330,13 @@ class VideoTimelineWidget(QWidget):
         self.track_button.setPopupMode(QToolButton.InstantPopup)
         self.track_button.setMenu(self.track_menu)
         self.track_button.setMinimumSize(32, 32)
+        self._propagation_summary = ''
         self.progress_label = QLabel()
         self.progress_label.setObjectName('videoPropagationProgress')
         self.progress_label.setMinimumWidth(0)
         self.progress_label.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.progress_label.installEventFilter(self)
         self.progress_label.hide()
         self.cancel_propagation_button.hide()
         self.accept_propagation_button.hide()
@@ -399,6 +401,9 @@ class VideoTimelineWidget(QWidget):
             self.focusReturnRequested.connect(focus_handler)
 
     def eventFilter(self, watched, event):
+        if (watched is getattr(self, 'progress_label', None)
+                and event.type() == QEvent.Resize):
+            self._refresh_propagation_summary()
         if watched is self.time_edit and event.type() == QEvent.KeyPress:
             if event.key() == Qt.Key_Escape:
                 self.restore_time_editor()
@@ -445,14 +450,27 @@ class VideoTimelineWidget(QWidget):
             self._show_propagation_review_summary()
         self._update_layout_mode(self.width())
 
+    def _set_propagation_summary(self, summary):
+        self._propagation_summary = summary
+        self.progress_label.setToolTip(summary)
+        self.progress_label.setAccessibleDescription(summary)
+        self._refresh_propagation_summary()
+
+    def _refresh_propagation_summary(self):
+        summary = self._propagation_summary
+        if self.layout_mode == 'compact' and summary:
+            summary = self.progress_label.fontMetrics().elidedText(
+                summary, Qt.ElideRight, self.progress_label.width())
+        self.progress_label.setText(summary)
+
     def _show_propagation_review_summary(self):
         pending, gaps, failures = self._propagation_review_counts
         if pending or gaps or failures:
-            self.progress_label.setText(
+            self._set_propagation_summary(
                 'Propagation review · %s pending · %s gaps · %s failures' % (
                     pending, gaps, failures))
         else:
-            self.progress_label.clear()
+            self._set_propagation_summary('')
 
     def set_playback_action(self, action):
         previous = self._playback_action
@@ -495,7 +513,7 @@ class VideoTimelineWidget(QWidget):
             eta = ('—' if eta_seconds is None
                    else format_timecode(float(eta_seconds)))
             total_text = str(total) if total else '—'
-            self.progress_label.setText(
+            self._set_propagation_summary(
                 '%s/%s frames · %s active · %s complete · ETA %s · '
                 '%s gaps/failures' % (
                     processed, total_text, active, completed, eta, failures))
@@ -511,7 +529,7 @@ class VideoTimelineWidget(QWidget):
         if snapshot is None:
             self._propagation_review_counts = (0, 0, 0)
             self._propagation_running = False
-            self.progress_label.clear()
+            self._set_propagation_summary('')
             self.set_markers()
         self.setEnabled(snapshot is not None)
         if snapshot is None:
@@ -670,8 +688,14 @@ class VideoTimelineWidget(QWidget):
             return sum(self._measured_control_width(item)
                        for item in controls)
 
+        progress_width = max(
+            self._measured_control_width(self.progress_label),
+            self.progress_label.fontMetrics().width(
+                self._propagation_summary))
         context_width = max(
-            measured(idle_track + review_track), measured(running_track))
+            measured(idle_track + review_track),
+            progress_width + self._measured_control_width(
+                self.cancel_propagation_button))
         control_count = len(essentials) + max(
             len(idle_track + review_track), len(running_track))
         margins = self._transport_layout.contentsMargins()
@@ -704,10 +728,12 @@ class VideoTimelineWidget(QWidget):
             'wide' if int(width) >= self._wide_required_width()
             else 'compact')
         self._apply_responsive_visibility()
+        self._refresh_propagation_summary()
 
     def resizeEvent(self, event):
         self._update_layout_mode(event.size().width())
         super(VideoTimelineWidget, self).resizeEvent(event)
+        self._refresh_propagation_summary()
 
     def _duration_pts(self):
         return max(0, int(self._snapshot.duration_pts or 0))
