@@ -2,16 +2,16 @@
 
 ## Evidence status
 
-This is the prepared Task 6 release record for the reviewed implementation
-through `68bdb97` (`fix: elide compact video progress`). The complete final
-gate and focused automated evidence are recorded below. Native computer-use
-evidence is **PENDING / BLOCKED** because the Mac is locked; no native PASS
-observation is inferred from earlier runs.
+This is the completed Task 6 release record for the reviewed source and test
+implementation through `68bdb97` (`fix: elide compact video progress`). The
+complete final gate and focused automated evidence were recorded in `5aae186`;
+the native computer-use matrix was completed on 2026-08-27 against real UI
+flows and task-local copies of the supplied media.
 
 The reviewed change sequence begins at `86c82e9` (settings compatibility) and
 includes the accessibility, recovery, matrix, soak, collection, Track-menu,
 and compact-progress commits through `68bdb97`. Nothing in this record changes
-source media, user settings, or the application.
+source media, normal user settings, or the application.
 
 ## Runtime provenance
 
@@ -21,7 +21,7 @@ source media, user settings, or the application.
 | Python | 3.9.21 |
 | Qt binding/runtime | PyQt 5.15.11 / Qt 5.15.14 |
 | Video runtime | PyAV 15.1.0 |
-| Base ONNX Runtime | Not installed; Assist setup remains optional and reports its required setup rather than installing anything automatically. |
+| Base ONNX Runtime | Not installed. Native Assist validation used ONNX Runtime 1.19.2 installed only in `/tmp/labelimgpp-native-release.r5PJWB/assist-runtime`; the normal Python environment was not changed. |
 | Final automated collection | 1,449 nodes; node-only LF SHA-256 `fc2d162e1a14fade632255f66014e4f06d87046b288e83cdcece8c1acd19ab7f` |
 
 ## Automated release evidence
@@ -100,7 +100,7 @@ The current native-review fixture contains byte-identical video copies at:
 - `/tmp/labelimgpp-native-release.r5PJWB/videos/000414_000558_2025_10_13_08-15-48_w.mp4`
 
 Its `images/` directory contains the four prepared PNG frames used by the
-blocked native image-flow row.
+native image-flow row.
 
 Their MP4 byte counts and SHA-256 values match the corresponding source rows.
 The adjacent SQLite sidecars belong only to those task-local copies.
@@ -121,17 +121,17 @@ runtime dependencies. LabelImg++ passes every automated criterion below.
 
 ## Native computer-use matrix
 
-The following rows intentionally contain no substitute PASS claim. They are
-**PENDING / BLOCKED solely because the Mac is locked** and must be completed
-against the prepared task-local copies after the desktop is available.
+All native rows were completed on 2026-08-27 with the real macOS application
+and task-local fixture. The supplied videos were accessed through the
+byte-identical copies listed above; the source files were never modified.
 
-| Native check | Status | Required observation when unblocked |
+| Native check | Status | Direct observation |
 | --- | --- | --- |
-| Four-frame image flow, including 800-pixel-width repeat | **PENDING / BLOCKED — Mac locked** | Open, choose `vehicle`, draw twice, use A/D, observe Saved, undo/redo, verify, quit/reopen; confirm no modal prompt, tool reset, clipping, stale save, or focus loss. |
-| V1, V2, V3 ten-cycle open/play/PTS-seek/close soak | **PENDING / BLOCKED — Mac locked** | Use the byte-identical prepared copies; confirm frame/PTS correctness, durable annotation state, no crash dialog or abandoned worker, and zero jobs after close. |
-| 800-pixel video controls | **PENDING / BLOCKED — Mac locked** | Confirm compact transport, time, speed, seek, Legend, and Track stay available. |
-| Real Assist lifecycle | **PENDING / BLOCKED — Mac locked** | Inspect setup metadata; explicitly download/cancel/no-retry/retry; validate promoted cache; reject then accept with Active class; save/reopen; explicitly Track forward. |
-| Crash/process report inspection | **PENDING / BLOCKED — Mac locked** | Check reports and process state after the native flows without deleting historical diagnostics. |
+| Four-frame image flow, including 800-pixel-width repeat | **PASS** | Chose `vehicle`, drew repeatedly, and confirmed **W** kept the rectangle tool armed. **A/D**, Saved, undo/redo, verification, quit/reopen, and annotation persistence all worked. At approximately 802 pixels wide the inspector collapsed, the whole image remained fitted, and another box could be drawn and saved without clipping, focus loss, or a modal interruption. |
+| V1, V2, V3 ten-cycle open/play/PTS-seek/close soak | **PASS — 30/30 cycles** | Each prepared video completed ten launch/open, play/pause, **D/A** PTS step, and quit cycles. Every cycle closed the application with no abandoned application or worker process. |
+| 800-pixel video controls | **PASS** | At approximately 802 pixels wide, Previous, Play/Pause, Next, exact time, speed, PTS/frame, Legend, Track, and the seek control remained available. A real slider seek reached value 500870 and displayed `00:00:04.800`, `PTS 431975`, and approximately frame 96. |
+| Real Assist lifecycle | **PASS** | The panel exposed model purpose, provider, 42.6 MB size, and storage path. Explicit download/cancel returned to Ready without automatic retry; manual retry promoted files matching the manifest hashes with no `.part` files. A task-local runtime then completed real image inference: reject preserved five objects, accept autosaved a `plant` polygon, and quit/reopen restored all six objects. On V3, a manual anchor tracked forward across 100 frames with 0 gaps and 0 failures; accepting propagation produced 101 accepted annotations. |
+| Crash/process report inspection | **PASS** | After the final clean quit, no application or Python worker remained and no new macOS diagnostic report existed for the audit window. The audit log contained no Python exception or fatal crash; only non-fatal ONNX Runtime/CoreML capability warnings were observed. |
 
 ## Short user workflow and optional setup
 
@@ -161,5 +161,6 @@ LABELIMGPP_SETTINGS_PATH="$matrix_settings_dir/settings.json" \
   --output-dir docs/screenshots/continuous-annotation-release-2026-08-24
 ```
 
-After native access is restored, repeat the blocked rows above and update this
-record with direct observations rather than changing their status in advance.
+The native observations above were completed with an isolated settings file,
+cache, and optional Assist runtime under the task-local `/tmp` fixture. The
+base Python environment and the supplied source media remain unchanged.
