@@ -210,8 +210,12 @@ class Canvas(QWidget):
         self.menus = (QMenu(), QMenu())
         # Set widget options.
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.WheelFocus)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName('Annotation canvas')
+        self.setAccessibleDescription(
+            'Image annotation surface. Use the annotation tools to select, '
+            'draw bounding boxes, draw polygons, use Smart Select, or add '
+            'keypoints.')
         self.verified = False
         self._locked = False
         self.draw_square = False
@@ -293,6 +297,8 @@ class Canvas(QWidget):
         # Parse hex to QColor with alpha
         self._verified_bg_color = hex_to_qcolor(colors['verified_bg'], alpha=128)
         self._crosshair_color = hex_to_qcolor(colors['text'])
+        Shape.contrast_line_color = hex_to_qcolor(
+            colors['text'], alpha=150)
 
     def enterEvent(self, ev):
         self.override_cursor(self._cursor)

@@ -528,6 +528,55 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.assertTrue(image.save(path))
         return path
 
+    def _load_test_image(self):
+        self.assertTrue(self.win.load_file(self.test_image_path))
+
+    def test_verification_state_is_persistent_in_action_and_status(self):
+        self._load_test_image()
+        self.win.canvas.verified = False
+        self.win._sync_verification_ui()
+        self.assertEqual(self.win.actions.verify.text(), 'Verify')
+        self.assertFalse(self.win.label_verification_status.isVisible())
+
+        self.win.canvas.verified = True
+        self.win._sync_verification_ui()
+        self.assertEqual(self.win.actions.verify.text(), 'Verified')
+        self.assertIn('unverified', self.win.actions.verify.toolTip().lower())
+        self.assertEqual(
+            self.win.label_verification_status.text(), '● Verified')
+
+    def test_verification_chip_survives_async_save_completion(self):
+        from unittest.mock import patch
+
+        self._load_test_image()
+        save_handle = object()
+        self.win._save_handle = save_handle
+        with patch.object(self.win.continuous_save, 'flush') as flush:
+            result = self.win.request_verify_image()
+
+        flush.assert_called_once_with()
+        self.assertIs(result, save_handle)
+        self.assertTrue(self.win.canvas.verified)
+        self.assertTrue(self.win.label_verification_status.property(
+            'statusAvailable'))
+        self.assertEqual(
+            self.win.label_verification_status.text(), '● Verified')
+
+        request = SimpleNamespace(
+            image_path=self.win.file_path,
+            revision=self.win._document_revision)
+        output_path = os.path.join(self.temp_dir, 'test_image.xml')
+        with patch.object(self.win, '_record_annotation_written'), \
+                patch.object(
+                    self.win, '_update_current_image_gallery_status'):
+            self.win._on_save_result(
+                output_path, request, None, self.win._dataset_generation)
+
+        self.assertFalse(self.win.dirty)
+        self.assertEqual(self.win.actions.verify.text(), 'Verified')
+        self.assertTrue(self.win.label_verification_status.property(
+            'statusAvailable'))
+
     def test_load_file_valid_image(self):
         """Test loading a valid image file."""
         self.win.load_file(self.test_image_path)
@@ -1909,7 +1958,7 @@ class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):
             cls.app, cls.win = get_main_app()
 
     def test_slim_status_and_canvas_buttons_double_at_2x(self):
-        self.assertEqual(self.win.workspace_pages.status_strip.height(), 48)
+        self.assertEqual(self.win.workspace_pages.status_strip.height(), 56)
         button = self.win.workspace_pages.canvas_chrome.findChildren(
             QToolButton)[0]
         self.assertEqual(button.width(), 64)

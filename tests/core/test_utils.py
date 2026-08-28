@@ -16,16 +16,23 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from PyQt5.QtWidgets import QApplication, QMenu, QToolBar, QWidget
 from PyQt5.QtCore import QPointF
+from PyQt5.QtGui import QKeySequence
 
 from libs.utils.utils import (
     Struct, new_action, new_icon, add_actions, format_shortcut,
     generate_color_by_text, natural_sort, distance, trimmed,
-    have_qstring, util_qt_strlistclass
+    have_qstring, native_shortcut_text, util_qt_strlistclass
 )
 from libs.utils.styles import Theme
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
+
+
+def test_native_shortcut_text_delegates_to_qt_native_format():
+    sequence = QKeySequence('Ctrl+G')
+    assert native_shortcut_text(sequence) == sequence.toString(
+        QKeySequence.NativeText)
 
 
 def test_themed_icon_imports_its_painting_dependencies_on_pyqt4(monkeypatch):
@@ -76,6 +83,7 @@ def test_themed_icon_imports_its_painting_dependencies_on_pyqt4(monkeypatch):
     for name, value in {
             'QIcon': LegacyIcon,
             'QColor': object,
+            'QKeySequence': object,
             'QPainter': LegacyPainter,
             'QPixmap': LegacyPixmap,
             'QPushButton': object,

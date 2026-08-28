@@ -1067,6 +1067,25 @@ class TestCanvasEscape(_DrawFirstBase):
         self.assertEqual(self.canvas.mode, Canvas.EDIT)
         self.assertEqual(self.modes, [Canvas.EDIT])
 
+    def test_polygon_repeated_press_location_adds_one_vertex(self):
+        """Duplicate pointer delivery must not duplicate polygon geometry."""
+        self.canvas.set_polygon_drawing(True)
+        locations = (
+            QPointF(20, 20), QPointF(80, 20),
+            QPointF(80, 80), QPointF(20, 80),
+        )
+
+        for location in locations:
+            self.canvas.handle_drawing(location)
+            self.canvas.handle_drawing(location)
+
+        self.assertEqual(
+            [(point.x(), point.y())
+             for point in self.canvas.current.points],
+            [(20.0, 20.0), (80.0, 20.0),
+             (80.0, 80.0), (20.0, 80.0)],
+        )
+
     def test_escape_mid_edit_drag_cancels_and_release_is_inert(self):
         self.canvas.mousePressEvent(
             self._mouse(QEvent.MouseButtonPress, 20, 20))

@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import threading
 import time
 from threading import Event
 from types import SimpleNamespace
@@ -282,6 +283,82 @@ def test_async_open_decodes_qimage_off_thread_and_builds_qpixmap_on_gui(
             assert _wait(app, lambda: window.document_kind == DocumentKind.VIDEO)
         assert decode_threads == [True]
         assert pixmap_threads == [True]
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_async_open_initializes_video_dependencies_on_gui_thread(tmp_path):
+    """First-time NumPy setup must not run on Qt's small worker stack."""
+    from libs.core.video_runtime import VideoRuntimeStatus
+
+    app, window = get_main_app()
+    dependency_threads = []
+    started = threading.Event()
+    release = threading.Event()
+    ready = VideoRuntimeStatus(
+        True, (), 'pip install "labelimgplusplus[video]"', 'Ready')
+
+    def load_dependencies():
+        dependency_threads.append(QThread.currentThread() == app.thread())
+        return object(), object()
+
+    def wait_for_release(*_args, **_kwargs):
+        started.set()
+        release.wait(1)
+        raise RuntimeError('stop after dependency initialization')
+
+    try:
+        with patch(
+                'labelImgPlusPlus.probe_video_runtime',
+                return_value=ready), patch(
+                'libs.core.video_decoder.load_video_dependencies',
+                side_effect=load_dependencies), patch(
+                'labelImgPlusPlus.prepare_video_open',
+                side_effect=wait_for_release):
+            window.request_open_video(
+                str(tmp_path / 'clip.mp4'),
+                project_path=str(tmp_path / 'clip.labelimgpp.sqlite'),
+                skip_prompt=True)
+            assert dependency_threads == [True]
+            assert started.wait(1)
+    finally:
+        release.set()
+        _wait(
+            app, lambda: not window.task_coordinator.queue_depths()['video'])
+        window.dirty = False
+        window.close()
+
+
+def test_async_open_commit_failure_clears_loading_state():
+    """A UI-side commit error must not leave an endless loading veil."""
+    _app, window = get_main_app()
+
+    class Decoder:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    decoder = Decoder()
+    prepared = SimpleNamespace(decoder=decoder)
+    request_id = window._video_open_request_id
+    generation = window._dataset_generation
+    window._show_loading_veil('Opening video clip.mp4…')
+    assert not window._loading_veil.isHidden()
+
+    try:
+        with patch.object(
+                window, '_commit_video_open',
+                side_effect=RuntimeError('UI commit failed')):
+            window._on_video_open_result(
+                prepared, request_id, generation,
+                requested_path='/tmp/clip.mp4')
+
+        assert window._loading_veil.isHidden()
+        assert decoder.closed
+        assert 'Error opening video: UI commit failed' in \
+            window.statusBar().currentMessage()
     finally:
         window.dirty = False
         window.close()
@@ -1243,8 +1320,8 @@ def test_missing_runtime_supersedes_blocked_image_and_restores_canvas(
 
     try:
         with patch(
-                'labelImgPlusPlus.load_image_result',
-                side_effect=blocked_load):
+            'labelImgPlusPlus.load_image_result',
+            side_effect=blocked_load):
             window.request_load_file(str(replacement), skip_prompt=True)
             assert started.wait(1)
             assert window.canvas.isEnabled()

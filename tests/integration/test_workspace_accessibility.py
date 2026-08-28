@@ -1,4 +1,4 @@
-"""Drawer focus and assistive-technology contracts."""
+"""Keyboard and assistive-technology contracts for the workspace shell."""
 
 import os
 
@@ -7,7 +7,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QHBoxLayout, QPushButton, QWidget,
+    QApplication, QDialog, QHBoxLayout, QPushButton, QToolButton, QWidget,
 )
 from PyQt5.QtTest import QTest
 
@@ -24,6 +24,36 @@ def _close(window):
     window.close()
     QApplication.processEvents()
     QApplication.processEvents()
+
+
+def _chrome_button(window, action):
+    return next(
+        button for button in
+        window.workspace_pages.canvas_chrome.findChildren(QToolButton)
+        if button.defaultAction() is action)
+
+
+def _reachable_focus_widgets(window, start):
+    reachable = []
+    current = start
+    for _index in range(128):
+        if (current.isVisibleTo(window) and current.isEnabled()
+                and current.focusPolicy() != Qt.NoFocus):
+            reachable.append(current)
+        current = current.nextInFocusChain()
+        if current is start:
+            break
+    return reachable
+
+
+def _contains_subsequence(actual, expected):
+    position = 0
+    for widget in actual:
+        if widget is expected[position]:
+            position += 1
+            if position == len(expected):
+                return True
+    return False
 
 
 def test_primary_workspace_controls_have_accessible_names(
@@ -44,6 +74,64 @@ def test_primary_workspace_controls_have_accessible_names(
         assert window.workspace_inspector.tabs.accessibleName() == 'Inspector'
         assert window.full_gallery.list_widget.accessibleName() == \
             'Dataset gallery'
+    finally:
+        _close(window)
+
+
+def test_primary_workspace_targets_accept_tab_focus(monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        assert window.canvas.focusPolicy() == Qt.StrongFocus
+        assert all(button.focusPolicy() == Qt.StrongFocus
+                   for button in window.tool_rail.buttons.values())
+        chrome_buttons = [
+            button for button in
+            window.workspace_pages.canvas_chrome.findChildren(QToolButton)
+        ]
+        assert chrome_buttons
+        assert all(button.focusPolicy() == Qt.StrongFocus
+                   for button in chrome_buttons)
+        assert window.workspace_inspector.collapse_button.focusPolicy() == \
+            Qt.StrongFocus
+        assert window.workspace_shell.reopen_button.focusPolicy() == \
+            Qt.StrongFocus
+    finally:
+        _close(window)
+
+
+def test_canvas_focus_chain_contains_tools_chrome_and_inspector(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.file_path = str(tmp_path / 'frame.png')
+        window.canvas.setEnabled(True)
+        window.toggle_actions(True)
+        window.zoom_widget.setEnabled(True)
+        for action in window.tool_rail.action_group.actions():
+            action.setEnabled(True)
+        window.workspace_pages.set_page('canvas')
+        window.resize(1200, 700)
+        window.show()
+        QApplication.processEvents()
+
+        reachable = _reachable_focus_widgets(
+            window, window.command_bar.application_button)
+        expected = [
+            window.command_bar.application_button,
+            window.command_bar.open_button,
+            window.tool_rail.buttons['select'],
+            window.tool_rail.buttons['box'],
+            window.tool_rail.buttons['polygon'],
+            _chrome_button(window, window.actions.zoomOut),
+            window.zoom_widget,
+            _chrome_button(window, window.actions.zoomIn),
+            window.canvas,
+            window.workspace_inspector.tabs,
+            window.annotation_search,
+            window.label_list,
+            window.workspace_inspector.collapse_button,
+        ]
+        assert _contains_subsequence(reachable, expected)
     finally:
         _close(window)
 

@@ -163,38 +163,51 @@ class CanvasChrome(QWidget):
         layout.setContentsMargins(
             scale_px(6), scale_px(2), scale_px(6), scale_px(2))
         layout.setSpacing(scale_px(2))
-        layout.addWidget(_action_button(zoom_out, self))
-        zoom_widget.setAccessibleName('Zoom level')
-        zoom_widget.setFocusPolicy(Qt.StrongFocus)
-        zoom_widget.setMinimumHeight(scale_px(32))
-        zoom_line_edit = zoom_widget.lineEdit()
+        self.zoom_out_button = _action_button(zoom_out, self)
+        layout.addWidget(self.zoom_out_button)
+        self.zoom_widget = zoom_widget
+        self.zoom_widget.setAccessibleName('Zoom level')
+        self.zoom_widget.setFocusPolicy(Qt.StrongFocus)
+        self.zoom_widget.setMinimumHeight(scale_px(32))
+        zoom_line_edit = self.zoom_widget.lineEdit()
         zoom_line_edit.setAccessibleName('Zoom level value')
         zoom_line_edit.setProperty('secondaryAction', True)
         zoom_widget.setFixedWidth(scale_px(56))
         layout.addWidget(zoom_widget)
-        layout.addWidget(_action_button(zoom_in, self))
+        # QWidgetAction previously owned this control and explicitly hid it;
+        # the workspace chrome is now its visual owner.
+        zoom_widget.show()
+        self.zoom_in_button = _action_button(zoom_in, self)
+        layout.addWidget(self.zoom_in_button)
         layout.addSpacing(scale_px(8))
-        for action in (fit_window, fit_width, actual_size):
-            layout.addWidget(_action_button(action, self))
+        self.fit_window_button = _action_button(fit_window, self)
+        self.fit_width_button = _action_button(fit_width, self)
+        self.actual_size_button = _action_button(actual_size, self)
+        for button in (
+                self.fit_window_button, self.fit_width_button,
+                self.actual_size_button):
+            layout.addWidget(button)
         self.sam_output_toggle = SamOutputModeToggle(parent=self)
         layout.addWidget(self.sam_output_toggle)
         layout.addStretch(1)
-        visibility = QToolButton(self)
-        visibility.setObjectName('annotationVisibilityButton')
-        visibility.setIcon(show_all.icon())
-        visibility.setToolTip('Annotation visibility')
-        visibility.setAccessibleName('Annotation visibility')
-        visibility.setFocusPolicy(Qt.StrongFocus)
-        visibility.setFixedSize(scale_px(32), scale_px(32))
-        visibility.setPopupMode(QToolButton.InstantPopup)
-        menu = QMenu(visibility)
+        self.visibility_button = QToolButton(self)
+        self.visibility_button.setObjectName('annotationVisibilityButton')
+        self.visibility_button.setIcon(show_all.icon())
+        self.visibility_button.setToolTip('Annotation visibility')
+        self.visibility_button.setAccessibleName('Annotation visibility')
+        self.visibility_button.setFocusPolicy(Qt.StrongFocus)
+        self.visibility_button.setFixedSize(scale_px(32), scale_px(32))
+        self.visibility_button.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.visibility_button)
         menu.addAction(show_all)
         menu.addAction(hide_all)
-        visibility.setMenu(menu)
-        layout.addWidget(visibility)
+        self.visibility_button.setMenu(menu)
+        layout.addWidget(self.visibility_button)
 
 
 class WorkspacePages(QWidget):
+    pageChanged = pyqtSignal(str)
+
     EMPTY = 0
     CANVAS = 1
     GALLERY = 2
@@ -263,8 +276,9 @@ class WorkspacePages(QWidget):
 
         self.status_strip = QWidget(self)
         self.status_strip.setObjectName('workspaceStatusStrip')
-        self.status_strip.setFixedHeight(scale_px(24))
+        self.status_strip.setFixedHeight(scale_px(28))
         self.status_widgets = tuple(status_widgets)
+        self._context_hidden_status = set()
         self._status_message = self.status_widgets[0].text()
         self.status_widgets[0].setMinimumWidth(0)
         self.status_widgets[0].setSizePolicy(
@@ -284,9 +298,17 @@ class WorkspacePages(QWidget):
         self.set_page('empty')
 
     def set_page(self, name):
-        index = {'empty': self.EMPTY, 'canvas': self.CANVAS,
-                 'gallery': self.GALLERY}.get(name, self.EMPTY)
+        normalized = (
+            name if name in ('empty', 'canvas', 'gallery') else 'empty')
+        index = {
+            'empty': self.EMPTY,
+            'canvas': self.CANVAS,
+            'gallery': self.GALLERY,
+        }[normalized]
+        changed = self.stack.currentIndex() != index
         self.stack.setCurrentIndex(index)
+        if changed:
+            self.pageChanged.emit(normalized)
 
     def current_page(self):
         return ('empty', 'canvas', 'gallery')[self.stack.currentIndex()]
@@ -330,6 +352,14 @@ class WorkspacePages(QWidget):
             self._layout_overlays()
         return super(WorkspacePages, self).eventFilter(watched, event)
 
+    def set_context_status_widgets(self, widgets):
+        """Limit status chips to those meaningful for the active page."""
+        visible = set(widgets)
+        self._context_hidden_status = {
+            widget for widget in self.status_widgets if widget not in visible
+        }
+        self._update_status_visibility(self.width())
+
     def set_status_message(self, text):
         """Show a status message, eliding it rather than clipping it.
 
@@ -355,9 +385,9 @@ class WorkspacePages(QWidget):
         self._update_status_visibility(event.size().width())
         self._refresh_status_message()
 
-    # Dropped in this order as room runs out; the message, save state and
-    # zoom chips are never dropped.
-    _OPTIONAL_STATUS_ORDER = (7, 5, 3, 2, 4)
+    # Dropped in this order as room runs out; the message, save state,
+    # verification state, and zoom chips are never dropped.
+    _OPTIONAL_STATUS_ORDER = (8, 6, 4, 3, 5)
 
     def _update_status_visibility(self, width):
         """Hide status chips only once they genuinely stop fitting.
@@ -374,14 +404,29 @@ class WorkspacePages(QWidget):
                      - scale_px(140))
 
         widths = [widget.sizeHint().width() for widget in self.status_widgets]
-        needed = sum(widths[1:]) + spacing * max(0, len(widths) - 1)
+        eligible = {
+            index for index, widget in enumerate(self.status_widgets)
+            if widget not in self._context_hidden_status
+            and (widget.property('statusAvailable') is None
+                 or bool(widget.property('statusAvailable')))
+        }
+        fixed = [index for index in range(1, len(widths))
+                 if index in eligible]
+        needed = sum(widths[index] for index in fixed)
+        needed += spacing * max(0, len(fixed))
 
         hidden = set()
         for index in self._OPTIONAL_STATUS_ORDER:
+            if index not in eligible:
+                continue
             if needed <= available:
                 break
             hidden.add(index)
             needed -= widths[index] + spacing
 
         for index, widget in enumerate(self.status_widgets):
-            widget.setVisible(index not in hidden)
+            available = widget.property('statusAvailable')
+            widget.setVisible(
+                index not in hidden
+                and widget not in self._context_hidden_status
+                and (available is None or bool(available)))

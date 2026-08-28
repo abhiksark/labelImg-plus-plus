@@ -683,7 +683,7 @@ QWidget#workspaceStatusStrip {{
 }}
 QWidget#workspaceStatusStrip QLabel {{
     color: {c['text_secondary']};
-    font-size: {scale_px(10)}px;
+    font-size: {scale_px(11)}px;
 }}
 QWidget#emptyWorkspacePage {{
     background: {c['background']};

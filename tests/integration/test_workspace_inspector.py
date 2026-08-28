@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QApplication, QDockWidget, QToolBar
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import MainWindow
+from libs.core.dataset import DatasetSnapshot
 from libs.core.settings import Settings
 from libs.utils.constants import (
     SETTING_ADVANCE_MODE, SETTING_ICON_SIZE, SETTING_INSPECTOR_COLLAPSED,
@@ -189,6 +190,24 @@ def test_legacy_prompt_setting_round_trips_but_new_policy_wins_next_launch(
         assert second.single_class_mode not in _view_actions(second)
     finally:
         _close(second)
+
+
+def test_file_list_shows_basename_and_keeps_full_path_as_data(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        path = str(tmp_path / 'nested' / 'a-very-long-image-name.png')
+        snapshot = DatasetSnapshot.from_images(
+            (path,), root_dir=str(tmp_path), save_dir=str(tmp_path),
+            generation=1)
+        window._commit_dataset_snapshot(snapshot)
+
+        item = window.file_list_widget.item(0)
+        assert item.text() == 'a-very-long-image-name.png'
+        assert item.data(Qt.UserRole) == path
+        assert item.toolTip() == path
+    finally:
+        _close(window)
 
 
 def test_inspector_becomes_dismissible_drawer_below_960(

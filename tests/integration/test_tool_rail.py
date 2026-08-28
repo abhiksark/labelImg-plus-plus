@@ -81,6 +81,30 @@ def test_neutral_entry_points_sync_exclusive_state_and_canvas_focus(
         window.close()
 
 
+def test_sync_repairs_drifted_checked_state_from_canvas_mode(
+        monkeypatch, tmp_path):
+    """A repaint/state drift must not leave two tools visibly selected."""
+    window = _window(monkeypatch, tmp_path)
+    try:
+        group = window.tool_rail.action_group
+        group.setExclusive(False)
+        window.actions.editMode.setChecked(True)
+        window.actions.create_polygon.setChecked(True)
+        group.setExclusive(True)
+        window.canvas.mode = window.canvas.EDIT
+
+        window._sync_tool_actions()
+
+        checked = [
+            action for action in group.actions() if action.isChecked()
+        ]
+        assert checked == [window.actions.editMode]
+        assert window.label_active_tool.text().startswith('Select')
+    finally:
+        window.dirty = False
+        window.close()
+
+
 def test_legacy_callbacks_route_through_neutral_entry_points(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
@@ -115,9 +139,27 @@ def test_shortcut_dialog_updates_smart_select_action_and_tooltip(
 
         assert window.actions.sam_mode.shortcut().toString() == 'Alt+S'
         assert window.tool_rail.buttons['smartSelect'].toolTip() == \
-            'Smart Select (Alt+S)'
+            'Smart Select (%s)' % QKeySequence('Alt+S').toString(
+                QKeySequence.NativeText)
     finally:
         dialog.close()
+        window.dirty = False
+        window.close()
+
+
+def test_tooltip_presents_shortcut_in_native_platform_text(
+        monkeypatch, tmp_path):
+    """macOS-facing hints must say Command when Qt maps Ctrl to Command."""
+    window = _window(monkeypatch, tmp_path)
+    try:
+        sequence = QKeySequence('Ctrl+G')
+        window.actions.create_polygon.setShortcut(sequence)
+        QApplication.processEvents()
+
+        expected = sequence.toString(QKeySequence.NativeText)
+        assert window.tool_rail.buttons['polygon'].toolTip() == \
+            'Polygon (%s)' % expected
+    finally:
         window.dirty = False
         window.close()
 

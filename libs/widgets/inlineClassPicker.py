@@ -56,6 +56,7 @@ class InlineClassPicker(QFrame):
         layout.addWidget(self.list_widget)
 
         self.apply_theme(Theme.LIGHT)
+        self.hide()
 
     def apply_theme(self, theme):
         """Paint from the application palette, not the desktop's.
@@ -111,7 +112,15 @@ class InlineClassPicker(QFrame):
             self.move(x, y)
         self.show()
         self.raise_()
+        QTimer.singleShot(0, self._focus_editor)
+
+    def _focus_editor(self):
+        """Take focus after the geometry-completion event has unwound."""
+        if not self.isVisible() or self._closing:
+            return
+        self.raise_()
         self.edit.setFocus(Qt.PopupFocusReason)
+        self.edit.selectAll()
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.KeyPress:

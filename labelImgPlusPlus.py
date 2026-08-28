@@ -21,8 +21,8 @@ try:
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox, QListView,
         QDialog, QFileDialog, QHBoxLayout, QLabel,
-        QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
-        QScrollArea, QTabWidget, QToolButton,
+        QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+        QMenu, QMessageBox, QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
 except ImportError:
@@ -37,7 +37,7 @@ except ImportError:
         QColor, QCursor, QImage, QImageReader, QPixmap,
         QAction, QActionGroup, QApplication, QCheckBox,
         QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-        QMainWindow, QMenu, QMessageBox, QScrollArea,
+        QListWidgetItem, QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
     from PyQt4.QtCore import (
@@ -171,7 +171,7 @@ from libs.utils.constants import (
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
-    generate_color_by_text, have_qstring, natural_sort
+    generate_color_by_text, have_qstring, native_shortcut_text, natural_sort
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.window_geometry import default_window_size, fit_to_available
@@ -493,7 +493,6 @@ class MainWindow(QMainWindow, WindowMixin):
             self._active_class_selected)
         self.active_class_control.policyChanged.connect(
             self._active_class_policy_changed)
-
         self.active_class_control.combo.setMinimumHeight(scale_px(32))
         self.active_class_control.combo.lineEdit().setAccessibleName(
             'Active annotation class value')
@@ -506,6 +505,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
+        self.diffc_button.setEnabled(False)
         self.diffc_button.setAccessibleName(
             'Mark selected annotation difficult')
         self.diffc_button.setMinimumHeight(scale_px(32))
@@ -588,6 +588,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Tab widget to hold both views
         self.file_view_tabs = QTabWidget()
+        self.file_view_tabs.setAccessibleName('Dataset views')
         self.file_view_tabs.addTab(self.file_list_widget, get_str('listView'))
         self.file_view_tabs.addTab(self.gallery_widget, get_str('galleryView'))
         self.file_view_tabs.currentChanged.connect(self.on_file_view_tab_changed)
@@ -1275,11 +1276,18 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_active_tool = QLabel('Select')
         self.label_zoom = QLabel('Zoom: 100%')
         self.label_save_status = QLabel('● Saved')
+        self.label_verification_status = QLabel('● Verified')
+        self.label_verification_status.setAccessibleName(
+            'Verification status')
+        self.label_verification_status.setProperty(
+            'statusAvailable', False)
+        self.label_verification_status.hide()
         self.label_coordinates = QLabel('')
         self._update_save_status_style(saved=True)
 
         self.full_gallery = GalleryWidget(
-            show_size_slider=True, coordinator=self.task_coordinator)
+            show_size_slider=True, coordinator=self.task_coordinator,
+            initial_icon_size=150)
         self.full_gallery.set_save_dir(self.default_save_dir)
         self.full_gallery.set_status_filter(
             self.status_filter_combo.currentIndex())
@@ -1303,9 +1311,10 @@ class MainWindow(QMainWindow, WindowMixin):
         canvas_column = WorkspacePages(
             self.scroll_area, self.video_timeline, gallery_page,
             (self.label_status_message, self.label_save_status,
-             self.label_dimensions, self.label_image_count,
-             self.label_box_count, self.label_active_tool,
-             self.label_zoom, self.label_coordinates),
+             self.label_verification_status, self.label_dimensions,
+             self.label_image_count, self.label_box_count,
+             self.label_active_tool, self.label_zoom,
+             self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
         self.inline_open_error = InlineErrorBanner(
@@ -1351,6 +1360,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.actions.create_polygon, self.actions.sam_mode,
                 self.actions.keypoint_mode):
             tool_action.changed.connect(self._update_active_tool_status)
+            tool_action.changed.connect(
+                self._update_canvas_accessible_description)
         self.workspace_inspector = WorkspaceInspector(
             self.annotation_controls, self.file_controls, self)
         self.workspace_inspector.set_selected_tab(
@@ -1361,6 +1372,9 @@ class MainWindow(QMainWindow, WindowMixin):
             collapsed=self.workspace_settings.inspector_collapsed,
             parent=self)
         self.setCentralWidget(self.workspace_shell)
+        self.workspace_pages.pageChanged.connect(
+            self._sync_workspace_context)
+        self._sync_workspace_context(self.workspace_pages.current_page())
         self.setAcceptDrops(True)
         self._inspector_width_timer = QTimer(self)
         self._inspector_width_timer.setSingleShot(True)
@@ -1543,6 +1557,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setMenuWidget(self.command_bar)
         self.command_bar.apply_theme(self._current_theme)
         self._sync_command_bar()
+        self._sync_verification_ui()
+        self._configure_workspace_tab_order()
+        self._update_canvas_accessible_description()
+
         self.plugin_command_host = QtPluginCommandHost(
             self, self.menus.plugins, self.shortcut_config,
             self._action_map, self.settings)
@@ -1714,6 +1732,29 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.workspace_pages.set_page(page)
         finally:
             self._toggling_gallery = False
+
+    def _sync_workspace_context(self, page=None):
+        """Project the active page into rail and status-strip visibility."""
+        page = page or self.workspace_pages.current_page()
+        canvas_page = page == 'canvas'
+        self.tool_rail.setVisible(canvas_page)
+        canvas_only = (
+            self.label_dimensions, self.label_image_count,
+            self.label_box_count, self.label_active_tool,
+            self.label_zoom, self.label_coordinates,
+        )
+        always = (
+            self.label_status_message, self.label_save_status,
+            self.label_verification_status,
+        )
+        if canvas_page:
+            visible_status = always + canvas_only
+        elif page == 'gallery':
+            visible_status = always
+        else:
+            visible_status = (self.label_status_message,)
+        self.workspace_pages.set_context_status_widgets(visible_status)
+        self.workspace_pages.update()
 
     def _cleanup_existing_gallery(self):
         """Compatibility hook: the embedded gallery has no resources to tear down."""
@@ -1906,6 +1947,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.editMode.setEnabled(False)
             self.actions.verify.setEnabled(False)
         self.update_save_status(saved=True)
+        self._sync_verification_ui()
         self._sync_command_bar()
         self._publish_plugin_document()
 
@@ -2097,6 +2139,37 @@ class MainWindow(QMainWindow, WindowMixin):
         """Update save status indicator in status bar."""
         self._update_save_status_style(saved)
 
+    def _sync_verification_ui(self):
+        """Project the current document verification state into the chrome."""
+        if not (hasattr(self, 'actions')
+                and hasattr(self.actions, 'verify')
+                and hasattr(self, 'label_verification_status')):
+            return
+        has_document = self.document_kind != DocumentKind.NONE
+        verified = has_document and bool(self.canvas.verified)
+        is_video = self.document_kind == DocumentKind.VIDEO
+        noun = 'frame' if is_video else 'image'
+        self.actions.verify.setText('Verified' if verified else 'Verify')
+        tooltip = (
+            'Mark the current %s unverified' % noun if verified
+            else 'Mark the current %s verified' % noun)
+        self.actions.verify.setToolTip(tooltip)
+        self.actions.verify.setStatusTip(tooltip)
+        self.label_verification_status.setText('● Verified')
+        self.label_verification_status.setProperty(
+            'statusAvailable', verified)
+        from libs.utils.styles import get_theme_colors
+        self.label_verification_status.setStyleSheet(
+            'color: %s;' % get_theme_colors(
+                self._current_theme)['status_verified'])
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages._update_status_visibility(
+                self.workspace_pages.width())
+        if hasattr(self, 'command_bar'):
+            self.command_bar.verify_button.setAccessibleName(
+                ('Verified; mark current %s unverified' % noun)
+                if verified else 'Verify current %s' % noun)
+
     def reset_state(self):
         self._dismiss_class_picker()
         self._clear_video_runtime_setup()
@@ -2127,8 +2200,32 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_box_count.setText('Objects: 0')
         self.workspace_shell.set_object_count(0)
         self.update_save_status(saved=True)
+        self._sync_verification_ui()
         self._sync_command_bar()
         self._publish_plugin_document(new_generation=True, force=True)
+
+    def _clear_dataset_state(self):
+        """Clear dataset projections when the user explicitly closes work."""
+        self.annotation_catalog.cancel()
+        self._dataset_generation += 1
+        self.dataset_snapshot = DatasetSnapshot.from_images(
+            (), save_dir=self.default_save_dir,
+            generation=self._dataset_generation)
+        for handle in self._prefetch_handles.values():
+            handle.cancel()
+        self._prefetch_handles.clear()
+        self.frame_cache.clear()
+        self.m_img_list = []
+        self._path_to_idx = {}
+        self._annotation_status_cache.clear()
+        self.img_count = 0
+        self.cur_img_idx = 0
+        self.last_open_dir = None
+        self.dir_name = None
+        self.file_list_widget.clear()
+        self.gallery_widget.clear()
+        self.full_gallery.clear()
+        self.gallery_stats.clear_stats()
 
     def _set_document_kind(self, kind):
         """Switch cache policy and document-only UI without touching content."""
@@ -2172,8 +2269,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.annotation_model.set_video_context(self.video_model, pts)
             elif kind == DocumentKind.NONE:
                 self.annotation_model.clear()
-        if kind != DocumentKind.VIDEO and hasattr(self, 'diffc_button'):
-            self.diffc_button.setEnabled(True)
         if hasattr(self, 'actions') and hasattr(
                 self.actions, 'videoPlayPause'):
             self.actions.verify.setEnabled(kind != DocumentKind.NONE)
@@ -3112,7 +3207,15 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.KEYPOINT_MODE: self.actions.keypoint_mode,
         }
         active = mapping.get(self.canvas.mode, self.actions.editMode)
-        active.setChecked(True)
+        group = getattr(self.tool_rail, 'action_group', None)
+        if group is not None:
+            group.setExclusive(False)
+        for action in mapping.values():
+            action.setChecked(action is active)
+        if group is not None:
+            group.setExclusive(True)
+            for button in self.tool_rail.buttons.values():
+                button.update()
         if hasattr(self, 'workspace_pages'):
             self.workspace_pages.sam_output_toggle.setVisible(
                 self.canvas.mode == self.canvas.CREATE_SAM)
@@ -3134,7 +3237,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.create_polygon, self.actions.sam_mode,
             self.actions.keypoint_mode) if action.isChecked()),
             self.actions.editMode)
-        shortcut = active.shortcut().toString()
+        shortcut = native_shortcut_text(active.shortcut())
         names = {
             self.actions.editMode: 'Select',
             self.actions.create: 'Bounding Box',
@@ -3149,6 +3252,67 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_active_tool.setText(
             '%s%s' % (names.get(active, active.text().replace('&', '')),
                       ' (%s)' % shortcut if shortcut else ''))
+
+    def _update_canvas_accessible_description(self):
+        """Describe the canvas and its primary shortcuts in native text."""
+        actions = (
+            ('Select', self.actions.editMode),
+            ('Bounding Box', self.actions.create),
+            ('Polygon', self.actions.create_polygon),
+            ('Smart Select', self.actions.sam_mode),
+            ('Keypoints', self.actions.keypoint_mode),
+        )
+        hints = []
+        for name, action in actions:
+            shortcut = native_shortcut_text(action.shortcut())
+            hints.append(
+                '%s %s' % (name, shortcut) if shortcut else name)
+        self.canvas.setAccessibleDescription(
+            'Image annotation surface. Shortcuts: %s.' % ', '.join(hints))
+
+    def _configure_workspace_tab_order(self):
+        """Define one stable order; Qt skips hidden and disabled branches."""
+        chrome = self.workspace_pages.canvas_chrome
+        controls = [
+            self.command_bar.application_button,
+            self.command_bar.open_button,
+            self.command_bar.previous_button,
+            self.command_bar.next_button,
+            self.command_bar.save_button,
+            self.command_bar.verify_button,
+            self.command_bar.format_button,
+            self.command_bar.overflow_button,
+            self.tool_rail.buttons['select'],
+            self.tool_rail.buttons['box'],
+            self.tool_rail.buttons['polygon'],
+            self.tool_rail.buttons['smartSelect'],
+            self.tool_rail.buttons['keypoints'],
+            chrome.zoom_out_button,
+            self.zoom_widget,
+            chrome.zoom_in_button,
+            chrome.fit_window_button,
+            chrome.fit_width_button,
+            chrome.actual_size_button,
+            chrome.visibility_button,
+            self.canvas,
+            self.full_gallery.size_slider,
+            self.full_gallery.list_widget,
+            self.gallery_stats.refresh_btn,
+            self.workspace_inspector.tabs,
+            self.edit_button,
+            self.diffc_button,
+            self.active_class_control.combo,
+            self.active_class_control.confirm_each,
+            self.combo_box.cb,
+            self.annotation_search,
+            self.label_list,
+            self.status_filter_combo,
+            self.file_view_tabs,
+            self.workspace_inspector.collapse_button,
+            self.workspace_shell.reopen_button,
+        ]
+        for before, after in zip(controls, controls[1:]):
+            QWidget.setTabOrder(before, after)
 
     def open_sam_settings(self):
         """Open the SAM configuration dialog."""
@@ -3320,7 +3484,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
-        item_path = ustr(item.text())
+        item_path = ustr(item.data(Qt.UserRole) or item.text())
         self.cur_img_idx = self._path_to_idx.get(item_path, 0)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
@@ -3332,7 +3496,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_selecting_gallery') and self._selecting_gallery:
             return
         if item is not None:
-            item_path = ustr(item.text())
+            item_path = ustr(item.data(Qt.UserRole) or item.text())
             if item_path in self._path_to_idx:
                 self.cur_img_idx = self._path_to_idx[item_path]
                 self.gallery_widget.select_image(item_path)
@@ -3575,6 +3739,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.label_list.clearSelection()
                 self.annotation_model.set_selected_identity(None)
         editable = self._video_editable()
+        self.diffc_button.setEnabled(bool(selected) and editable)
+        if not selected:
+            blocked = self.diffc_button.blockSignals(True)
+            self.diffc_button.setChecked(False)
+            self.diffc_button.blockSignals(blocked)
         self.actions.delete.setEnabled(selected and editable)
         self.actions.copy.setEnabled(selected and editable)
         self.actions.copyToClipboard.setEnabled(selected)
@@ -3899,6 +4068,10 @@ class MainWindow(QMainWindow, WindowMixin):
             identity = self.current_annotation_identity()
             self.annotation_model.set_selected_identity(identity)
             if identity is None:
+                blocked = self.diffc_button.blockSignals(True)
+                self.diffc_button.setChecked(False)
+                self.diffc_button.blockSignals(blocked)
+                self.diffc_button.setEnabled(False)
                 return
             if self.document_kind == DocumentKind.VIDEO:
                 self._selected_video_track_id = identity
@@ -6614,6 +6787,7 @@ class MainWindow(QMainWindow, WindowMixin):
             state.pts == result.frame_ref.pts and state.verified
             for state in self.video_frame_states)
         self.canvas.verified = verified
+        self._sync_verification_ui()
         self.canvas.locked = (
             not self._video_editable()
             or (verified and self.lock_on_verify_option.isChecked()))
@@ -7080,6 +7254,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 args={'path': hash_path(result.path),
                       'shapes': len(result.shapes)})
         self._plugin_document_ready = True
+        self._sync_verification_ui()
         self._publish_plugin_document(new_generation=True, force=True)
 
     def request_next_image(self, _value=False):
@@ -7283,6 +7458,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 # Load image with memory-efficient downsampling for large images
                 self.label_file = None
                 self.canvas.verified = False
+                self._sync_verification_ui()
 
                 # Use QImageReader for memory-efficient loading
                 reader = QImageReader(unicode_file_path)
@@ -8630,7 +8806,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.setUpdatesEnabled(False)
         try:
             self.file_list_widget.clear()
-            self.file_list_widget.addItems(self.m_img_list)
+            for path in self.m_img_list:
+                item = QListWidgetItem(os.path.basename(path) or path)
+                item.setData(Qt.UserRole, path)
+                item.setToolTip(path)
+                self.file_list_widget.addItem(item)
         finally:
             self.file_list_widget.setUpdatesEnabled(True)
         self.gallery_widget.set_dataset_snapshot(snapshot)
@@ -8734,6 +8914,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.current_video_frame_ref.pts,
                 not bool(self.canvas.verified))
             self.canvas.verified = not bool(self.canvas.verified)
+            self._sync_verification_ui()
             self._on_video_model_mutation()
             return self.save_video_project()
         # Proceeding next image without dialog if having any label
@@ -8750,6 +8931,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     return
 
             self.canvas.verified = self.label_file.verified
+            self._sync_verification_ui()
             if self.lock_on_verify_option.isChecked():
                 self.canvas.locked = self.canvas.verified
             self.paint_canvas()
@@ -8766,6 +8948,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.current_video_frame_ref.pts,
                 not bool(self.canvas.verified))
             self.canvas.verified = not bool(self.canvas.verified)
+            self._sync_verification_ui()
             if self.lock_on_verify_option.isChecked():
                 self.canvas.locked = self.canvas.verified
             self._on_video_model_mutation()
@@ -8778,6 +8961,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_file = LabelFile()
         self.label_file.verified = not bool(self.canvas.verified)
         self.canvas.verified = self.label_file.verified
+        self._sync_verification_ui()
         if self.lock_on_verify_option.isChecked():
             self.canvas.locked = self.canvas.verified
         self.set_dirty()
@@ -9105,6 +9289,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.status('Saved to %s' % path)
         if self.file_path == request.image_path:
             self._update_current_image_gallery_status()
+            self._sync_verification_ui()
         if callable(on_success):
             on_success()
 
@@ -9255,11 +9440,27 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         self._discard_workflow_draft(show_status=False)
         self.reset_state()
+        self._clear_dataset_state()
         self._start_interaction_session()
+        self.gallery_mode_enabled = False
+        blocked = self.actions.galleryMode.blockSignals(True)
+        self.actions.galleryMode.setChecked(False)
+        self.actions.galleryMode.blockSignals(blocked)
+        self.workspace_pages.set_page('empty')
+        self._sync_workspace_context('empty')
+        self.statusBar().clearMessage()
+        self.label_dimensions.setText('0 x 0')
+        self.label_image_count.setText('Image: 0 / 0')
+        self.label_box_count.setText('Objects: 0')
+        self.label_active_tool.setText('Select')
+        self.label_zoom.setText('Zoom: 100%')
+        self.setWindowTitle(__appname__)
         self.set_clean()
         self.toggle_actions(False)
         self.canvas.setEnabled(False)
         self.actions.saveAs.setEnabled(False)
+        self._sync_command_bar()
+        self.workspace_shell.update()
 
     def delete_image(self):
         delete_path = self.file_path
@@ -9593,6 +9794,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_PASCALVOC)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_yolo_txt_by_filename(self, txt_path):
         if self.file_path is None:
@@ -9615,6 +9817,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_YOLO)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_create_ml_json_by_filename(self, json_path, file_path):
         if self.file_path is None:
@@ -9634,6 +9837,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_CREATEML)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_coco_json_by_filename(self, json_path, file_path):
         """Load annotations from a COCO JSON file for the given image.
@@ -9659,6 +9863,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_COCO)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_yolo_seg_by_filename(self, txt_path):
         """Load annotations from a YOLO-seg text file.
@@ -9685,6 +9890,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_YOLO_SEG)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def copy_previous_bounding_boxes(self):
         current_index = self._path_to_idx.get(self.file_path, 0)
@@ -9811,6 +10017,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # recognize the previous theme's color token.
             is_saved = self.label_save_status.toolTip() == 'Saved'
             self._update_save_status_style(saved=is_saved)
+        self._sync_verification_ui()
 
         # Re-render every icon that new_action() recorded a resource name for.
         # Buttons bound with setDefaultAction follow their action, so this

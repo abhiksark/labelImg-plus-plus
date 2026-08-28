@@ -6,10 +6,11 @@ from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QMimeData, QSize, QUrl
-from PyQt5.QtGui import QImage
+from PyQt5.QtGui import QImage, QKeySequence
 from PyQt5.QtWidgets import QApplication, QDockWidget, QPushButton, QToolButton
 
-from labelImgPlusPlus import MainWindow
+from labelImgPlusPlus import MainWindow, __appname__
+from libs.core.dataset import DatasetSnapshot
 from libs.core.video_types import DocumentKind
 from libs.utils.styles import Theme
 
@@ -67,7 +68,7 @@ def test_empty_page_actions_and_recent_projection(monkeypatch, tmp_path):
         _close(window)
 
 
-def test_gallery_is_embedded_and_keeps_workspace_chrome(
+def test_gallery_is_embedded_and_hides_canvas_only_chrome(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
     try:
@@ -82,14 +83,61 @@ def test_gallery_is_embedded_and_keeps_workspace_chrome(
             window.workspace_pages.gallery_page
         assert window.full_gallery.window() is window
         assert not hasattr(window, 'gallery_window')
-        assert window.tool_rail.isVisibleTo(window)
+        assert not window.tool_rail.isVisibleTo(window)
         assert window.workspace_shell.layout_mode == 'drawer'
         assert not window.workspace_inspector.isVisibleTo(window)
         assert window.workspace_shell.reopen_button.isVisibleTo(window)
         assert window.workspace_pages.status_strip.isVisibleTo(window)
+        assert not window.label_dimensions.isVisibleTo(
+            window.workspace_pages.status_strip)
+        assert not window.label_active_tool.isVisibleTo(
+            window.workspace_pages.status_strip)
 
         window.toggle_gallery_mode(False)
         assert window.workspace_pages.current_page() == 'empty'
+    finally:
+        _close(window)
+
+
+def test_close_from_gallery_clears_dataset_and_paints_empty_page(
+        monkeypatch, tmp_path):
+    """Close must clear both document and dataset projections atomically."""
+    window = _window(monkeypatch, tmp_path)
+    try:
+        image_paths = []
+        for index in range(2):
+            path = str(tmp_path / ('image-%d.png' % index))
+            image = QImage(160, 120, QImage.Format_RGB32)
+            image.fill(0xFFFFFFFF)
+            assert image.save(path)
+            image_paths.append(path)
+        snapshot = DatasetSnapshot.from_images(
+            image_paths, root_dir=str(tmp_path), save_dir=str(tmp_path),
+            generation=1)
+        window._commit_dataset_snapshot(snapshot)
+        assert window.load_file(image_paths[0])
+        window.gallery_stats.update_dataset_stats(2, 1, 0)
+        window.toggle_gallery_mode(True)
+        window.show()
+        QApplication.processEvents()
+
+        window.close_file()
+        QApplication.processEvents()
+        QApplication.processEvents()
+
+        assert window.document_kind == DocumentKind.NONE
+        assert window.workspace_pages.current_page() == 'empty'
+        assert not window.gallery_mode_enabled
+        assert window.m_img_list == []
+        assert window._path_to_idx == {}
+        assert window.file_list_widget.count() == 0
+        assert window.gallery_widget.list_widget.count() == 0
+        assert window.full_gallery.list_widget.count() == 0
+        assert window.gallery_stats.get_dataset_stats()['total'] == 0
+        assert window.command_bar.document_label.text() == 'No document'
+        assert window.label_status_message.text() == ''
+        assert window.label_dimensions.text() == '0 x 0'
+        assert window.windowTitle() == __appname__
     finally:
         _close(window)
 
@@ -170,9 +218,11 @@ def test_canvas_chrome_reuses_actions_and_status_bar_is_hidden_bus(
         old_shortcut = window.actions.editMode.shortcut()
         window.actions.editMode.setShortcut('Alt+1')
         window.activate_select_tool()
-        assert window.label_active_tool.text() == 'Select (Alt+1)'
+        assert window.label_active_tool.text() == 'Select (%s)' % \
+            QKeySequence('Alt+1').toString(QKeySequence.NativeText)
         window.actions.editMode.setShortcut(old_shortcut)
 
+        window.workspace_pages.set_page('canvas')
         window.workspace_pages._update_status_visibility(320)
         assert window.label_status_message.isVisibleTo(
             window.workspace_pages.status_strip)

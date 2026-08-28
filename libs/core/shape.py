@@ -40,6 +40,7 @@ class Shape(object):
     # The following class variables influence the drawing
     # of _all_ shape objects.
     line_color = DEFAULT_LINE_COLOR
+    contrast_line_color = QColor(0, 0, 0, 120)
     fill_color = DEFAULT_FILL_COLOR
     select_line_color = DEFAULT_SELECT_LINE_COLOR
     select_fill_color = DEFAULT_SELECT_FILL_COLOR
@@ -92,9 +93,14 @@ class Shape(object):
         return len(self.points) >= MAX_POLYGON_POINTS
 
     def add_point(self, point):
-        if not self.reach_max_points():
-            self.points.append(point)
-            self._invalidate_geometry()
+        if self.reach_max_points():
+            return False
+        if (self.shape_type == ShapeType.POLYGON and self.points
+                and self.points[-1] == point):
+            return False
+        self.points.append(point)
+        self._invalidate_geometry()
+        return True
 
     def pop_point(self):
         if self.points:
@@ -248,6 +254,14 @@ class Shape(object):
             color = QColor(40, 130, 230, 230)
         elif not self.selected and render_state == 'pending':
             color = QColor(235, 165, 35, 230)
+        if not self.selected:
+            contrast_pen = QPen(self.contrast_line_color)
+            contrast_pen.setWidth(
+                max(3, int(round(4.0 / self.scale))))
+            if render_state in ('interpolation', 'pending'):
+                contrast_pen.setStyle(Qt.DashLine)
+            painter.setPen(contrast_pen)
+            painter.drawPath(line_path)
         pen = QPen(color)
         pen.setWidth(max(1, int(round(2.0 / self.scale))))
         if render_state in ('interpolation', 'pending'):

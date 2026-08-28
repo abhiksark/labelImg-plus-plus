@@ -40,6 +40,72 @@ def _enter_class(window, text):
     QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
 
 
+def test_picker_is_hidden_when_the_window_first_appears(tmp_path):
+    """The child picker must not paint until provisional geometry exists."""
+    app, window = get_main_app()
+    try:
+        window.show()
+        app.processEvents()
+
+        assert not window.class_picker.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+
+
+def test_polygon_picker_accepts_return_without_mouse_focus(tmp_path):
+    """Polygon completion must hand keyboard focus to class confirmation."""
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window.activate_polygon_tool()
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        for point in ((15, 15), (100, 15), (60, 90)):
+            shape.add_point(QPointF(*point))
+        window.canvas.current = shape
+        window.canvas.finalise()
+        app.processEvents()
+        app.processEvents()
+
+        assert window.class_picker.isVisible()
+        assert window.class_picker.edit.hasFocus()
+        window.class_picker.edit.setText('coast')
+        QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
+        app.processEvents()
+
+        assert [item.label for item in window.canvas.shapes] == ['coast']
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_picker_reclaims_focus_after_originating_event_unwinds(tmp_path):
+    """Deferred focus must win if the originating canvas event re-focuses."""
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window.show()
+        app.processEvents()
+        anchor = window.canvas.mapToGlobal(window.canvas.rect().center())
+
+        window.class_picker.open_at(('car', 'person'), 'car', anchor)
+        window.canvas.setFocus(Qt.MouseFocusReason)
+        assert window.canvas.hasFocus()
+        app.processEvents()
+
+        assert window.class_picker.edit.hasFocus()
+    finally:
+        window.class_picker.cancel()
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
 def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         tmp_path):
     app, window = get_main_app()
