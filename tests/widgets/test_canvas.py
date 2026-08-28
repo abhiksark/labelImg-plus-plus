@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import QApplication
 
 from libs.widgets.canvas import (
     Canvas, CURSOR_DEFAULT, CURSOR_DRAW, CURSOR_GRAB)
+from libs.core.assist_state import AssistPrompt
 from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
@@ -181,6 +182,15 @@ class TestCanvasHighlight(unittest.TestCase):
 
         self.assertTrue(self.canvas.selected_vertex())
 
+    def test_committed_shape_flash_clears_without_selecting_it(self):
+        """The post-commit cue is visual-only, not an editable selection."""
+        self.canvas.flash_committed_shape(self.shape, duration_ms=0)
+
+        self.assertIs(self.canvas._commit_highlight, self.shape)
+        self.assertIsNone(self.canvas.selected_shape)
+        self.canvas._clear_commit_highlight()
+        self.assertIsNone(self.canvas._commit_highlight)
+
 
 class TestCanvasDrawingColor(unittest.TestCase):
     """Test cases for Canvas drawing color."""
@@ -321,6 +331,7 @@ class TestCanvasTransform(unittest.TestCase):
 
         # Results should differ when scale differs
         # (exact values depend on widget geometry)
+        self.assertNotEqual(result1, result2)
 
 
 class TestCanvasScale(unittest.TestCase):
@@ -733,6 +744,9 @@ class _DrawFirstBase(unittest.TestCase):
         self.canvas.newShape.connect(lambda: self.log.append(('new',)))
         self.modes = []
         self.canvas.modeChanged.connect(self.modes.append)
+        self.escape_to_edit = []
+        self.canvas.escapeToEdit.connect(
+            lambda: self.escape_to_edit.append(self.canvas.mode))
 
     @staticmethod
     def _mouse(kind, x, y, button=Qt.LeftButton, buttons=Qt.LeftButton):
@@ -887,18 +901,23 @@ class TestEditDragDraw(_DrawFirstBase):
 
         self.assertEqual(len(blocked), 1)
 
-    def test_click_blocked_is_announced_in_sam_mode_too(self):
-        self.canvas.set_sam_mode(True)
-        self.canvas.commit_rectangle([20, 20, 60, 50])
+    def test_smart_points_receive_input_after_manual_draft_is_discarded(self):
+        """The supported tool transition never puts SAM atop a manual draft."""
+        self._drag(20, 20, 60, 50)
         self.assertIsNotNone(self.canvas.provisional_shape)
-        blocked = []
-        self.canvas.provisionalClickBlocked.connect(
-            lambda: blocked.append(True))
+        self.canvas.discard_provisional_shape()
+        prompts = []
+        self.canvas.assistPrompted.connect(prompts.append)
+        self.canvas.set_assist_prompt_mode('points')
+        self.canvas.set_sam_mode(True)
 
         self.canvas.mousePressEvent(
             self._mouse(QEvent.MouseButtonPress, 100, 100))
 
-        self.assertEqual(len(blocked), 1)
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertIsNone(self.canvas.current)
+        self.assertEqual(prompts, [AssistPrompt(
+            mode='points', positive_points=((100.0, 100.0),))])
 
     def test_right_press_mid_drag_cancels_and_swallows_the_menu(self):
         # menu.exec_() is a nested event loop; letting it run here would eat
@@ -1015,6 +1034,18 @@ class TestCanvasEscape(_DrawFirstBase):
 
         self.assertEqual(self.canvas.mode, Canvas.EDIT)
         self.assertEqual(self.modes, [])
+        self.assertEqual(self.escape_to_edit, [])
+
+    def test_escape_to_edit_signal_is_only_user_escape_transition(self):
+        self.canvas.set_editing(False)
+        self.escape_to_edit.clear()
+
+        self.canvas.set_editing(True)
+        self.assertEqual(self.escape_to_edit, [])
+
+        self.canvas.set_editing(False)
+        self.canvas.keyPressEvent(self._escape())
+        self.assertEqual(self.escape_to_edit, [Canvas.EDIT])
 
     def test_escape_cancels_an_in_flight_polygon_before_leaving(self):
         self.canvas.set_polygon_drawing(True)
@@ -1035,6 +1066,25 @@ class TestCanvasEscape(_DrawFirstBase):
 
         self.assertEqual(self.canvas.mode, Canvas.EDIT)
         self.assertEqual(self.modes, [Canvas.EDIT])
+
+    def test_polygon_repeated_press_location_adds_one_vertex(self):
+        """Duplicate pointer delivery must not duplicate polygon geometry."""
+        self.canvas.set_polygon_drawing(True)
+        locations = (
+            QPointF(20, 20), QPointF(80, 20),
+            QPointF(80, 80), QPointF(20, 80),
+        )
+
+        for location in locations:
+            self.canvas.handle_drawing(location)
+            self.canvas.handle_drawing(location)
+
+        self.assertEqual(
+            [(point.x(), point.y())
+             for point in self.canvas.current.points],
+            [(20.0, 20.0), (80.0, 20.0),
+             (80.0, 80.0), (20.0, 80.0)],
+        )
 
     def test_escape_mid_edit_drag_cancels_and_release_is_inert(self):
         self.canvas.mousePressEvent(

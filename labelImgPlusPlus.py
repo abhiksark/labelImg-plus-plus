@@ -21,8 +21,8 @@ try:
     from PyQt5.QtWidgets import (
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox, QListView,
         QDialog, QFileDialog, QHBoxLayout, QLabel,
-        QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
-        QScrollArea, QTabWidget, QToolButton,
+        QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+        QMenu, QMessageBox, QScrollArea, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
 except ImportError:
@@ -37,7 +37,7 @@ except ImportError:
         QColor, QCursor, QImage, QImageReader, QPixmap,
         QAction, QActionGroup, QApplication, QCheckBox,
         QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-        QMainWindow, QMenu, QMessageBox, QScrollArea,
+        QListWidgetItem, QMainWindow, QMenu, QMessageBox, QScrollArea,
         QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
     from PyQt4.QtCore import (
@@ -47,7 +47,7 @@ except ImportError:
 
 # Widgets
 from libs.widgets.combobox import ComboBox
-from libs.widgets.default_label_combobox import DefaultLabelComboBox
+from libs.widgets.activeClassControl import ActiveClassControl
 from libs.widgets.canvas import Canvas
 from libs.widgets.zoomWidget import ZoomWidget
 from libs.widgets.lightWidget import LightWidget
@@ -72,6 +72,7 @@ from libs.widgets.annotationInspector import (
 )
 from libs.widgets.workspacePages import WorkspacePages
 from libs.widgets.inlineClassPicker import InlineClassPicker
+from libs.widgets.inlineErrorBanner import InlineErrorBanner
 
 # Core
 from libs.core.shape import Shape, ShapeType, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
@@ -83,8 +84,13 @@ from libs.core.commands import (
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
-    clamp_inspector_width, load_workspace_settings,
+    clamp_inspector_width, load_workspace_settings, migrate_workflow_settings,
 )
+from libs.core.view_transform import ViewMode, ViewTransform
+from libs.core.annotation_workflow import (
+    AnnotationTool, AnnotationWorkflow, EscapeOutcome)
+from libs.core.assist_state import (
+    AssistFailureKind, AssistPhase, AssistPreview, AssistState)
 from libs.core.sam_controller import SamController
 from libs.core.sam_types import normalize_sam_output_mode
 from libs.core.annotation_catalog import AnnotationCatalog
@@ -93,12 +99,18 @@ from libs.core.image_pipeline import FrameCache, load_image_result
 from libs.core.save_pipeline import (
     SaveRequest, target_path as annotation_target_path, write_save_request,
 )
+from libs.core.continuous_save import ContinuousSaveCoordinator
+from libs.core.document_identity import DocumentIdentity
+from libs.core.shutdown_coordinator import ShutdownCoordinator
 from libs.core.task_coordinator import JobPriority, TaskCoordinator
 from libs.core.plugin_manager import PluginManager
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
-from libs.core.video_decoder import VIDEO_EXTENSIONS, VideoDecoderSession
+from libs.core.video_decoder import (
+    VIDEO_EXTENSIONS, VideoDecoderSession, VideoDependencyError,
+)
+from libs.core.video_runtime import VideoRuntimeStatus, probe_video_runtime
 from libs.core.video_project import (
     PROJECT_SUFFIX, VideoSourceChanged, VideoSourceMissing,
     checkpoint_project, default_project_path, save_project_as,
@@ -117,13 +129,14 @@ from libs.core.video_session import (
 )
 from libs.core.video_types import (
     DocumentKind, PropagationBatch, PropagationRequest, PropagationResult,
-    TrackingRequest, VideoExportRequest, VideoFrameRef,
+    TrackGapRecord, TrackingRequest, VideoExportRequest, VideoFrameRef,
 )
 from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.widgets.pluginManagerDialog import (
     PluginManagerDialog, QtPluginCommandHost,
 )
-from libs.integrations import segmentation
+from libs.integrations import model_cache, segmentation
+from libs.integrations.model_manifest import MOBILE_SAM_MANIFEST
 from labelimgplusplus.plugins import DocumentDescriptor
 
 # Formats
@@ -140,8 +153,7 @@ from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
-    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
-    SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
+    SETTING_CONTINUOUS_SAVE, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
     SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
     SETTING_ICON_SIZE, SETTING_LABEL_FILE_FORMAT, SETTING_LAST_OPEN_DIR,
@@ -149,6 +161,7 @@ from libs.utils.constants import (
     SETTING_RECENT_FILES, SETTING_SAVE_DIR, SETTING_SHORTCUTS,
     SETTING_INSPECTOR_COLLAPSED, SETTING_INSPECTOR_TAB,
     SETTING_INSPECTOR_WIDTH, SETTING_SINGLE_CLASS,
+    SETTING_PROMPT_POLICY,
     SETTING_WIN_POSE, SETTING_WIN_SIZE,
     FORMAT_PASCALVOC, FORMAT_YOLO, FORMAT_CREATEML,
     FORMAT_COCO, FORMAT_YOLO_SEG,
@@ -158,7 +171,7 @@ from libs.utils.constants import (
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
-    generate_color_by_text, have_qstring, natural_sort
+    generate_color_by_text, have_qstring, native_shortcut_text, natural_sort
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.window_geometry import default_window_size, fit_to_available
@@ -170,6 +183,10 @@ from libs.utils.ustr import ustr
 from libs.resources import *  # noqa: F403
 
 __appname__ = 'labelImgPlusPlus'
+
+
+class _VideoPublicationError(RuntimeError):
+    """A candidate already disposed by the publication transaction."""
 
 
 class WindowMixin(object):
@@ -196,6 +213,68 @@ class WindowMixin(object):
         return toolbar
 
 
+class _WindowShutdownActivity(object):
+    """Combine document workers and the sole save owner for shutdown."""
+
+    def __init__(self, window):
+        self.window = window
+        self._preserved_save_handles = set()
+        self._remember_save_handles()
+
+    def _remember_save_handles(self):
+        for handle in (
+                getattr(self.window, '_save_handle', None),
+                getattr(self.window, '_video_save_handle', None)):
+            if handle is not None:
+                self._preserved_save_handles.add(handle)
+        return tuple(self._preserved_save_handles)
+
+    def active_save_handles(self):
+        coordinator = self.window.task_coordinator
+        return tuple(
+            handle for handle in self._remember_save_handles()
+            if coordinator.has_active_handle(handle))
+
+    def has_unresolved_save_work(self):
+        return bool(
+            self.active_save_handles()
+            or not self.window.continuous_save.is_drained)
+
+    def cancel_all(self):
+        window = self.window
+        window._plugin_document_ready = False
+        window._publish_plugin_document(new_generation=True, force=True)
+        window.annotation_catalog.cancel()
+        if hasattr(window, 'sam_controller'):
+            window.sam_controller.cancel()
+        save_handles = self._remember_save_handles()
+        window._shutdown_save_authority = (
+            window.task_coordinator.begin_shutdown(
+                exclude_handles=save_handles))
+
+    def active_jobs(self):
+        jobs = []
+        save_handles = self._remember_save_handles()
+        jobs.extend(self.window.task_coordinator.active_jobs(
+            exclude_handles=save_handles))
+        if self.active_save_handles():
+            jobs.append('Saving newest revision')
+        save = self.window.continuous_save
+        if (not getattr(self.window, '_shutdown_discard_confirmed', False)
+                and not save.is_drained):
+            jobs.append(
+                'Save failed · Retry' if save.state == 'failed'
+                else 'Saving newest revision')
+        return tuple(sorted(set(jobs)))
+
+    def is_idle(self):
+        return (
+            self.window.task_coordinator.is_idle()
+            and (self.window.continuous_save.is_drained
+                 or getattr(
+                     self.window, '_shutdown_discard_confirmed', False)))
+
+
 def _probe_status(image_path, save_dir, image_list=None, resolver=None):
     """Map the shared annotation probe to an AnnotationStatus enum value."""
     info = probe_annotation(
@@ -212,12 +291,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def __init__(self, default_filename=None, default_prefdef_class_file=None, default_save_dir=None):
         super(MainWindow, self).__init__()
+        self._initialization_complete = False
         self.setWindowTitle(__appname__)
 
         # Load setting in the main thread
         self.settings = Settings()
         self.settings.load()
         settings = self.settings
+        self.workflow_settings = migrate_workflow_settings(settings)
+        self.workflow = AnnotationWorkflow(
+            self.workflow_settings.prompt_policy)
         self.workspace_settings = load_workspace_settings(settings)
         self.sam_output_mode = normalize_sam_output_mode(
             settings.get(SETTING_SAM_OUTPUT_MODE, 'polygon'))
@@ -248,6 +331,23 @@ class MainWindow(QMainWindow, WindowMixin):
         self._path_to_idx = {}  # O(1) lookup: path -> index
         self._annotation_status_cache = {}  # Cache: path -> status (reduces I/O)
         self.task_coordinator = TaskCoordinator(parent=self)
+        self.assist_state = AssistState()
+        self._assist_download_handle = None
+        self._assist_download_progress = None
+        self._assist_prompt = None
+        self._assist_class_picker_pending = False
+        self._assist_track_forward_anchor = None
+        self._assist_document_identity = None
+        self._initialize_assist_state()
+        self.continuous_save = ContinuousSaveCoordinator(
+            delay_ms=self.workflow_settings.continuous_delay_ms, parent=self)
+        self.continuous_save.saveRequested.connect(
+            self._dispatch_continuous_save)
+        self.continuous_save.stateChanged.connect(
+            self._on_continuous_save_state_changed)
+        self.continuous_save.drained.connect(
+            self._on_continuous_save_drained)
+        self._save_drain_callbacks = []
         self._plugin_document_generation = 0
         self._plugin_document_ready = False
         self.plugin_manager = PluginManager(
@@ -270,15 +370,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_model = None
         self._selected_video_track_id = None
         self._video_open_request_id = 0
+        self._video_runtime_restore_focus = None
         self._video_save_handle = None
         self._video_save_active = False
-        self._video_save_queued = False
-        self._video_save_callbacks = []
         self._video_close_save_pending = False
         self._video_frame_request_id = 0
         self._video_decode_in_flight = False
         self._video_prefetch_handle = None
         self.current_video_frame_ref = None
+        self._pending_video_scroll_ratios = None
+        self._pending_image_navigation_center = False
         self._video_playback_speed = 1.0
         self._video_play_started_wall = None
         self._video_play_started_seconds = None
@@ -292,17 +393,46 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview = {}
         self._propagation_preview_gaps = {}
         self._propagation_before_state = None
+        self._pending_propagation_keys = set()
+        self._pending_propagation_gap_keys = set()
+        self._pending_propagation_failures = 0
         self._regeneration_runs = {}
         self._video_export_handle = None
         self._load_request_id = 0
+        self._directory_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
         self._navigation_direction = 0
         self._navigation_streak = 0
         self._document_revision = 0
+        self._continuous_identity_epoch = 0
         self._save_handle = None
         self._save_locks = {}
+        self._image_save_target_overrides = {}
         self._loading_veil = None
+        self._replacement_loading_owner = None
+        self._inline_open_retry = None
+        self._inline_open_chooser = None
+        self.last_inline_error = None
+        self._shutdown_activity = None
+        self._shutdown_coordinator = None
+        self._shutdown_surface = None
+        self._shutdown_remaining_label = None
+        self._shutdown_wait_button = None
+        self._shutdown_force_button = None
+        self._shutdown_save_button = None
+        self._shutdown_discard_button = None
+        self._shutdown_cancel_button = None
+        self._shutdown_ready = False
+        self._shutdown_force = False
+        self._shutdown_finished = False
+        self._shutdown_decoder = None
+        self._shutdown_discard_confirmed = False
+        self._shutdown_save_authority = None
+        self._continuous_save_submission_owner = object()
+        self._shutdown_widget_states = []
+        self._shutdown_action_states = []
+        self._shutdown_restore_focus = None
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -350,43 +480,55 @@ class MainWindow(QMainWindow, WindowMixin):
         self.prev_label_text = ''
         self._session_last_class = None
         self._pending_provisional_shape = None
+        self._programmatic_annotation_selection = False
 
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create a widget for using default label
-        self.use_default_label_checkbox = QCheckBox(get_str('useDefaultLabel'))
-        self.use_default_label_checkbox.setChecked(False)
-        self.default_label_combo_box = DefaultLabelComboBox(self,items=self.label_hist)
-
-        # Stacked, not side by side: together the checkbox label and the class
-        # combo needed more width than the inspector can ever give them, and a
-        # QCheckBox clips its text instead of eliding it.
-        use_default_label_layout = QVBoxLayout()
-        use_default_label_layout.setContentsMargins(0, 0, 0, 0)
-        use_default_label_layout.addWidget(self.use_default_label_checkbox)
-        use_default_label_layout.addWidget(self.default_label_combo_box)
-        use_default_label_container = QWidget()
-        use_default_label_container.setLayout(use_default_label_layout)
+        self.active_class_control = ActiveClassControl(self)
+        self.active_class_control.set_choices(self.label_hist)
+        self.active_class_control.confirm_each.setChecked(
+            self.workflow.snapshot.prompt_policy.value == 'confirm_each')
+        self.active_class_control.classSelected.connect(
+            self._active_class_selected)
+        self.active_class_control.policyChanged.connect(
+            self._active_class_policy_changed)
+        self.active_class_control.combo.setMinimumHeight(scale_px(32))
+        self.active_class_control.combo.lineEdit().setAccessibleName(
+            'Active annotation class value')
+        self.active_class_control.combo.lineEdit().setProperty(
+            'secondaryAction', True)
+        self.active_class_control.confirm_each.setAccessibleName(
+            'Prompt for every annotation')
+        self.active_class_control.confirm_each.setMinimumHeight(scale_px(32))
 
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
+        self.diffc_button.setEnabled(False)
+        self.diffc_button.setAccessibleName(
+            'Mark selected annotation difficult')
+        self.diffc_button.setMinimumHeight(scale_px(32))
         self.diffc_button.stateChanged.connect(self.button_state)
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.edit_button.setAccessibleName('Edit selected annotation')
+        self.edit_button.setMinimumHeight(scale_px(32))
 
         # Add some of widgets to list_layout
         list_layout.addWidget(self.edit_button)
         list_layout.addWidget(self.diffc_button)
-        list_layout.addWidget(use_default_label_container)
+        list_layout.addWidget(self.active_class_control)
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
+        self.combo_box.cb.setAccessibleName(
+            'Filter annotations by class')
         list_layout.addWidget(self.combo_box)
 
         self.annotation_search = QLineEdit()
         self.annotation_search.setObjectName('annotationSearch')
+        self.annotation_search.setAccessibleName('Search annotations')
         self.annotation_search.setPlaceholderText('Search objects…')
         self.annotation_search.setToolTip(
             'Search class, type, provenance, or track ID')
@@ -395,6 +537,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.annotation_proxy.setSourceModel(self.annotation_model)
         self.label_list = UnifiedAnnotationView()
         self.label_list.setObjectName('unifiedAnnotationList')
+        self.label_list.setAccessibleName('Annotations')
         self.label_list.setModel(self.annotation_proxy)
         # Compatibility aliases now intentionally resolve to the one view.
         self.rect_label_list = self.label_list
@@ -432,6 +575,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # File list widget (existing list view)
         self.file_list_widget = QListWidget()
+        self.file_list_widget.setAccessibleName('Dataset files')
         self.file_list_widget.itemDoubleClicked.connect(self.file_item_double_clicked)
         self.file_list_widget.itemClicked.connect(self.file_item_clicked)
 
@@ -444,12 +588,15 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Tab widget to hold both views
         self.file_view_tabs = QTabWidget()
+        self.file_view_tabs.setAccessibleName('Dataset views')
         self.file_view_tabs.addTab(self.file_list_widget, get_str('listView'))
         self.file_view_tabs.addTab(self.gallery_widget, get_str('galleryView'))
         self.file_view_tabs.currentChanged.connect(self.on_file_view_tab_changed)
 
         # Status filter combo box
         self.status_filter_combo = QComboBox()
+        self.status_filter_combo.setAccessibleName(
+            'Filter files by annotation status')
         self.status_filter_combo.addItems([
             get_str('filterAll'),
             get_str('filterAnnotated'),
@@ -474,6 +621,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.color_dialog = ColorDialog(parent=self)
 
         self.canvas = Canvas(parent=self)
+        self.canvas.installEventFilter(self)
         self.canvas.zoomRequest.connect(self.zoom_request)
         self.canvas.lightRequest.connect(self.light_request)
         self.canvas.set_drawing_shape_to_square(settings.get(SETTING_DRAW_SQUARE, False))
@@ -490,12 +638,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.canvas.newShape.connect(self.new_shape)
         self.class_picker = InlineClassPicker(self)
-        self.class_picker.accepted.connect(self._commit_provisional_shape)
-        self.class_picker.cancelled.connect(self._cancel_provisional_shape)
+        self.class_picker.accepted.connect(self._class_picker_accepted)
+        self.class_picker.cancelled.connect(self._class_picker_cancelled)
         self.sam_controller = SamController(self)
-        self.canvas.samClicked.connect(self.sam_controller.segment_at)
+        self.canvas.assistPrompted.connect(self._on_assist_prompt)
+        self.sam_controller.previewReady.connect(self._on_assist_preview)
+        self.sam_controller.previewFailed.connect(self._on_assist_preview_failed)
         self._sam_available = segmentation.sam_available()
-        self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.shapeMoved.connect(self._on_shape_moved_keypoints)
         self.canvas.polygonVerticesEdited.connect(
             self._on_polygon_vertices_edited)
@@ -562,7 +711,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.shortcut_config.get('video_play_pause'), None,
             'Play or pause the active video without audio', enabled=False)
 
-        save = action(get_str('save'), self.request_save_file,
+        save = action(get_str('save'), self._request_save_or_retry,
                       self.shortcut_config.get('save'), 'save', get_str('saveDetail'), enabled=False)
 
         current_format_meta = format_metadata.meta_for_enum(self.label_file_format)
@@ -628,18 +777,19 @@ class MainWindow(QMainWindow, WindowMixin):
             'Propagate the selected accepted anchor backward with optical flow',
             enabled=False)
         video_propagate_all = action(
-            'Propagate across video', self.propagate_across_video,
+            'Track all anchors', self.propagate_across_video,
             None, None,
-            'Propagate every accepted manual anchor on the current frame',
+            'Track every accepted manual anchor on the current frame',
             enabled=False)
         video_propagate_selected = action(
-            'Propagate selected object', self.propagate_selected_object,
+            'Track selected object', self.propagate_selected_object,
             None, None,
-            'Propagate the selected accepted manual anchor across the video',
+            'Track the selected accepted manual anchor across the video',
             enabled=False)
         video_cancel_propagation = action(
             'Cancel', self.cancel_video_propagation, None, None,
-            'Cancel whole-video propagation without changing the project',
+            'Cancel tracking, keep completed suggestions pending, and mark '
+            'the unresolved range',
             enabled=False)
         video_accept_suggestion = action(
             'Accept Current Suggestion', self.accept_current_suggestion,
@@ -664,14 +814,14 @@ class MainWindow(QMainWindow, WindowMixin):
             'Reject pending tracker observations in the visible range',
             enabled=False)
         video_accept_run = action(
-            'Accept Full Propagation',
-            lambda: self.review_full_propagation('accepted'),
+            'Accept propagated results',
+            self.accept_pending_propagation,
             None, 'verify',
             'Accept pending observations from the latest propagation run',
             enabled=False)
         video_reject_run = action(
-            'Reject Full Propagation',
-            lambda: self.review_full_propagation('rejected'),
+            'Reject propagated results',
+            self.reject_pending_propagation,
             None, 'close',
             'Reject pending observations from the latest propagation run',
             enabled=False)
@@ -681,12 +831,11 @@ class MainWindow(QMainWindow, WindowMixin):
             'Export accepted tracked frames to the selected image format',
             enabled=False)
         sam_mode_action = action(
-            'SAM Segment',
+            'Smart Select',
             self.toggle_sam_mode,
             self.shortcut_config.get('sam_mode'),
             'tool-smart-select',
-            'Click an object to auto-generate the selected geometry '
-            '(requires: pip install labelimgplusplus[sam])',
+            'Open Smart Box and Smart Points setup and tools',
             enabled=False)
         sam_settings_action = action(
             'SAM Settings…', self.open_sam_settings, None, 'edit',
@@ -754,13 +903,12 @@ class MainWindow(QMainWindow, WindowMixin):
         # Group zoom controls into a list for easier toggling.
         zoom_actions = (self.zoom_widget, zoom_in, zoom_out,
                         zoom_org, fit_window, fit_width)
-        self.zoom_mode = self.MANUAL_ZOOM
-        self.scalers = {
-            self.FIT_WINDOW: self.scale_fit_window,
-            self.FIT_WIDTH: self.scale_fit_width,
-            # Set to one to scale to 100% when loading files.
-            self.MANUAL_ZOOM: lambda: 1,
-        }
+        # ViewTransform owns whether zoom is fit-derived or explicitly chosen.
+        # zoom_mode remains a compatibility projection for older extensions.
+        self.view_transform = ViewTransform()
+        self.zoom_mode = self.FIT_WINDOW
+        self._view_projection_scheduled = False
+        self._applying_view_projection = False
 
         light = QWidgetAction(self)
         light.setDefaultWidget(self.light_widget)
@@ -982,48 +1130,19 @@ class MainWindow(QMainWindow, WindowMixin):
             recentFiles=QMenu(get_str('menu_openRecent')),
             labelList=label_menu)
 
-        # Auto saving : Enable auto saving if pressing next
-        self.auto_saving = QAction(get_str('autoSaveMode'), self)
-        self.auto_saving.setCheckable(True)
-        # On by default: save_file resolves a path beside the image when no
-        # save directory is chosen, so this can never surface a dialog.
-        self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, True))
-        self.auto_saving.setToolTip(get_str('autoSaveModeDetail'))
-
-        # Auto-save timer (Issue #13)
-        self.auto_save_timer = QTimer(self)
-        self.auto_save_timer.timeout.connect(self._request_auto_save_triggered)
-
-        # Auto-save enabled toggle
-        self.auto_save_enabled = QAction(get_str('autoSaveEnabled'), self)
-        self.auto_save_enabled.setCheckable(True)
-        self.auto_save_enabled.setChecked(settings.get(SETTING_AUTO_SAVE_ENABLED, False))
-        self.auto_save_enabled.triggered.connect(self._toggle_auto_save_timer)
-        self.auto_save_enabled.setToolTip(get_str('autoSaveEnabledDetail'))
-
-        # Auto-save interval submenu
-        self.auto_save_interval_menu = QMenu(get_str('autoSaveInterval'), self)
-        self.auto_save_interval_group = QActionGroup(self)
-        self.auto_save_interval_group.setExclusive(True)
-        auto_save_intervals = [
-            (get_str('autoSave30s'), 30),
-            (get_str('autoSave1m'), 60),
-            (get_str('autoSave2m'), 120),
-            (get_str('autoSave5m'), 300),
-        ]
-        saved_interval = settings.get(SETTING_AUTO_SAVE_INTERVAL, 60)
-        for name, interval in auto_save_intervals:
-            interval_action = QAction(name, self)
-            interval_action.setCheckable(True)
-            interval_action.setData(interval)
-            interval_action.triggered.connect(self._set_auto_save_interval)
-            self.auto_save_interval_group.addAction(interval_action)
-            self.auto_save_interval_menu.addAction(interval_action)
-            if interval == saved_interval:
-                interval_action.setChecked(True)
-        # Default to 1 minute if nothing selected
-        if not any(a.isChecked() for a in self.auto_save_interval_group.actions()):
-            self.auto_save_interval_group.actions()[1].setChecked(True)  # 1 minute
+        self.save_changes_automatically = QAction(
+            'Save changes automatically', self)
+        self.save_changes_automatically.setCheckable(True)
+        self.save_changes_automatically.setChecked(
+            self.workflow_settings.continuous_save)
+        self.save_changes_automatically.setToolTip(
+            'Save each completed annotation change automatically')
+        self.save_changes_automatically.toggled.connect(
+            self._toggle_continuous_save)
+        self.continuous_save.set_enabled(
+            self.save_changes_automatically.isChecked())
+        # Compatibility name for extensions which used the navigation toggle.
+        self.auto_saving = self.save_changes_automatically
 
         # Sync single class mode from PR#106
         self.single_class_mode = QAction(get_str('singleClsMode'), self)
@@ -1070,9 +1189,7 @@ class MainWindow(QMainWindow, WindowMixin):
                      close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
-            self.auto_saving,
-            self.auto_save_enabled,
-            self.single_class_mode,
+            self.save_changes_automatically,
             self.display_label_option,
             self.lock_on_verify_option,
             labels, gallery_mode, None,
@@ -1080,7 +1197,6 @@ class MainWindow(QMainWindow, WindowMixin):
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
             light_brighten, light_darken, light_org, None))
-        self.menus.view.addMenu(self.auto_save_interval_menu)
         self.menus.view.addSeparator()
         self.menus.view.addAction(self.show_grid_option)
         self.menus.view.addMenu(self.grid_size_menu)
@@ -1160,11 +1276,18 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_active_tool = QLabel('Select')
         self.label_zoom = QLabel('Zoom: 100%')
         self.label_save_status = QLabel('● Saved')
+        self.label_verification_status = QLabel('● Verified')
+        self.label_verification_status.setAccessibleName(
+            'Verification status')
+        self.label_verification_status.setProperty(
+            'statusAvailable', False)
+        self.label_verification_status.hide()
         self.label_coordinates = QLabel('')
         self._update_save_status_style(saved=True)
 
         self.full_gallery = GalleryWidget(
-            show_size_slider=True, coordinator=self.task_coordinator)
+            show_size_slider=True, coordinator=self.task_coordinator,
+            initial_icon_size=150)
         self.full_gallery.set_save_dir(self.default_save_dir)
         self.full_gallery.set_status_filter(
             self.status_filter_combo.currentIndex())
@@ -1188,14 +1311,45 @@ class MainWindow(QMainWindow, WindowMixin):
         canvas_column = WorkspacePages(
             self.scroll_area, self.video_timeline, gallery_page,
             (self.label_status_message, self.label_save_status,
-             self.label_dimensions, self.label_image_count,
-             self.label_box_count, self.label_active_tool,
-             self.label_zoom, self.label_coordinates),
+             self.label_verification_status, self.label_dimensions,
+             self.label_image_count, self.label_box_count,
+             self.label_active_tool, self.label_zoom,
+             self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.inline_open_error = InlineErrorBanner(
+            self.workspace_pages.page_surface)
+        self.inline_open_error.retryRequested.connect(
+            self._retry_inline_open)
+        self.inline_open_error.chooseAnotherRequested.connect(
+            self._choose_another_inline_open)
+        self.workspace_pages.video_setup_card.chooseAnotherRequested.connect(
+            self._choose_another_video_after_setup)
+        self.workspace_pages.video_setup_card.dismissRequested.connect(
+            self._dismiss_video_runtime_setup)
+        self.workspace_pages.assist_panel.downloadRequested.connect(
+            self._download_assist_model)
+        self.workspace_pages.assist_panel.cancelRequested.connect(
+            self.cancel_assist_download)
+        self.workspace_pages.assist_panel.retryRequested.connect(
+            self._download_assist_model)
+        self.workspace_pages.assist_panel.smartBoxRequested.connect(
+            self.activate_smart_box_tool)
+        self.workspace_pages.assist_panel.smartPointsRequested.connect(
+            self.activate_smart_points_tool)
+        self.workspace_pages.assist_panel.acceptRequested.connect(
+            self.accept_assist_preview)
+        self.workspace_pages.assist_panel.rejectRequested.connect(
+            self.reject_assist_preview)
+        self.workspace_pages.assist_panel.trackForwardRequested.connect(
+            self.track_assist_forward)
+        self.workspace_pages.assist_panel.closeRequested.connect(
+            self._close_assist)
+        self._project_assist()
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
-            video_cancel_propagation)
+            video_cancel_propagation, video_accept_run, video_reject_run)
+        self.video_timeline.set_playback_action(video_play_pause)
         self.workspace_pages.sam_output_toggle.set_mode(self.sam_output_mode)
         self.workspace_pages.sam_output_toggle.modeChanged.connect(
             self._set_sam_output_mode)
@@ -1206,6 +1360,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.actions.create_polygon, self.actions.sam_mode,
                 self.actions.keypoint_mode):
             tool_action.changed.connect(self._update_active_tool_status)
+            tool_action.changed.connect(
+                self._update_canvas_accessible_description)
         self.workspace_inspector = WorkspaceInspector(
             self.annotation_controls, self.file_controls, self)
         self.workspace_inspector.set_selected_tab(
@@ -1216,6 +1372,9 @@ class MainWindow(QMainWindow, WindowMixin):
             collapsed=self.workspace_settings.inspector_collapsed,
             parent=self)
         self.setCentralWidget(self.workspace_shell)
+        self.workspace_pages.pageChanged.connect(
+            self._sync_workspace_context)
+        self._sync_workspace_context(self.workspace_pages.current_page())
         self.setAcceptDrops(True)
         self._inspector_width_timer = QTimer(self)
         self._inspector_width_timer.setSingleShot(True)
@@ -1224,14 +1383,23 @@ class MainWindow(QMainWindow, WindowMixin):
             self._persist_inspector_width)
         self.workspace_shell.splitter.splitterMoved.connect(
             self._schedule_inspector_width_persist)
+        self.workspace_shell.splitter.splitterMoved.connect(
+            lambda *_args: self._schedule_view_projection())
         self.workspace_shell.inspectorCollapsedChanged.connect(
             self._inspector_collapsed_changed)
+        self.workspace_shell.inspectorCollapsedChanged.connect(
+            lambda *_args: self._schedule_view_projection())
+        self.workspace_shell.layoutModeChanged.connect(
+            lambda *_args: self._schedule_view_projection())
+        self.workspace_shell.drawerVisibilityChanged.connect(
+            lambda *_args: self._schedule_view_projection())
         self.workspace_inspector.tabChanged.connect(
             self._inspector_tab_changed)
         self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
+        self.canvas.escapeToEdit.connect(self._on_canvas_escape_to_edit)
         self.canvas.provisionalClickBlocked.connect(
             self._on_provisional_click_blocked)
-        self._sync_tool_actions()
+        self._apply_workflow_state()
 
         # Create dropdown for file/directory operations
         file_dropdown = DropdownToolButton(
@@ -1342,6 +1510,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.request_open_file, self.file_path or ""))
 
         # Callbacks:
+        self.zoom_widget.valueChanged.connect(self._zoom_widget_changed)
         self.zoom_widget.valueChanged.connect(self.paint_canvas)
         self.zoom_widget.valueChanged.connect(self.update_zoom_display)
         self.light_widget.valueChanged.connect(self.paint_canvas)
@@ -1388,20 +1557,35 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setMenuWidget(self.command_bar)
         self.command_bar.apply_theme(self._current_theme)
         self._sync_command_bar()
-
-        # Start auto-save timer if enabled (Issue #13)
-        if self.auto_save_enabled.isChecked():
-            self._toggle_auto_save_timer()
+        self._sync_verification_ui()
+        self._configure_workspace_tab_order()
+        self._update_canvas_accessible_description()
 
         self.plugin_command_host = QtPluginCommandHost(
             self, self.menus.plugins, self.shortcut_config,
             self._action_map, self.settings)
         self.plugin_manager.command_host = self.plugin_command_host
         self.plugin_manager.activate_enabled()
+        self._initialization_complete = True
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
             self.canvas.set_drawing_shape_to_square(False)
+
+    def eventFilter(self, watched, event):
+        if (watched is getattr(self, 'canvas', None)
+                and event.type() == event.KeyPress
+                and self.assist_state.snapshot.phase is AssistPhase.PREVIEW
+                and not self._assist_class_picker_pending):
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self.accept_assist_preview()
+                event.accept()
+                return True
+            if event.key() == Qt.Key_Escape:
+                self.reject_assist_preview()
+                event.accept()
+                return True
+        return super(MainWindow, self).eventFilter(watched, event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -1549,6 +1733,29 @@ class MainWindow(QMainWindow, WindowMixin):
         finally:
             self._toggling_gallery = False
 
+    def _sync_workspace_context(self, page=None):
+        """Project the active page into rail and status-strip visibility."""
+        page = page or self.workspace_pages.current_page()
+        canvas_page = page == 'canvas'
+        self.tool_rail.setVisible(canvas_page)
+        canvas_only = (
+            self.label_dimensions, self.label_image_count,
+            self.label_box_count, self.label_active_tool,
+            self.label_zoom, self.label_coordinates,
+        )
+        always = (
+            self.label_status_message, self.label_save_status,
+            self.label_verification_status,
+        )
+        if canvas_page:
+            visible_status = always + canvas_only
+        elif page == 'gallery':
+            visible_status = always
+        else:
+            visible_status = (self.label_status_message,)
+        self.workspace_pages.set_context_status_widgets(visible_status)
+        self.workspace_pages.update()
+
     def _cleanup_existing_gallery(self):
         """Compatibility hook: the embedded gallery has no resources to tear down."""
         if hasattr(self, 'workspace_pages'):
@@ -1617,20 +1824,114 @@ class MainWindow(QMainWindow, WindowMixin):
             if not self._ensure_video_editable():
                 return
             self.pause_video()
+            revision = self.video_model.revision
+            self._document_revision = revision
             self.dirty = True
             self.actions.save.setEnabled(True)
             self.update_save_status(saved=False)
             self.update_box_count()
             self._sync_command_bar()
             self._publish_plugin_document()
+            self._mark_continuous_save_dirty(revision)
             return
         self._document_revision += 1
+        revision = self._document_revision
         self.dirty = True
         self.actions.save.setEnabled(True)
         self.update_save_status(saved=False)
         self.update_box_count()
         self._sync_command_bar()
         self._publish_plugin_document()
+        self._mark_continuous_save_dirty(revision)
+
+    def _mark_continuous_save_dirty(self, revision):
+        self.continuous_save.mark_dirty(revision)
+
+    def _toggle_continuous_save(self, enabled):
+        self.continuous_save.set_enabled(enabled)
+
+    def _on_continuous_save_state_changed(self, state):
+        copy = {
+            'saved': 'Saved',
+            'failed': 'Save failed · Retry',
+        }.get(state, 'Saving…')
+        read_only = (
+            self.document_kind == DocumentKind.VIDEO
+            and self.video_snapshot is not None
+            and self.video_snapshot.read_only)
+        if read_only:
+            copy = 'Read-only'
+        if hasattr(self, 'label_save_status'):
+            if read_only:
+                # Keep the save-status styler as the sole projection for the
+                # read-only semantic state; save callbacks must not overwrite
+                # it with their internal serializer state.
+                self._update_save_status_style(saved=True)
+            else:
+                self.label_save_status.setText('● ' + copy)
+                self.label_save_status.setToolTip(copy)
+        command_bar = getattr(self, 'command_bar', None)
+        if command_bar is not None:
+            command_bar.save_button.setText(copy)
+
+    def _save_document_identity(self):
+        return (
+            self.document_kind,
+            self._continuous_document_key(),
+            self._dataset_generation,
+        )
+
+    def _request_continuous_save_drain(self, on_success=None):
+        """Join the document's sole serializer and drain its newest edit."""
+        if self.document_kind == DocumentKind.NONE:
+            return None
+        if (self.document_kind == DocumentKind.VIDEO
+                and (self.video_snapshot is None
+                     or self.video_snapshot.read_only
+                     or not self.video_snapshot.project_path)):
+            return None
+        if callable(on_success):
+            self._save_drain_callbacks.append(
+                (self._save_document_identity(), on_success))
+        self.continuous_save.drain()
+        return (self._video_save_handle
+                if self.document_kind == DocumentKind.VIDEO
+                else self._save_handle)
+
+    def _on_continuous_save_drained(self):
+        identity = self._save_document_identity()
+        callbacks = []
+        for callback_identity, callback in self._save_drain_callbacks:
+            if callback_identity == identity:
+                callbacks.append(callback)
+        # A document replacement invalidates every callback for the old
+        # identity; none may run against a later document with the same UI.
+        self._save_drain_callbacks = []
+        for callback in callbacks:
+            callback()
+
+    def _wait_for_continuous_save_drain(self, timeout_ms=30000):
+        """Compatibility join for synchronous callers; never writes itself."""
+        if self.document_kind == DocumentKind.NONE:
+            return False
+        identity = self._save_document_identity()
+        deadline = time.monotonic() + (float(timeout_ms) / 1000.0)
+        self.continuous_save.drain()
+        while (self._save_document_identity() == identity
+               and self.continuous_save.state not in ('saved', 'failed')):
+            remaining_ms = int(max(
+                0.0, (deadline - time.monotonic()) * 1000.0))
+            if remaining_ms <= 0:
+                break
+            # Join the actual serializer workers, then deliver their queued
+            # GUI-thread result callbacks. This avoids a second writer and
+            # also lets chained newer-revision tickets dispatch in order.
+            self.task_coordinator.pool('background').waitForDone(
+                min(remaining_ms, 100))
+            QApplication.processEvents()
+        return bool(
+            self._save_document_identity() == identity
+            and self.continuous_save.is_drained)
 
     def set_clean(self):
         self.dirty = False
@@ -1646,6 +1947,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.editMode.setEnabled(False)
             self.actions.verify.setEnabled(False)
         self.update_save_status(saved=True)
+        self._sync_verification_ui()
         self._sync_command_bar()
         self._publish_plugin_document()
 
@@ -1679,6 +1981,37 @@ class MainWindow(QMainWindow, WindowMixin):
             read_only=read_only,
         )
 
+    def _continuous_document_key(self):
+        epoch = getattr(self, '_continuous_identity_epoch', 0)
+        if self.document_kind == DocumentKind.VIDEO:
+            snapshot = self.video_snapshot
+            path = (snapshot.project_path or snapshot.source_path
+                    if snapshot is not None else self.file_path)
+            return 'video:%s@%d' % (
+                os.path.abspath(ustr(path or '')), epoch)
+        if self.document_kind == DocumentKind.IMAGE:
+            return 'image:%s@%d' % (
+                os.path.abspath(ustr(self.file_path or '')), epoch)
+        return ''
+
+    @property
+    def document_identity(self):
+        """Return the immutable identity of the committed workspace document."""
+        kind = getattr(self, 'document_kind', DocumentKind.NONE)
+        key = ''
+        if kind == DocumentKind.VIDEO:
+            snapshot = getattr(self, 'video_snapshot', None)
+            if snapshot is not None:
+                key = snapshot.project_path or snapshot.source_path
+        elif kind == DocumentKind.IMAGE:
+            key = getattr(self, 'file_path', None) or ''
+        return DocumentIdentity(
+            kind.value, key, getattr(self, '_dataset_generation', 0))
+
+    def _is_current_document(self, identity):
+        """Whether a callback still belongs to the committed document."""
+        return identity == self.document_identity
+
     def _publish_plugin_document(self, new_generation=False, force=False):
         manager = getattr(self, 'plugin_manager', None)
         if manager is None or (not self._plugin_document_ready and not force):
@@ -1704,7 +2037,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.copyAllToClipboard.setEnabled(True)
         if hasattr(self, 'actions') and hasattr(self.actions, 'sam_mode'):
             self.actions.sam_mode.setEnabled(
-                bool(value) and getattr(self, '_sam_available', False))
+                bool(value) and bool(self.file_path)
+                and self._video_editable()
+                and not bool(getattr(self.canvas, 'locked', False)))
 
     def queue_event(self, function):
         QTimer.singleShot(0, function)
@@ -1732,7 +2067,8 @@ class MainWindow(QMainWindow, WindowMixin):
             and snapshot is not None and snapshot.read_only)
         command_bar.set_document(
             name, dirty=getattr(self, 'dirty', False),
-            full_path=source_path, read_only=read_only)
+            full_path=source_path, read_only=read_only,
+            video=self.document_kind == DocumentKind.VIDEO)
 
         if self.document_kind == DocumentKind.VIDEO:
             timeline = getattr(self, 'video_timeline', None)
@@ -1745,6 +2081,9 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             position = '— / —'
         command_bar.set_position(position)
+        if hasattr(self, 'continuous_save'):
+            self._on_continuous_save_state_changed(
+                self.continuous_save.state)
 
     def update_image_count(self):
         """Update image counter in status bar."""
@@ -1764,11 +2103,14 @@ class MainWindow(QMainWindow, WindowMixin):
         """Update annotation count in status bar."""
         count = len(self.canvas.shapes) if self.canvas else 0
         self.label_box_count.setText(f'Objects: {count}')
+        if hasattr(self, 'workspace_shell'):
+            self.workspace_shell.set_object_count(count)
 
     def update_zoom_display(self):
         """Update zoom level in status bar."""
         if self.zoom_widget:
-            self.label_zoom.setText(f'Zoom: {self.zoom_widget.value()}%')
+            self.label_zoom.setText(
+                f'Zoom: {self.zoom_widget.cleanText()}%')
 
     def _update_save_status_style(self, saved):
         """Update save status indicator style based on theme."""
@@ -1797,12 +2139,52 @@ class MainWindow(QMainWindow, WindowMixin):
         """Update save status indicator in status bar."""
         self._update_save_status_style(saved)
 
+    def _sync_verification_ui(self):
+        """Project the current document verification state into the chrome."""
+        if not (hasattr(self, 'actions')
+                and hasattr(self.actions, 'verify')
+                and hasattr(self, 'label_verification_status')):
+            return
+        has_document = self.document_kind != DocumentKind.NONE
+        verified = has_document and bool(self.canvas.verified)
+        is_video = self.document_kind == DocumentKind.VIDEO
+        noun = 'frame' if is_video else 'image'
+        self.actions.verify.setText('Verified' if verified else 'Verify')
+        tooltip = (
+            'Mark the current %s unverified' % noun if verified
+            else 'Mark the current %s verified' % noun)
+        self.actions.verify.setToolTip(tooltip)
+        self.actions.verify.setStatusTip(tooltip)
+        self.label_verification_status.setText('● Verified')
+        self.label_verification_status.setProperty(
+            'statusAvailable', verified)
+        from libs.utils.styles import get_theme_colors
+        self.label_verification_status.setStyleSheet(
+            'color: %s;' % get_theme_colors(
+                self._current_theme)['status_verified'])
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages._update_status_visibility(
+                self.workspace_pages.width())
+        if hasattr(self, 'command_bar'):
+            self.command_bar.verify_button.setAccessibleName(
+                ('Verified; mark current %s unverified' % noun)
+                if verified else 'Verify current %s' % noun)
+
     def reset_state(self):
         self._dismiss_class_picker()
+        self._clear_video_runtime_setup()
+        self._save_drain_callbacks = []
+        self._pending_video_scroll_ratios = None
+        self._pending_image_navigation_center = False
+        # Replacing a document must invalidate a late ticket even when the
+        # same path is reopened in the same dataset generation and revision.
+        self._continuous_identity_epoch += 1
+        self._supersede_pending_replacement_requests()
         self._plugin_document_ready = False
         self._restart_workers_if_needed()
         self._close_video_decoder()
         self._set_document_kind(DocumentKind.NONE)
+        self.continuous_save.reset('', self._dataset_generation, 0)
         self.annotation_model.clear()
         self.annotation_search.clear()
         self.file_path = None
@@ -1816,9 +2198,34 @@ class MainWindow(QMainWindow, WindowMixin):
         self.undo_stack.clear()
         # Reset status bar widgets
         self.label_box_count.setText('Objects: 0')
+        self.workspace_shell.set_object_count(0)
         self.update_save_status(saved=True)
+        self._sync_verification_ui()
         self._sync_command_bar()
         self._publish_plugin_document(new_generation=True, force=True)
+
+    def _clear_dataset_state(self):
+        """Clear dataset projections when the user explicitly closes work."""
+        self.annotation_catalog.cancel()
+        self._dataset_generation += 1
+        self.dataset_snapshot = DatasetSnapshot.from_images(
+            (), save_dir=self.default_save_dir,
+            generation=self._dataset_generation)
+        for handle in self._prefetch_handles.values():
+            handle.cancel()
+        self._prefetch_handles.clear()
+        self.frame_cache.clear()
+        self.m_img_list = []
+        self._path_to_idx = {}
+        self._annotation_status_cache.clear()
+        self.img_count = 0
+        self.cur_img_idx = 0
+        self.last_open_dir = None
+        self.dir_name = None
+        self.file_list_widget.clear()
+        self.gallery_widget.clear()
+        self.full_gallery.clear()
+        self.gallery_stats.clear_stats()
 
     def _set_document_kind(self, kind):
         """Switch cache policy and document-only UI without touching content."""
@@ -1862,8 +2269,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.annotation_model.set_video_context(self.video_model, pts)
             elif kind == DocumentKind.NONE:
                 self.annotation_model.clear()
-        if kind != DocumentKind.VIDEO and hasattr(self, 'diffc_button'):
-            self.diffc_button.setEnabled(True)
         if hasattr(self, 'actions') and hasattr(
                 self.actions, 'videoPlayPause'):
             self.actions.verify.setEnabled(kind != DocumentKind.NONE)
@@ -1890,7 +2295,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_video_playback_timer'):
             self.pause_video()
         if hasattr(self, '_propagation_handle'):
-            self.cancel_video_propagation()
+            # Replacement/reset teardown has already decided to abandon this
+            # document. A close workflow can call the public staging
+            # cancellation before teardown when it must preserve review work.
+            self._abandon_video_propagation()
         if hasattr(self, '_regeneration_runs'):
             self._cancel_all_regeneration()
         if hasattr(self, '_tracking_handle'):
@@ -1903,9 +2311,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_snapshot = None
         self.video_model = None
         self._selected_video_track_id = None
+        self._pending_propagation_keys = set()
+        self._pending_propagation_gap_keys = set()
+        self._pending_propagation_failures = 0
         self._video_save_active = False
-        self._video_save_queued = False
-        self._video_save_callbacks = []
         self._video_close_save_pending = False
         self.current_video_frame_ref = None
         if hasattr(self, 'video_timeline'):
@@ -1974,16 +2383,20 @@ class MainWindow(QMainWindow, WindowMixin):
         return self.annotation_model.shape_at(index)
 
     def _select_annotation_identity(self, identity):
-        source = self.annotation_model.index_for_identity(identity)
-        self.annotation_model.set_selected_identity(identity)
-        if not source.isValid():
-            self.label_list.clearSelection()
-            return
-        proxy = self.annotation_proxy.mapFromSource(source)
-        if proxy.isValid():
-            self.label_list.selectionModel().setCurrentIndex(
-                proxy, QItemSelectionModel.ClearAndSelect |
-                QItemSelectionModel.Rows)
+        self._programmatic_annotation_selection = True
+        try:
+            source = self.annotation_model.index_for_identity(identity)
+            self.annotation_model.set_selected_identity(identity)
+            if not source.isValid():
+                self.label_list.clearSelection()
+                return
+            proxy = self.annotation_proxy.mapFromSource(source)
+            if proxy.isValid():
+                self.label_list.selectionModel().setCurrentIndex(
+                    proxy, QItemSelectionModel.ClearAndSelect |
+                    QItemSelectionModel.Rows)
+        finally:
+            self._programmatic_annotation_selection = False
 
     def add_recent_file(self, file_path):
         if file_path in self.recent_files:
@@ -2093,11 +2506,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 and not self._ensure_video_editable()):
             self._sync_tool_actions()
             return
+        self.workflow.set_tool(AnnotationTool.RECTANGLE)
         self._leave_special_tool_modes()
-        self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
         self.actions.create_polygon.setEnabled(True)
         self.actions.editMode.setEnabled(True)
+        self._apply_workflow_state()
         self._finish_tool_activation()
 
     def create_polygon_mode(self):
@@ -2110,11 +2524,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 and not self._ensure_video_editable()):
             self._sync_tool_actions()
             return
+        self.workflow.set_tool(AnnotationTool.POLYGON)
         self._leave_special_tool_modes()
-        self.canvas.set_polygon_drawing(True)
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(False)
         self.actions.editMode.setEnabled(True)
+        self._apply_workflow_state()
         self._finish_tool_activation()
 
     def toggle_keypoint_mode(self):
@@ -2158,60 +2573,578 @@ class MainWindow(QMainWindow, WindowMixin):
         self.keypoint_panel.show()
         self._finish_tool_activation()
 
+    def _initialize_assist_state(self):
+        """Project validated local model availability without network work."""
+        try:
+            model_cache.resolve_models(
+                self.settings, manifest=MOBILE_SAM_MANIFEST)
+        except model_cache.ModelSetupRequiredError:
+            self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+        except ValueError as exc:
+            self.assist_state.fail(AssistFailureKind.VALIDATION, str(exc))
+        except OSError as exc:
+            self.assist_state.fail(AssistFailureKind.RUNTIME, str(exc))
+        else:
+            self._mark_assist_model_ready()
+
+    def _mark_assist_model_ready(self, downloaded=False):
+        """Require both validated files and the optional inference runtime."""
+        try:
+            runtime_ready = segmentation.sam_available()
+        except Exception as exc:
+            self.assist_state.fail(AssistFailureKind.RUNTIME, str(exc))
+            return False
+        if not runtime_ready:
+            self.assist_state.fail(
+                AssistFailureKind.RUNTIME,
+                'Install the optional Assist runtime with '
+                'labelimgplusplus[sam], then retry.')
+            return False
+        if downloaded:
+            self.assist_state.download_ready()
+        else:
+            self.assist_state.ready(MOBILE_SAM_MANIFEST.model_id)
+        return True
+
+    def _project_assist(self, progress=None):
+        panel = getattr(
+            getattr(self, 'workspace_pages', None), 'assist_panel', None)
+        if panel is None:
+            return
+        snapshot = self.assist_state.snapshot
+        if progress is not None:
+            snapshot = replace(snapshot, message=progress)
+        panel.set_snapshot(
+            snapshot, MOBILE_SAM_MANIFEST,
+            track_forward_available=self._assist_track_forward_available())
+
+    def _assist_track_forward_available(self):
+        anchor = self._assist_track_forward_anchor
+        frame_ref = self.current_video_frame_ref
+        model = self.video_model
+        if (anchor is None or self.document_kind != DocumentKind.VIDEO
+                or frame_ref is None or model is None):
+            return False
+        generation, track_id, pts = anchor
+        if (generation != self._dataset_generation
+                or int(frame_ref.pts) != int(pts)):
+            return False
+        observation = model.observations.get((track_id, int(pts)))
+        return bool(
+            observation is not None
+            and observation.source == 'manual'
+            and observation.review_state == 'accepted'
+            and observation.anchor and observation.present
+            and observation.geometry is not None)
+
+    @staticmethod
+    def _assist_failure_kind(error):
+        if isinstance(error, model_cache.ModelOfflineError):
+            return AssistFailureKind.OFFLINE
+        if isinstance(error, model_cache.ModelProviderError):
+            return AssistFailureKind.PROVIDER
+        if isinstance(error, model_cache.ModelValidationError):
+            return AssistFailureKind.VALIDATION
+        return AssistFailureKind.RUNTIME
+
+    def _assist_cache_dir(self):
+        paths = model_cache.default_model_paths()
+        return os.path.dirname(paths[0])
+
+    def _assist_part_files(self):
+        cache_dir = self._assist_cache_dir()
+        return tuple(
+            os.path.join(cache_dir, artifact.name + '.part')
+            for artifact in MOBILE_SAM_MANIFEST.artifacts
+            if os.path.exists(os.path.join(
+                cache_dir, artifact.name + '.part')))
+
+    def _download_assist_model(self):
+        """Submit one explicit model download to the serial SAM worker lane."""
+        active = self._assist_download_handle
+        if (active is not None
+                and self.task_coordinator.has_active_handle(active)):
+            return
+        if self.assist_state.snapshot.phase is AssistPhase.READY:
+            return
+        if self.assist_state.snapshot.phase in (
+                AssistPhase.SETUP_REQUIRED, AssistPhase.FAILED):
+            self._initialize_assist_state()
+            self._project_assist()
+        if self.assist_state.snapshot.phase is not \
+                AssistPhase.READY_TO_DOWNLOAD:
+            return
+
+        self.assist_state.start_download()
+        self._assist_download_progress = None
+        self._project_assist()
+
+        def acquire(job):
+            try:
+                paths = model_cache.download_manifest(
+                    MOBILE_SAM_MANIFEST, self._assist_cache_dir(),
+                    cancelled=job.is_cancelled,
+                    progress=job.report_progress)
+                return 'ready', paths, ''
+            except model_cache.ModelDownloadCancelled:
+                return 'cancelled', None, ''
+            except Exception as exc:
+                return 'failed', self._assist_failure_kind(exc), str(exc)
+
+        handle = self.task_coordinator.submit(
+            'sam', acquire, priority=JobPriority.IMAGE_LOAD,
+            key='assist-model-download', latest=False,
+            generation=self.task_coordinator.generation)
+        self._assist_download_handle = handle
+        handle.progress.connect(
+            lambda value, current=handle:
+            self._on_assist_download_progress(current, value))
+        handle.result.connect(
+            lambda value, current=handle:
+            self._on_assist_download_result(current, value))
+        handle.error.connect(
+            lambda message, current=handle:
+            self._on_assist_download_error(current, message))
+        handle.finished.connect(
+            lambda current=handle:
+            self._on_assist_download_finished(current))
+
+    def _on_assist_download_progress(self, handle, progress):
+        if (self._assist_download_handle is not handle
+                or self.assist_state.snapshot.phase is not
+                AssistPhase.DOWNLOADING):
+            return
+        self._assist_download_progress = progress
+        self._project_assist(progress)
+
+    def _on_assist_download_result(self, handle, outcome):
+        if self._assist_download_handle is not handle:
+            return
+        status, value, message = outcome
+        if status == 'ready':
+            self.sam_controller.reset_backend()
+            self._mark_assist_model_ready(downloaded=True)
+            self._assist_download_progress = None
+            self._project_assist()
+        elif status == 'failed':
+            self.assist_state.fail(value, message)
+            self._assist_download_progress = None
+            self._project_assist()
+
+    def _on_assist_download_error(self, handle, message):
+        if self._assist_download_handle is not handle:
+            return
+        self.assist_state.fail(AssistFailureKind.RUNTIME, message)
+        self._assist_download_progress = None
+        self._project_assist()
+
+    def _on_assist_download_finished(self, handle):
+        if self._assist_download_handle is not handle:
+            return
+        was_cancelled = handle.is_cancelled()
+        self._assist_download_handle = None
+        self._assist_download_progress = None
+        if (was_cancelled and self.assist_state.snapshot.phase is
+                AssistPhase.DOWNLOADING):
+            cached = model_cache.cached_model_paths(MOBILE_SAM_MANIFEST)
+            partials = self._assist_part_files()
+            if cached is not None:
+                self.sam_controller.reset_backend()
+                self._mark_assist_model_ready(downloaded=True)
+            elif partials:
+                self.assist_state.fail(
+                    AssistFailureKind.VALIDATION,
+                    'Cancellation cleanup left an incomplete model artifact.')
+            else:
+                self.assist_state.ready_to_download(
+                    MOBILE_SAM_MANIFEST.model_id)
+            self._project_assist()
+
+    def cancel_assist_download(self):
+        """Request cancellation without claiming cleanup has finished."""
+        handle = self._assist_download_handle
+        if handle is None or self.assist_state.snapshot.phase is not \
+                AssistPhase.DOWNLOADING:
+            return
+        disposition = self.task_coordinator.cancel_handle(handle)
+        if disposition == 'pending':
+            self._assist_download_handle = None
+            self._assist_download_progress = None
+            self.assist_state.ready_to_download(
+                MOBILE_SAM_MANIFEST.model_id)
+            self._project_assist()
+            return
+        self._project_assist('Cancelling…')
+
     def toggle_sam_mode(self):
-        """Enter/leave single-click SAM segmentation mode."""
-        if self.canvas.mode == self.canvas.CREATE_SAM:
-            self.activate_select_tool()
+        """Open the contextual Assist surface from the annotation rail."""
+        if not self.workspace_pages.assist_panel.isHidden():
+            self._close_assist()
             return
         self.activate_smart_select_tool()
 
     def activate_smart_select_tool(self):
-        """Activate Smart Select while keeping optional imports lazy."""
+        """Open Assist even when its optional runtime or model is missing."""
         if (self.document_kind == DocumentKind.VIDEO
                 and not self._ensure_video_editable()):
             self._sync_tool_actions()
             return
-        if not segmentation.sam_available():
-            QMessageBox.warning(
-                self, "SAM unavailable",
-                "Install with: pip install labelimgplusplus[sam]")
+        # Legacy direct callers may invoke this method with no document; keep
+        # their canvas-mode projection stable. In the real editable flow the
+        # drawer does not guess between Smart Box and Smart Points.
+        if not self.file_path:
+            if self.canvas.mode == self.canvas.KEYPOINT_MODE:
+                self.canvas.exit_keypoint_mode()
+                self.keypoint_panel.hide()
+            self.workflow.set_tool(AnnotationTool.SMART_POINTS)
+            self.canvas.set_sam_mode(True)
+            self.sam_controller.set_enabled(
+                self.assist_state.snapshot.phase is AssistPhase.READY)
+            self.actions.create.setEnabled(True)
+            self.actions.create_polygon.setEnabled(True)
+            self.actions.editMode.setEnabled(True)
+            self._finish_tool_activation()
+        else:
             self._sync_tool_actions()
+        self._project_assist(self._assist_download_progress)
+        self.workspace_pages.show_assist()
+
+    def _on_legacy_sam_click(self, point):
+        """Keep canvas clicks inert until explicit model setup is complete."""
+        if self.assist_state.snapshot.phase is not AssistPhase.READY:
+            self.activate_smart_select_tool()
+            return
+        self.sam_controller.segment_at(point)
+
+    def activate_smart_box_tool(self):
+        self.canvas.set_assist_prompt_mode('box')
+        self._activate_assist_prompt_tool(AnnotationTool.SMART_BOX)
+
+    def activate_smart_points_tool(self):
+        self.canvas.set_assist_prompt_mode('points')
+        self._activate_assist_prompt_tool(AnnotationTool.SMART_POINTS)
+
+    def _activate_assist_prompt_tool(self, tool):
+        if self.assist_state.snapshot.phase is not AssistPhase.READY:
+            self.activate_smart_select_tool()
+            return
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
             return
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
+        self._discard_workflow_draft()
+        self.workflow.set_tool(tool)
         self.canvas.set_sam_mode(True)
         self.sam_controller.set_enabled(True)
-        # set_sam_mode does not emit drawingPolygon, so re-enable the mode-switch
-        # actions here (mirroring create_polygon_mode) so the user can leave SAM.
         self.actions.create.setEnabled(True)
         self.actions.create_polygon.setEnabled(True)
         self.actions.editMode.setEnabled(True)
         self._finish_tool_activation()
 
+    def _on_assist_prompt(self, prompt):
+        """Replace the active inference without mutating annotation state."""
+        phase = self.assist_state.snapshot.phase
+        if phase not in (
+                AssistPhase.READY, AssistPhase.RUNNING, AssistPhase.PREVIEW):
+            self.activate_smart_select_tool()
+            return
+        if phase is not AssistPhase.READY:
+            self.assist_state.ready(self.assist_state.snapshot.model_id)
+        self._dismiss_assist_class_picker()
+        self._assist_track_forward_anchor = None
+        self.canvas.clear_assist_preview()
+        self._assist_prompt = prompt
+        self._assist_document_identity = self.document_identity
+        self.assist_state.start_run(self._dataset_generation)
+        self._project_assist()
+        try:
+            self.sam_controller.run_prompt(prompt)
+        except Exception as exc:
+            self._on_assist_preview_failed(
+                self._dataset_generation, AssistFailureKind.INFERENCE,
+                str(exc))
+
+    def _on_assist_preview(self, generation, result):
+        """Project a current plain-data result into a paint-only Shape."""
+        if not self._assist_callback_is_current(generation):
+            return
+        preview = AssistPreview(result=result, prompt=self._assist_prompt)
+        if not self.assist_state.show_preview(generation, preview):
+            return
+        shape = self._assist_result_shape(result)
+        if shape is None:
+            self.assist_state.fail(
+                AssistFailureKind.INFERENCE,
+                'Assist returned empty preview geometry.')
+            self.canvas.clear_assist_preview()
+        else:
+            self.canvas.set_assist_preview(shape)
+        self._project_assist()
+
+    def _assist_result_shape(self, result):
+        if self.sam_output_mode == 'box':
+            if result.bounds is None or len(result.bounds) != 4:
+                return None
+            left, top, right, bottom = result.bounds
+            if right <= left or bottom <= top:
+                return None
+            values = (
+                (left, top), (right, top),
+                (right, bottom), (left, bottom))
+            shape_type = ShapeType.RECTANGLE
+        else:
+            values = result.polygon
+            if values is None or len(values) < 3:
+                return None
+            shape_type = ShapeType.POLYGON
+        shape = Shape(shape_type=shape_type)
+        for x, y in values:
+            shape.add_point(QPointF(float(x), float(y)))
+        shape.close()
+        return shape
+
+    def _on_assist_preview_failed(self, generation, kind, message):
+        if not self._assist_callback_is_current(generation):
+            return
+        self.canvas.clear_assist_preview()
+        if kind == 'setup_required':
+            self.assist_state.ready_to_download(MOBILE_SAM_MANIFEST.model_id)
+        else:
+            try:
+                failure_kind = AssistFailureKind(kind)
+            except (TypeError, ValueError):
+                failure_kind = AssistFailureKind.RUNTIME
+            self.assist_state.fail(failure_kind, message)
+        self._project_assist()
+
+    def _assist_callback_is_current(self, generation):
+        """Reject inference callbacks after any same-generation replacement."""
+        return (
+            int(generation) == self._dataset_generation
+            and self._assist_document_identity is not None
+            and self._is_current_document(self._assist_document_identity))
+
+    def _on_assist_document_changed(self):
+        """Discard prompt/preview projection when the document is replaced."""
+        self._dismiss_assist_class_picker()
+        self._assist_track_forward_anchor = None
+        self._assist_document_identity = None
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
+
+    def _reset_assist_preview_state(self):
+        if self.assist_state.snapshot.phase in (
+                AssistPhase.RUNNING, AssistPhase.PREVIEW):
+            self.assist_state.ready(self.assist_state.snapshot.model_id)
+            self._project_assist()
+
+    def _close_assist(self):
+        """Close provisional Assist work without cancelling model acquisition."""
+        self._dismiss_assist_class_picker()
+        self._assist_track_forward_anchor = None
+        self.workspace_pages.hide_assist()
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
+        if self.canvas.mode == self.canvas.CREATE_SAM:
+            self.activate_select_tool()
+        else:
+            self._restore_canvas_focus()
+
+    def accept_assist_preview(self):
+        """Accept the current preview or request its missing class."""
+        if self.assist_state.snapshot.phase is not AssistPhase.PREVIEW:
+            return False
+        shape = self.canvas.assist_preview_shape
+        if shape is None:
+            return False
+        label = self.workflow.snapshot.active_class
+        if label:
+            return self._commit_assist_shape(label)
+        if not self._assist_class_picker_pending:
+            self._assist_class_picker_pending = True
+            self.class_picker.open_at(
+                self.label_hist,
+                self._session_last_class or self.prev_label_text,
+                self._provisional_picker_anchor(shape))
+        return False
+
+    def reject_assist_preview(self):
+        """Reject only provisional Assist state without a model mutation."""
+        if self.assist_state.snapshot.phase is not AssistPhase.PREVIEW:
+            return False
+        self._dismiss_assist_class_picker()
+        self.assist_state.reject_preview()
+        self._assist_prompt = None
+        self._assist_track_forward_anchor = None
+        self.canvas.clear_assist_prompt()
+        self._project_assist()
+        self._restore_canvas_focus()
+        return True
+
+    def _commit_assist_shape(self, label):
+        """Transfer one reviewed Assist shape through the normal save lane."""
+        label = str(label).strip()
+        shape = self.canvas.assist_preview_shape
+        if (not label or shape is None
+                or self.assist_state.snapshot.phase is not
+                AssistPhase.PREVIEW):
+            return False
+        if (self.document_kind == DocumentKind.VIDEO
+                and not self._ensure_video_editable()):
+            return False
+
+        video_before = (self.video_model.snapshot_state()
+                        if self.document_kind == DocumentKind.VIDEO else None)
+        self.assist_state.accept_preview()
+        self._dismiss_assist_class_picker()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
+
+        shape.label = label
+        shape.line_color = generate_color_by_text(label)
+        self.canvas.shapes.append(shape)
+        self.canvas.rebuild_spatial_index()
+        self.add_label(shape)
+        self.workflow.set_active_class(label)
+        self._apply_workflow_state()
+
+        if self.document_kind == DocumentKind.VIDEO:
+            pts = int(self.current_video_frame_ref.pts)
+            track_id = self._store_video_shape_as_manual(shape)
+            self._selected_video_track_id = track_id
+            video_after = self.video_model.snapshot_state()
+            self.undo_stack.push(CreateShapeCommand(
+                self, shape, video_before=video_before,
+                video_after=video_after))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(pts)
+            self._assist_track_forward_anchor = (
+                self._dataset_generation, track_id, pts)
+        else:
+            self.undo_stack.push(CreateShapeCommand(self, shape))
+            self.set_dirty()
+            self._assist_track_forward_anchor = None
+
+        self.prev_label_text = label
+        self.lastLabel = label
+        self._session_last_class = label
+        if label not in self.label_hist:
+            self.label_hist.append(label)
+            self.active_class_control.set_choices(self.label_hist)
+        self._update_current_image_stats()
+        self.canvas.de_select_shape()
+        self.shape_selection_changed(False)
+        self.canvas.flash_committed_shape(shape)
+        self._project_assist()
+        self._restore_canvas_focus()
+        return True
+
+    def _dismiss_assist_class_picker(self):
+        if not self._assist_class_picker_pending:
+            return
+        self._assist_class_picker_pending = False
+        blocked = self.class_picker.blockSignals(True)
+        self.class_picker.hide()
+        self.class_picker.blockSignals(blocked)
+
+    def track_assist_forward(self):
+        """Start forward propagation only after the explicit Assist action."""
+        if not self._assist_track_forward_available():
+            self._assist_track_forward_anchor = None
+            self._project_assist()
+            return None
+        _generation, track_id, _pts = self._assist_track_forward_anchor
+        self._selected_video_track_id = track_id
+        self._select_annotation_identity(track_id)
+        handle = self.track_selected_forward()
+        if handle is not None:
+            self._assist_track_forward_anchor = None
+            self._project_assist()
+        return handle
+
     def activate_select_tool(self):
         """Return to the neutral canvas selection/editing tool."""
+        self._dismiss_assist_class_picker()
+        self.workflow.set_tool(AnnotationTool.SELECT)
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
         self.sam_controller.set_enabled(False)
-        self.canvas.set_editing(True)
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
         editable = self._video_editable()
         self.actions.create.setEnabled(editable and bool(self.file_path))
         self.actions.create_polygon.setEnabled(
             editable and bool(self.file_path))
         self.actions.editMode.setEnabled(False)
+        self._apply_workflow_state()
         self._finish_tool_activation()
 
     def _leave_special_tool_modes(self):
+        self._dismiss_assist_class_picker()
         if self.canvas.mode == self.canvas.KEYPOINT_MODE:
             self.canvas.exit_keypoint_mode()
             self.keypoint_panel.hide()
         self.sam_controller.set_enabled(False)
+        self._reset_assist_preview_state()
+        self._assist_prompt = None
+        self.canvas.clear_assist_prompt()
 
     def _finish_tool_activation(self):
         self._sync_tool_actions()
         self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def _apply_workflow_state(self):
+        """Project the persistent annotation workflow into the canvas UI."""
+        state = self.workflow.snapshot
+        projection = {
+            AnnotationTool.SELECT: lambda: self.canvas.set_editing(True),
+            AnnotationTool.RECTANGLE: lambda: self.canvas.set_editing(False),
+            AnnotationTool.POLYGON:
+            lambda: self.canvas.set_polygon_drawing(True),
+            AnnotationTool.SMART_BOX: lambda: self.canvas.set_sam_mode(True),
+            AnnotationTool.SMART_POINTS:
+            lambda: self.canvas.set_sam_mode(True),
+        }
+        projection.get(state.active_tool, projection[AnnotationTool.SELECT])()
+        self.active_class_control.set_active_class(state.active_class)
+        self._sync_tool_actions()
+
+    def _start_interaction_session(self):
+        """Clear per-session class/tool selection when a document is replaced."""
+        self.workflow.start_session()
+        self.view_transform.start_session()
+        self._sync_view_actions()
+        self._schedule_view_projection()
+        self._apply_workflow_state()
+
+    def _start_interaction_session_for(self, key):
+        """Start a committed document session without creating identity state."""
+        # ``key`` records the caller's publication boundary; identity remains
+        # derived solely from the authoritative committed generation.
+        del key
+        self._start_interaction_session()
+        return self.document_identity
+
+    def _active_class_selected(self, label):
+        """Make a class choice available immediately and across navigation."""
+        label = str(label).strip()
+        if not label:
+            return
+        if label not in self.label_hist:
+            self.label_hist.append(label)
+            self.active_class_control.set_choices(self.label_hist)
+        self.workflow.set_active_class(label)
+        self._apply_workflow_state()
+
+    def _active_class_policy_changed(self, policy):
+        self.workflow.set_prompt_policy(policy)
+        self._apply_workflow_state()
 
     def _on_provisional_click_blocked(self):
         """Explain a canvas click that went nowhere, and recover from it.
@@ -2249,6 +3182,19 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.editMode.setEnabled(False)
         self._sync_tool_actions(mode)
 
+    def _on_canvas_escape_to_edit(self):
+        """Project a user Escape into the workflow without mistaking resets.
+
+        Canvas emits ``escapeToEdit`` only for a physical Escape that changed
+        its mode.  Navigation and reset projections use ``modeChanged`` but
+        never this signal, so they retain their persistent drawing tool.
+        """
+        outcome = self.workflow.escape()
+        if outcome is EscapeOutcome.CANCEL_PROVISIONAL:
+            self._dismiss_class_picker(discard=False)
+            self._cancel_provisional_shape()
+        self._apply_workflow_state()
+
     def _sync_tool_actions(self, _mode=None):
         """Mirror the authoritative canvas mode into the exclusive actions."""
         if not hasattr(self, 'actions'):
@@ -2261,7 +3207,15 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.KEYPOINT_MODE: self.actions.keypoint_mode,
         }
         active = mapping.get(self.canvas.mode, self.actions.editMode)
-        active.setChecked(True)
+        group = getattr(self.tool_rail, 'action_group', None)
+        if group is not None:
+            group.setExclusive(False)
+        for action in mapping.values():
+            action.setChecked(action is active)
+        if group is not None:
+            group.setExclusive(True)
+            for button in self.tool_rail.buttons.values():
+                button.update()
         if hasattr(self, 'workspace_pages'):
             self.workspace_pages.sam_output_toggle.setVisible(
                 self.canvas.mode == self.canvas.CREATE_SAM)
@@ -2283,7 +3237,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.create_polygon, self.actions.sam_mode,
             self.actions.keypoint_mode) if action.isChecked()),
             self.actions.editMode)
-        shortcut = active.shortcut().toString()
+        shortcut = native_shortcut_text(active.shortcut())
         names = {
             self.actions.editMode: 'Select',
             self.actions.create: 'Bounding Box',
@@ -2291,9 +3245,74 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.sam_mode: 'Smart Select',
             self.actions.keypoint_mode: 'Keypoints',
         }
+        if active is self.actions.sam_mode:
+            names[active] = (
+                'Smart Box' if self.workflow.snapshot.active_tool is
+                AnnotationTool.SMART_BOX else 'Smart Points')
         self.label_active_tool.setText(
             '%s%s' % (names.get(active, active.text().replace('&', '')),
                       ' (%s)' % shortcut if shortcut else ''))
+
+    def _update_canvas_accessible_description(self):
+        """Describe the canvas and its primary shortcuts in native text."""
+        actions = (
+            ('Select', self.actions.editMode),
+            ('Bounding Box', self.actions.create),
+            ('Polygon', self.actions.create_polygon),
+            ('Smart Select', self.actions.sam_mode),
+            ('Keypoints', self.actions.keypoint_mode),
+        )
+        hints = []
+        for name, action in actions:
+            shortcut = native_shortcut_text(action.shortcut())
+            hints.append(
+                '%s %s' % (name, shortcut) if shortcut else name)
+        self.canvas.setAccessibleDescription(
+            'Image annotation surface. Shortcuts: %s.' % ', '.join(hints))
+
+    def _configure_workspace_tab_order(self):
+        """Define one stable order; Qt skips hidden and disabled branches."""
+        chrome = self.workspace_pages.canvas_chrome
+        controls = [
+            self.command_bar.application_button,
+            self.command_bar.open_button,
+            self.command_bar.previous_button,
+            self.command_bar.next_button,
+            self.command_bar.save_button,
+            self.command_bar.verify_button,
+            self.command_bar.format_button,
+            self.command_bar.overflow_button,
+            self.tool_rail.buttons['select'],
+            self.tool_rail.buttons['box'],
+            self.tool_rail.buttons['polygon'],
+            self.tool_rail.buttons['smartSelect'],
+            self.tool_rail.buttons['keypoints'],
+            chrome.zoom_out_button,
+            self.zoom_widget,
+            chrome.zoom_in_button,
+            chrome.fit_window_button,
+            chrome.fit_width_button,
+            chrome.actual_size_button,
+            chrome.visibility_button,
+            self.canvas,
+            self.full_gallery.size_slider,
+            self.full_gallery.list_widget,
+            self.gallery_stats.refresh_btn,
+            self.workspace_inspector.tabs,
+            self.edit_button,
+            self.diffc_button,
+            self.active_class_control.combo,
+            self.active_class_control.confirm_each,
+            self.combo_box.cb,
+            self.annotation_search,
+            self.label_list,
+            self.status_filter_combo,
+            self.file_view_tabs,
+            self.workspace_inspector.collapse_button,
+            self.workspace_shell.reopen_button,
+        ]
+        for before, after in zip(controls, controls[1:]):
+            QWidget.setTabOrder(before, after)
 
     def open_sam_settings(self):
         """Open the SAM configuration dialog."""
@@ -2465,7 +3484,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
-        item_path = ustr(item.text())
+        item_path = ustr(item.data(Qt.UserRole) or item.text())
         self.cur_img_idx = self._path_to_idx.get(item_path, 0)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
@@ -2477,7 +3496,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_selecting_gallery') and self._selecting_gallery:
             return
         if item is not None:
-            item_path = ustr(item.text())
+            item_path = ustr(item.data(Qt.UserRole) or item.text())
             if item_path in self._path_to_idx:
                 self.cur_img_idx = self._path_to_idx[item_path]
                 self.gallery_widget.select_image(item_path)
@@ -2720,6 +3739,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.label_list.clearSelection()
                 self.annotation_model.set_selected_identity(None)
         editable = self._video_editable()
+        self.diffc_button.setEnabled(bool(selected) and editable)
+        if not selected:
+            blocked = self.diffc_button.blockSignals(True)
+            self.diffc_button.setChecked(False)
+            self.diffc_button.blockSignals(blocked)
         self.actions.delete.setEnabled(selected and editable)
         self.actions.copy.setEnabled(selected and editable)
         self.actions.copyToClipboard.setEnabled(selected)
@@ -2962,6 +3986,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # Push command for undo support (shape already created).
             cmd = CreateShapeCommand(self, shape)
             self.undo_stack.push(cmd)
+            self.set_dirty()
 
         # fix copy and delete
         self.shape_selection_changed(True)
@@ -3037,11 +4062,16 @@ class MainWindow(QMainWindow, WindowMixin):
         # Guard selection feedback between the inspector and canvas.
         if hasattr(self, '_updating_label_selection') and self._updating_label_selection:
             return
+        restore_list_focus = self.label_list.hasFocus()
         self._updating_label_selection = True
         try:
             identity = self.current_annotation_identity()
             self.annotation_model.set_selected_identity(identity)
             if identity is None:
+                blocked = self.diffc_button.blockSignals(True)
+                self.diffc_button.setChecked(False)
+                self.diffc_button.blockSignals(blocked)
+                self.diffc_button.setEnabled(False)
                 return
             if self.document_kind == DocumentKind.VIDEO:
                 self._selected_video_track_id = identity
@@ -3052,6 +4082,9 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 shape = self.current_shape()
                 track = None
+            if (shape is not None
+                    and not self._programmatic_annotation_selection):
+                self.activate_select_tool()
             if shape is not None and self.canvas.editing():
                 self._no_selection_slot = True
                 self.canvas.select_shape(shape)
@@ -3062,6 +4095,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.diffc_button.blockSignals(blocked)
         finally:
             self._updating_label_selection = False
+            if restore_list_focus:
+                self.label_list.setFocus(Qt.OtherFocusReason)
 
     def _annotation_visibility_changed(self, identity, visible):
         if self.document_kind == DocumentKind.VIDEO:
@@ -3125,18 +4160,13 @@ class MainWindow(QMainWindow, WindowMixin):
                 and self._pending_provisional_shape is not shape):
             self._dismiss_class_picker(discard=False)
         self._pending_provisional_shape = shape
+        self.workflow.begin_provisional()
 
-        if self.use_default_label_checkbox.isChecked():
-            text = getattr(self, 'default_label', '')
-            if text:
-                self._commit_provisional_shape(text)
-            else:
-                self._cancel_provisional_shape()
+        text = self.workflow.snapshot.active_class
+        if (text and self.workflow.snapshot.prompt_policy.value
+                == 'reuse_active'):
+            self._commit_provisional_shape(text)
             return
-        if self.single_class_mode.isChecked() and self._session_last_class:
-            self._commit_provisional_shape(self._session_last_class)
-            return
-
         self.class_picker.open_at(
             self.label_hist,
             self._session_last_class or self.prev_label_text,
@@ -3167,6 +4197,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._pending_provisional_shape = None
         if shape is None:
             return
+        self.workflow.set_active_class(text)
+        self.workflow.finish_provisional()
+        self._apply_workflow_state()
         self.add_label(shape)
 
         if self.document_kind == DocumentKind.VIDEO:
@@ -3189,22 +4222,30 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_hist.append(text)
         self._update_current_image_stats()
 
-        # Creation is transient: hand the user back to Select with the new
-        # shape selected, so the next gesture edits rather than redraws.
-        # Gated on the drawing modes because SAM's commit_rectangle and
-        # commit_polygon reach here too, and Smart Select is meant to stay
-        # armed across clicks. Polygon keeps its tool for bulk segmentation.
-        if self.canvas.mode == self.canvas.CREATE:
-            self.activate_select_tool()
-        else:
-            self._sync_tool_actions()
-        self.canvas.select_shape(shape)
-        self.shape_selection_changed(True)
+        self.canvas.de_select_shape()
+        self.shape_selection_changed(False)
+        self.canvas.flash_committed_shape(shape)
         self._restore_canvas_focus()
+
+    def _class_picker_accepted(self, text):
+        if self._assist_class_picker_pending:
+            self._assist_class_picker_pending = False
+            self._commit_assist_shape(text)
+            return
+        self._commit_provisional_shape(text)
+
+    def _class_picker_cancelled(self):
+        if self._assist_class_picker_pending:
+            self._assist_class_picker_pending = False
+            self._project_assist()
+            self._restore_canvas_focus()
+            return
+        self._cancel_provisional_shape()
 
     def _cancel_provisional_shape(self):
         self._pending_provisional_shape = None
         self.canvas.discard_provisional_shape()
+        self.workflow.finish_provisional()
         self._sync_tool_actions()
         self._restore_canvas_focus()
 
@@ -3238,22 +4279,59 @@ class MainWindow(QMainWindow, WindowMixin):
             blocked = picker.blockSignals(True)
             picker.hide()
             picker.blockSignals(blocked)
+        self._assist_class_picker_pending = False
         self._pending_provisional_shape = None
         if discard and hasattr(self, 'canvas'):
             self.canvas.discard_provisional_shape()
+            self.workflow.finish_provisional()
+
+    def _discard_workflow_draft(self, show_status=True):
+        """Cancel all transient geometry while preserving tool and class."""
+        canvas = self.canvas
+        picker = getattr(self, 'class_picker', None)
+        had_draft = bool(
+            self._pending_provisional_shape is not None
+            or canvas.provisional_shape is not None
+            or canvas.current is not None
+            or getattr(canvas, '_edit_drag_draw', False)
+            or getattr(canvas, '_freehand_active', False)
+            or (picker is not None and picker.isVisible()))
+        self._dismiss_class_picker(discard=True)
+        canvas.cancel_to_edit()
+        self.workflow.finish_provisional()
+        self._apply_workflow_state()
+        if had_draft and show_status:
+            self.status('Draft discarded')
+        return had_draft
 
     def scroll_request(self, delta, orientation):
         units = - delta / (8 * 15)
         bar = self.scroll_bars[orientation]
         bar.setValue(int(bar.value() + bar.singleStep() * units))
 
+    def _scroll_ratios(self):
+        """Capture the visible point as normalized scroll-bar positions."""
+        ratios = []
+        for orientation in (Qt.Horizontal, Qt.Vertical):
+            bar = self.scroll_bars[orientation]
+            maximum = bar.maximum()
+            ratios.append(
+                float(bar.value()) / maximum if maximum else 0.5)
+        return tuple(ratios)
+
+    def _restore_scroll_ratios(self, ratios):
+        """Restore a manual video view after its frame changes size."""
+        if self.view_transform.mode is not ViewMode.MANUAL:
+            return
+        for orientation, ratio in zip((Qt.Horizontal, Qt.Vertical), ratios):
+            bar = self.scroll_bars[orientation]
+            bar.setValue(int(round(bar.maximum() * ratio)))
+
     def set_zoom(self, value):
-        self.actions.fitWidth.setChecked(False)
-        self.actions.fitWindow.setChecked(False)
-        self.zoom_mode = self.MANUAL_ZOOM
-        # Arithmetic on scaling factor often results in float
-        # Convert to int to avoid type errors
-        self.zoom_widget.setValue(int(value))
+        self.view_transform.choose_manual(value)
+        self._sync_view_actions()
+        self.zoom_widget.setValue(self.view_transform.manual_percent)
+        self.paint_canvas()
 
     def add_zoom(self, increment=10):
         self.set_zoom(self.zoom_widget.value() + increment)
@@ -3315,15 +4393,19 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def set_fit_window(self, value=True):
         if value:
-            self.actions.fitWidth.setChecked(False)
-        self.zoom_mode = self.FIT_WINDOW if value else self.MANUAL_ZOOM
-        self.adjust_scale()
+            self.view_transform.choose_fit_window()
+        else:
+            self.view_transform.choose_manual(self.zoom_widget.value())
+        self._sync_view_actions()
+        self._schedule_view_projection()
 
     def set_fit_width(self, value=True):
         if value:
-            self.actions.fitWindow.setChecked(False)
-        self.zoom_mode = self.FIT_WIDTH if value else self.MANUAL_ZOOM
-        self.adjust_scale()
+            self.view_transform.choose_fit_width()
+        else:
+            self.view_transform.choose_manual(self.zoom_widget.value())
+        self._sync_view_actions()
+        self._schedule_view_projection()
 
     def set_light(self, value):
         self.actions.lightOrg.setChecked(int(value) == 50)
@@ -3369,6 +4451,12 @@ class MainWindow(QMainWindow, WindowMixin):
                            source_override=None):
         """Queue a transactional video/project open on the decoder lane."""
         path = os.path.abspath(ustr(path))
+        self._supersede_pending_replacement_requests()
+        runtime_status = probe_video_runtime()
+        if not runtime_status.available:
+            self._show_video_runtime_setup(path, runtime_status)
+            return None
+        self._clear_video_runtime_setup()
         if not skip_prompt and self.dirty:
             if self.auto_saving.isChecked():
                 self.request_save_file(on_success=lambda: self.request_open_video(
@@ -3386,18 +4474,42 @@ class MainWindow(QMainWindow, WindowMixin):
 
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=True)
-        self._dataset_generation = self.task_coordinator.next_generation()
+        # NumPy performs a small linear-algebra self-check the first time it
+        # is imported. On macOS that check can overflow QThreadPool's worker
+        # stack inside OpenBLAS, terminating the whole application. Keep the
+        # dependencies lazy, but initialize them on the GUI thread before the
+        # decoding job starts.
+        try:
+            from libs.core.video_decoder import load_video_dependencies
+            dependencies = load_video_dependencies()
+        except VideoDependencyError as exc:
+            runtime_status = probe_video_runtime()
+            if runtime_status.available:
+                runtime_status = VideoRuntimeStatus(
+                    False, runtime_status.missing,
+                    runtime_status.install_command, str(exc))
+            self._show_video_runtime_setup(path, runtime_status)
+            return None
+        # Preparation is only a replacement request. Keep the committed
+        # document generation intact until the candidate is ready to publish,
+        # so a failed open cannot stale the visible document's save identity.
         generation = self._dataset_generation
-        self._video_open_request_id += 1
+        identity = self.document_identity
         request_id = self._video_open_request_id
-        self._show_loading_veil('Opening video %s…' % os.path.basename(path))
+        loading_owner = ('video', request_id)
+        self._show_replacement_loading(
+            loading_owner,
+            'Opening video %s…' % os.path.basename(path))
 
         def prepare(handle):
             try:
                 prepared = prepare_video_open(
                     path, project_path=target, read_only=read_only,
                     cancelled=handle.is_cancelled,
-                    source_override=source_override)
+                    source_override=source_override,
+                    dependencies=dependencies)
+            except VideoDependencyError as exc:
+                return VideoOpenProblem('dependency', str(exc))
             except VideoSourceMissing as exc:
                 return VideoOpenProblem('missing', str(exc))
             except VideoSourceChanged as exc:
@@ -3407,45 +4519,202 @@ class MainWindow(QMainWindow, WindowMixin):
                 return None
             return prepared
 
-        handle = self.task_coordinator.submit(
-            'video', prepare, priority=JobPriority.IMAGE_LOAD,
-            key='video-open', latest=True, generation=generation)
-        handle.result.connect(
-            lambda prepared, rid=request_id, gen=generation,
-            requested=path, project=target, override=source_override:
-            self._on_video_open_result(
-                prepared, rid, gen, requested, project, override))
-        handle.error.connect(
-            lambda message, rid=request_id, gen=generation:
-            self._on_video_open_error(message, rid, gen))
-        return handle
-
-    def _on_video_open_error(self, message, request_id, generation):
-        if (request_id != self._video_open_request_id
-                or generation != self._dataset_generation):
-            return
-        self._hide_loading_veil()
-        self.canvas.setEnabled(bool(self.file_path))
-        self.status('Error opening video: ' + message, delay=10000)
-
-    def _on_video_open_result(self, prepared, request_id, generation,
-                              requested_path=None, project_path=None,
-                              source_override=None):
-        if prepared is None:
-            return
-        if (request_id != self._video_open_request_id
-                or generation != self._dataset_generation):
+        def discard_prepared(prepared):
             decoder = getattr(prepared, 'decoder', None)
             if decoder is not None:
                 decoder.close()
+
+        handle = self.task_coordinator.submit(
+            'video', prepare, priority=JobPriority.IMAGE_LOAD,
+            key='video-open', latest=True, generation=generation,
+            on_discard=discard_prepared)
+        handle.result.connect(
+            lambda prepared, rid=request_id, gen=generation,
+            requested=path, project=target, override=source_override,
+            origin=identity:
+            self._on_video_open_result(
+                prepared, rid, gen, requested, project, override, origin))
+        handle.error.connect(
+            lambda message, rid=request_id, gen=generation,
+            requested=path, project=target, override=source_override,
+            origin=identity:
+            self._on_video_open_error(
+                message, rid, gen, requested, project, override, origin))
+        return handle
+
+    def _on_video_open_error(self, message, request_id, generation,
+                             requested_path=None, project_path=None,
+                             source_override=None, identity=None):
+        if (request_id != self._video_open_request_id
+                or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
-        if isinstance(prepared, VideoOpenProblem):
-            self._hide_loading_veil()
-            self._resolve_video_open_problem(
-                prepared, requested_path, project_path, source_override)
+        self._settle_replacement_loading(
+            ('video', request_id), settle_unowned=True)
+        text = 'Error opening video: ' + message
+        self.status(text, delay=10000)
+        self._show_inline_open_error(
+            text,
+            lambda: self.request_open_video(
+                requested_path, project_path=project_path, skip_prompt=True,
+                source_override=source_override),
+            self.open_video_dialog)
+
+    def _on_video_open_result(self, prepared, request_id, generation,
+                              requested_path=None, project_path=None,
+                              source_override=None, identity=None):
+        if prepared is None:
             return
-        self._commit_video_open(prepared)
-        self._hide_loading_veil()
+        owner = ('video', request_id)
+        try:
+            if (request_id != self._video_open_request_id
+                    or generation != self._dataset_generation
+                    or (identity is not None
+                        and not self._is_current_document(identity))):
+                decoder = getattr(prepared, 'decoder', None)
+                if decoder is not None:
+                    decoder.close()
+                return
+            if isinstance(prepared, VideoOpenProblem):
+                if prepared.kind == 'dependency':
+                    runtime_status = probe_video_runtime()
+                    if runtime_status.available:
+                        runtime_status = VideoRuntimeStatus(
+                            False, runtime_status.missing,
+                            runtime_status.install_command, prepared.message)
+                    self._show_video_runtime_setup(
+                        requested_path, runtime_status)
+                    return
+                text = 'Error opening video: ' + prepared.message
+                self.status(text, delay=10000)
+                self._show_inline_open_error(
+                    text,
+                    lambda: self.request_open_video(
+                        requested_path, project_path=project_path,
+                        skip_prompt=True, source_override=source_override),
+                    (partial(self._choose_video_source_for_project,
+                             project_path)
+                     if prepared.kind == 'missing' and project_path
+                     else partial(self._choose_new_video_project,
+                                  requested_path, project_path,
+                                  source_override)
+                     if prepared.kind == 'changed'
+                     else self.open_video_dialog))
+                return
+            self._commit_video_open(prepared)
+        except Exception as exc:
+            if not isinstance(exc, _VideoPublicationError):
+                decoder = getattr(prepared, 'decoder', None)
+                if decoder is not None:
+                    decoder.close()
+            text = 'Error opening video: %s' % exc
+            self.status(text, delay=10000)
+            self._show_inline_open_error(
+                text,
+                lambda: self.request_open_video(
+                    requested_path, project_path=project_path,
+                    skip_prompt=True, source_override=source_override),
+                self.open_video_dialog)
+        finally:
+            self._settle_replacement_loading(
+                owner, settle_unowned=True)
+
+    def _show_video_runtime_setup(self, path, status):
+        """Explain missing optional support without replacing current work."""
+        if self.workspace_pages.video_setup_overlay.isHidden():
+            focus = QApplication.focusWidget()
+            self._video_runtime_restore_focus = (
+                focus if self._is_meaningful_workspace_focus(focus)
+                else None)
+        self._video_runtime_setup_path = os.path.abspath(ustr(path))
+        self.workspace_pages.show_video_setup(status)
+        self.status('Video setup required: %s' % status.detail, delay=10000)
+
+    def _dismiss_video_runtime_setup(self):
+        self.workspace_pages.hide_video_setup()
+        self._restore_video_runtime_focus()
+
+    def _choose_another_video_after_setup(self):
+        self._dismiss_video_runtime_setup()
+        self.open_video_dialog()
+
+    def _choose_video_source_for_project(self, project_path):
+        """Relink a missing project source through the banner's chooser."""
+        located = self._locate_video_source(project_path)
+        if located:
+            self.request_open_video(
+                project_path, skip_prompt=True, source_override=located)
+
+    def _choose_new_video_project(self, requested_path, project_path,
+                                   source_override=None):
+        """Create a fresh sidecar without asking a destructive modal choice."""
+        source_path = source_override
+        if source_path is None and not is_video_project(requested_path):
+            source_path = requested_path
+        if source_path is None and project_path:
+            source_path = self._locate_video_source(project_path)
+        if source_path is None:
+            return
+        new_project = self._new_video_project_path(source_path, project_path)
+        if new_project:
+            self.request_open_video(
+                source_path, project_path=new_project, skip_prompt=True)
+
+    def _is_meaningful_workspace_focus(self, widget):
+        if widget is None:
+            return False
+        try:
+            return (
+                widget.window() is self
+                and QWidget.isVisible(widget)
+                and QWidget.isEnabled(widget)
+                and QWidget.focusPolicy(widget) != Qt.NoFocus
+                and not self.workspace_pages.video_setup_overlay
+                .isAncestorOf(widget))
+        except RuntimeError:
+            return False
+
+    def _workspace_focus_fallback(self):
+        page = self.workspace_pages.current_page()
+        if page == 'canvas':
+            candidates = (self.canvas,)
+        elif page == 'gallery':
+            candidates = (self.full_gallery.list_widget,)
+        else:
+            candidates = tuple(
+                self.workspace_pages.empty_page.action_buttons)
+            candidates += tuple(
+                self.workspace_pages.empty_page.recent_buttons)
+        for widget in candidates:
+            if self._is_meaningful_workspace_focus(widget):
+                return widget
+        return None
+
+    def _restore_video_runtime_focus(self):
+        focus = self._video_runtime_restore_focus
+        self._video_runtime_restore_focus = None
+        if not self._is_meaningful_workspace_focus(focus):
+            focus = self._workspace_focus_fallback()
+        if focus is not None:
+            focus.setFocus(Qt.OtherFocusReason)
+
+    def _clear_video_runtime_setup(self):
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.hide_video_setup()
+        self._video_runtime_restore_focus = None
+
+    def _supersede_pending_replacement_requests(self):
+        """Invalidate image/video candidates without changing the document."""
+        self._load_request_id += 1
+        self._video_open_request_id += 1
+        self._directory_request_id += 1
+        self.task_coordinator.cancel_key('image-load')
+        self.task_coordinator.cancel_key('video-open')
+        self.task_coordinator.cancel_key('directory-scan')
+        self.task_coordinator.cancel_key('directory-first-image')
+        self._settle_replacement_loading()
+        self._clear_inline_open_error()
 
     def _locate_video_source(self, project_path):
         source, _selected = QFileDialog.getOpenFileName(
@@ -3518,98 +4787,461 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         self.status('Video project open cancelled')
 
-    def _commit_video_open(self, prepared):
-        """Atomically publish worker data on QApplication.thread()."""
-        assert QApplication.instance().thread() == self.thread()
+    def _capture_video_publication_checkpoint(self):
+        """Capture every mutable projection replaced by video publication."""
+        canvas = self.canvas
+        timeline = self.video_timeline
+        save = self.continuous_save
+        selected_flags = tuple(
+            (shape, bool(shape.selected)) for shape in canvas.shapes)
+        action_states = tuple((
+            action, action.isEnabled(), action.isChecked(), action.text(),
+            action.toolTip(), action.statusTip())
+            for action in self.findChildren(QAction))
+        combo = self.combo_box.cb
+        original_size = getattr(self, '_original_image_size', None)
+        return {
+            'dataset_generation': self._dataset_generation,
+            'continuous_identity_epoch': self._continuous_identity_epoch,
+            'plugin_generation': self._plugin_document_generation,
+            'plugin_ready': self._plugin_document_ready,
+            'document_kind': self.document_kind,
+            'document_revision': self._document_revision,
+            'dirty': self.dirty,
+            'file_path': getattr(self, 'file_path', None),
+            'image_data': getattr(self, 'image_data', None),
+            'image': getattr(self, 'image', None),
+            'image_scale_factor': getattr(self, '_image_scale_factor', 1.0),
+            'original_image_size': (
+                QSize(original_size) if original_size is not None else QSize()),
+            'label_file': getattr(self, 'label_file', None),
+            'video_decoder': self.video_decoder,
+            'video_snapshot': self.video_snapshot,
+            'video_model': self.video_model,
+            'video_tracks': self.video_tracks,
+            'video_observations': self.video_observations,
+            'video_frame_states': self.video_frame_states,
+            'video_classes': self.video_classes,
+            'video_gaps': self.video_gaps,
+            'current_video_frame_ref': self.current_video_frame_ref,
+            'selected_video_track_id': self._selected_video_track_id,
+            'video_open_request_id': self._video_open_request_id,
+            'load_request_id': self._load_request_id,
+            'video_frame_request_id': self._video_frame_request_id,
+            'video_decode_in_flight': self._video_decode_in_flight,
+            'video_prefetch_handle': self._video_prefetch_handle,
+            'playback_timer_active': self._video_playback_timer.isActive(),
+            'video_play_started_wall': self._video_play_started_wall,
+            'video_play_started_seconds': self._video_play_started_seconds,
+            'pending_propagation_keys': set(self._pending_propagation_keys),
+            'pending_propagation_gap_keys': set(
+                self._pending_propagation_gap_keys),
+            'pending_propagation_failures': self._pending_propagation_failures,
+            'propagation_preview': dict(self._propagation_preview),
+            'propagation_preview_gaps': dict(
+                self._propagation_preview_gaps),
+            'm_img_list': list(self.m_img_list),
+            'path_to_idx': dict(self._path_to_idx),
+            'img_count': self.img_count,
+            'cur_img_idx': self.cur_img_idx,
+            'file_items': tuple(
+                self.file_list_widget.item(index).clone()
+                for index in range(self.file_list_widget.count())),
+            'file_current_row': self.file_list_widget.currentRow(),
+            'combo_items': tuple(
+                (combo.itemText(index), combo.itemData(index))
+                for index in range(combo.count())),
+            'combo_index': combo.currentIndex(),
+            'annotation_search': self.annotation_search.text(),
+            'annotation_visibility': dict(self.annotation_model._visibility),
+            'annotation_selection': self.annotation_model._selected_identity,
+            'canvas_pixmap': (
+                None if canvas.pixmap is None else QPixmap(canvas.pixmap)),
+            'canvas_shapes': list(canvas.shapes),
+            'canvas_selected': canvas.selected_shape,
+            'canvas_selected_flags': selected_flags,
+            'canvas_visible': dict(canvas.visible),
+            'canvas_mode': canvas.mode,
+            'canvas_verified': canvas.verified,
+            'canvas_locked': canvas.locked,
+            'canvas_scale': canvas.scale,
+            'canvas_enabled': canvas.isEnabled(),
+            'canvas_current': canvas.current,
+            'canvas_provisional': canvas.provisional_shape,
+            'canvas_preview': list(canvas.propagation_preview_shapes),
+            'canvas_focus': canvas.hasFocus(),
+            'timeline_snapshot': timeline._snapshot,
+            'timeline_markers': {
+                key: tuple(value)
+                for key, value in timeline._marker_pts_by_kind.items()},
+            'timeline_review': timeline._propagation_review_counts,
+            'timeline_running': timeline._propagation_running,
+            'timeline_playing': timeline._playing,
+            'timeline_frame': self.current_video_frame_ref,
+            'timeline_time_text': timeline.time_edit.text(),
+            'timeline_time_modified': timeline.time_edit.isModified(),
+            'workflow': self.workflow.snapshot,
+            'view_mode': self.view_transform.mode,
+            'view_manual_percent': self.view_transform.manual_percent,
+            'zoom': self.zoom_widget.value(),
+            'scroll_ratios': self._scroll_ratios(),
+            'workspace_page': self.workspace_pages.current_page(),
+            'gallery_mode': self.gallery_mode_enabled,
+            'frame_cache_entries': self.frame_cache._entries.copy(),
+            'frame_cache_bytes': self.frame_cache._bytes,
+            'frame_cache_max_images': self.frame_cache.max_images,
+            'undo': list(self.undo_stack._undo_stack),
+            'redo': list(self.undo_stack._redo_stack),
+            'save_state': (
+                save._state, save._document_key, save._generation,
+                save._durable_revision, save._newest_revision,
+                save._in_flight, save._enabled, save._draining, save.error,
+                save._timer.isActive(), save._timer.remainingTime()),
+            'save_handle': self._save_handle,
+            'video_save_handle': self._video_save_handle,
+            'video_save_active': self._video_save_active,
+            'save_drain_callbacks': list(self._save_drain_callbacks),
+            'recent_files': list(self.recent_files),
+            'window_title': self.windowTitle(),
+            'status': self.statusBar().currentMessage(),
+            'actions': action_states,
+        }
+
+    def _restore_video_publication_checkpoint(self, state):
+        """Restore a prior workspace without invoking destructive reset."""
+        self._dataset_generation = state['dataset_generation']
+        self._continuous_identity_epoch = state['continuous_identity_epoch']
+        self._plugin_document_generation = state['plugin_generation']
+        self._plugin_document_ready = False
+        self.document_kind = state['document_kind']
+        self._document_revision = state['document_revision']
+        self.dirty = state['dirty']
+        self.file_path = state['file_path']
+        self.image_data = state['image_data']
+        self.image = state['image']
+        self._image_scale_factor = state['image_scale_factor']
+        self._original_image_size = QSize(state['original_image_size'])
+        self.label_file = state['label_file']
+        self.video_decoder = state['video_decoder']
+        self.video_snapshot = state['video_snapshot']
+        self.video_model = state['video_model']
+        self.video_tracks = state['video_tracks']
+        self.video_observations = state['video_observations']
+        self.video_frame_states = state['video_frame_states']
+        self.video_classes = state['video_classes']
+        self.video_gaps = state['video_gaps']
+        self.current_video_frame_ref = state['current_video_frame_ref']
+        self._selected_video_track_id = state['selected_video_track_id']
+        self._video_open_request_id = state['video_open_request_id']
+        self._load_request_id = state['load_request_id']
+        self._video_frame_request_id = state['video_frame_request_id']
+        self._video_decode_in_flight = state['video_decode_in_flight']
+        self._video_prefetch_handle = state['video_prefetch_handle']
+        self._video_play_started_wall = state['video_play_started_wall']
+        self._video_play_started_seconds = state['video_play_started_seconds']
+        self._pending_propagation_keys = state['pending_propagation_keys']
+        self._pending_propagation_gap_keys = \
+            state['pending_propagation_gap_keys']
+        self._pending_propagation_failures = \
+            state['pending_propagation_failures']
+        self._propagation_preview = state['propagation_preview']
+        self._propagation_preview_gaps = state['propagation_preview_gaps']
+        self.m_img_list = state['m_img_list']
+        self._path_to_idx = state['path_to_idx']
+        self.img_count = state['img_count']
+        self.cur_img_idx = state['cur_img_idx']
+        self.file_list_widget.clear()
+        for item in state['file_items']:
+            self.file_list_widget.addItem(item)
+        self.file_list_widget.setCurrentRow(state['file_current_row'])
+        combo = self.combo_box.cb
+        combo.clear()
+        for text, data in state['combo_items']:
+            combo.addItem(text, data)
+        combo.setCurrentIndex(state['combo_index'])
+        self.annotation_search.setText(state['annotation_search'])
+
+        self.frame_cache._entries = state['frame_cache_entries']
+        self.frame_cache._bytes = state['frame_cache_bytes']
+        self.frame_cache.max_images = state['frame_cache_max_images']
+        pixmap = state['canvas_pixmap']
+        if pixmap is None:
+            self.canvas.reset_state()
+        else:
+            self.canvas.load_pixmap(pixmap)
+        self.canvas.load_shapes(state['canvas_shapes'])
+        self.canvas.visible = state['canvas_visible']
+        for shape, selected in state['canvas_selected_flags']:
+            shape.selected = selected
+        self.canvas.selected_shape = state['canvas_selected']
+        self.canvas.current = state['canvas_current']
+        self.canvas.provisional_shape = state['canvas_provisional']
+        self.canvas.propagation_preview_shapes = state['canvas_preview']
+        self.canvas.mode = state['canvas_mode']
+        self.canvas.verified = state['canvas_verified']
+        self.canvas.locked = state['canvas_locked']
+        self.canvas.scale = state['canvas_scale']
+        self.canvas.setEnabled(state['canvas_enabled'])
+        self.canvas.update()
+
+        if self.document_kind == DocumentKind.VIDEO:
+            self.annotation_model.set_video_context(
+                self.video_model,
+                None if self.current_video_frame_ref is None
+                else self.current_video_frame_ref.pts)
+        elif self.document_kind == DocumentKind.IMAGE:
+            self.annotation_model.set_image_shapes(self.canvas.shapes)
+        else:
+            self.annotation_model.clear()
+        self.annotation_model._visibility = state['annotation_visibility']
+        self.annotation_model.set_selected_identity(
+            state['annotation_selection'])
+
+        timeline = self.video_timeline
+        timeline.set_session(state['timeline_snapshot'])
+        markers = state['timeline_markers']
+        timeline.set_markers(
+            accepted=markers.get('accepted', ()),
+            pending=markers.get('pending', ()),
+            verified=markers.get('verified', ()),
+            propagation=markers.get('propagation', ()),
+            gaps=markers.get('gap', ()))
+        if (state['timeline_snapshot'] is not None
+                and state['timeline_frame'] is not None):
+            timeline.set_current_frame(state['timeline_frame'])
+        timeline.set_propagation_review(*state['timeline_review'])
+        timeline._propagation_running = state['timeline_running']
+        timeline.set_playing(state['timeline_playing'])
+        if state['playback_timer_active']:
+            self._video_playback_timer.start()
+        timeline.time_edit.setText(state['timeline_time_text'])
+        timeline.time_edit.setModified(state['timeline_time_modified'])
+
+        self.workflow._state = state['workflow']
+        self.view_transform.mode = state['view_mode']
+        self.view_transform.manual_percent = state['view_manual_percent']
+        blocked = self.zoom_widget.blockSignals(True)
+        self.zoom_widget.setValue(state['zoom'])
+        self.zoom_widget.blockSignals(blocked)
+        self.gallery_mode_enabled = state['gallery_mode']
+        self.workspace_pages.set_video_visible(
+            self.document_kind == DocumentKind.VIDEO)
+        self.workspace_pages.set_page(state['workspace_page'])
+        self._restore_scroll_ratios(state['scroll_ratios'])
+
+        self.undo_stack._undo_stack = state['undo']
+        self.undo_stack._redo_stack = state['redo']
+        self.undo_stack._notify_callbacks()
+        save = self.continuous_save
+        save._timer.stop()
+        (save_state, save._document_key, save._generation,
+         save._durable_revision, save._newest_revision, save._in_flight,
+         save._enabled, save._draining, save.error, timer_active,
+         timer_remaining) = state['save_state']
+        save._set_state(save_state)
+        if timer_active:
+            save._timer.start(max(0, timer_remaining))
+        self._save_handle = state['save_handle']
+        self._video_save_handle = state['video_save_handle']
+        self._video_save_active = state['video_save_active']
+        self._save_drain_callbacks = state['save_drain_callbacks']
+        self.recent_files = state['recent_files']
+        self.workspace_pages.empty_page.set_recent_paths(
+            path for path in self.recent_files if os.path.exists(path))
+        self.setWindowTitle(state['window_title'])
+        self.statusBar().showMessage(state['status'])
+        self._sync_command_bar()
+        sync_verification = getattr(self, '_sync_verification_ui', None)
+        if sync_verification is not None:
+            sync_verification()
+        self._sync_tool_actions()
+        for action, enabled, checked, text, tooltip, status_tip in \
+                state['actions']:
+            try:
+                action.setEnabled(enabled)
+                if action.isCheckable():
+                    action.setChecked(checked)
+                action.setText(text)
+                action.setToolTip(tooltip)
+                action.setStatusTip(status_tip)
+            except RuntimeError:
+                # Rebuilding the marker legend destroys its old ephemeral
+                # menu actions. The rebuilt actions already reflect the
+                # restored marker model; only persistent actions need replay.
+                continue
+        self._plugin_document_ready = state['plugin_ready']
+        self._publish_plugin_document(force=True)
+        if state['canvas_focus']:
+            self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def _stage_video_publication(self, prepared):
         snapshot = prepared.snapshot
         first = snapshot.initial_frame
-        self.reset_state()
-        self._set_document_kind(DocumentKind.VIDEO)
-        self.video_decoder = prepared.decoder
-        self.video_snapshot = snapshot
-        self.video_tracks = prepared.tracks
-        self.video_observations = prepared.observations
-        self.video_frame_states = prepared.frame_states
-        self.video_classes = prepared.classes
-        self.video_gaps = prepared.gaps
-        self.video_model = VideoProjectModel(
+        if first is None or first.image is None or first.image.isNull():
+            raise ValueError('video candidate has no displayable first frame')
+        if getattr(prepared, 'decoder', None) is None:
+            raise ValueError('video candidate has no decoder')
+        pixmap = QPixmap.fromImage(first.image)
+        if pixmap.isNull():
+            raise ValueError('video candidate first frame is not displayable')
+        model = VideoProjectModel(
             snapshot.revision, tracks=prepared.tracks,
             observations=prepared.observations,
             frame_states=prepared.frame_states, classes=prepared.classes,
             gaps=prepared.gaps)
-        self._document_revision = snapshot.revision
-        self.m_img_list = []
-        self._path_to_idx = {}
-        self.img_count = 0
-        self.cur_img_idx = 0
-        self.file_list_widget.clear()
-        self.file_path = snapshot.source_path
-        self.image_data = None
-        self.image = first.image
-        self._image_scale_factor = (
-            first.display_width / snapshot.width if snapshot.width else 1.0)
-        self._original_image_size = QSize(snapshot.width, snapshot.height)
-        verified_pts = {state.pts for state in prepared.frame_states
-                        if state.verified}
-        self.canvas.verified = first.frame_ref.pts in verified_pts
-        self.canvas.locked = (
-            snapshot.read_only
-            or (self.canvas.verified
-                and self.lock_on_verify_option.isChecked()))
-        self.canvas.load_pixmap(QPixmap.fromImage(first.image))
-        self.current_video_frame_ref = first.frame_ref
-        self.frame_cache.put(first)
-        self.video_timeline.set_session(snapshot)
-        self._refresh_video_timeline_markers()
-        self._materialize_video_frame(first.frame_ref.pts)
-        self.set_clean()
-        self.canvas.setEnabled(True)
-        self.adjust_scale(initial=True)
-        self.paint_canvas()
-        self.toggle_actions(True)
-        editable = not snapshot.read_only
-        mutation_actions = (
-            self.actions.create, self.actions.create_polygon,
-            self.actions.createMode, self.actions.editMode,
-            self.actions.verify, self.actions.delete, self.actions.copy,
-            self.actions.edit, self.actions.pasteFromClipboard,
-            self.actions.keypoint_mode, self.actions.sam_mode,
-            self.actions.shapeLineColor, self.actions.shapeFillColor,
-            self.actions.undo, self.actions.redo,
-            self.actions.videoAddKeyframe, self.actions.videoEditSpan,
-            self.actions.videoDeleteTrack,
-            self.actions.videoTrackForward,
-            self.actions.videoTrackBackward,
-            self.actions.videoAcceptSuggestion,
-            self.actions.videoRejectSuggestion,
-            self.actions.videoAcceptVisible,
-            self.actions.videoRejectVisible,
-            self.actions.videoAcceptRun,
-            self.actions.videoRejectRun,
-        )
-        if not editable:
-            for action in mutation_actions:
-                action.setEnabled(False)
+        return snapshot, first, pixmap, model
+
+    def _queue_replaced_video_decoder_close(self, decoder, generation):
+        if decoder is None:
+            return
+        coordinator = getattr(self, 'task_coordinator', None)
+        if coordinator is not None and not coordinator.is_shutting_down:
+            handle = coordinator.submit(
+                'video', lambda _handle, session=decoder: session.close(),
+                priority=JobPriority.IMAGE_LOAD, generation=generation)
+            handle.begin_non_cancellable()
         else:
-            for action in (self.actions.create, self.actions.create_polygon,
-                           self.actions.createMode, self.actions.editMode,
-                           self.actions.verify):
-                action.setEnabled(True)
-        self.diffc_button.setEnabled(editable)
-        self.actions.saveAs.setEnabled(bool(snapshot.project_path))
-        self.add_recent_file(snapshot.project_path or snapshot.source_path)
-        suffix = ' [read-only]' if snapshot.read_only else ''
-        self.setWindowTitle(
-            '%s %s%s' % (__appname__, snapshot.source_path, suffix))
-        self.update_status_bar()
-        self.canvas.setFocus(True)
-        if prepared.warning:
-            self.status(prepared.warning, delay=15000)
-        else:
-            self.status(
-                'Opened video %s' % os.path.basename(snapshot.source_path))
-        self._plugin_document_ready = True
-        self._publish_plugin_document(new_generation=True, force=True)
+            decoder.close()
+
+    def _commit_video_open(self, prepared):
+        """Publish a prepared candidate or restore the complete prior UI."""
+        assert QApplication.instance().thread() == self.thread()
+        candidate_decoder = getattr(prepared, 'decoder', None)
+        checkpoint = None
+        committed = False
+        try:
+            snapshot, first, pixmap, model = \
+                self._stage_video_publication(prepared)
+            checkpoint = self._capture_video_publication_checkpoint()
+            save_handle = (
+                checkpoint['video_save_handle']
+                if (checkpoint['document_kind'] == DocumentKind.VIDEO
+                    and checkpoint['save_state'][5] is not None)
+                else None)
+            candidate_generation = self.task_coordinator.next_generation(
+                exclude_handles=(() if save_handle is None
+                                 else (save_handle,)))
+            # reset_state() is intentionally destructive, so detach the prior
+            # decoder first. It stays alive until every candidate projection
+            # has succeeded and is restored untouched on rollback.
+            self.video_decoder = None
+            self.reset_state()
+            self._set_document_kind(DocumentKind.VIDEO)
+            self.video_decoder = candidate_decoder
+            self.video_snapshot = snapshot
+            self.video_tracks = prepared.tracks
+            self.video_observations = prepared.observations
+            self.video_frame_states = prepared.frame_states
+            self.video_classes = prepared.classes
+            self.video_gaps = prepared.gaps
+            self.video_model = model
+            self._document_revision = snapshot.revision
+            self.m_img_list = []
+            self._path_to_idx = {}
+            self.img_count = 0
+            self.cur_img_idx = 0
+            self.file_list_widget.clear()
+            self.file_path = snapshot.source_path
+            self._dataset_generation = candidate_generation
+            self.continuous_save.reset(
+                self._continuous_document_key(), candidate_generation,
+                snapshot.revision)
+            self.image_data = None
+            self.image = first.image
+            self._image_scale_factor = (
+                first.display_width / snapshot.width
+                if snapshot.width else 1.0)
+            self._original_image_size = QSize(
+                snapshot.width, snapshot.height)
+            verified_pts = {state.pts for state in prepared.frame_states
+                            if state.verified}
+            self.canvas.verified = first.frame_ref.pts in verified_pts
+            self.canvas.locked = (
+                snapshot.read_only
+                or (self.canvas.verified
+                    and self.lock_on_verify_option.isChecked()))
+            self.canvas.load_pixmap(pixmap)
+            self.current_video_frame_ref = first.frame_ref
+            self.frame_cache.put(first)
+            self.video_timeline.set_session(snapshot)
+            self._refresh_video_timeline_markers()
+            self._materialize_video_frame(first.frame_ref.pts)
+            self.set_clean()
+            self.canvas.setEnabled(True)
+            self._schedule_view_projection()
+            self.toggle_actions(True)
+            editable = not snapshot.read_only
+            mutation_actions = (
+                self.actions.create, self.actions.create_polygon,
+                self.actions.createMode, self.actions.editMode,
+                self.actions.verify, self.actions.delete, self.actions.copy,
+                self.actions.edit, self.actions.pasteFromClipboard,
+                self.actions.keypoint_mode, self.actions.sam_mode,
+                self.actions.shapeLineColor, self.actions.shapeFillColor,
+                self.actions.undo, self.actions.redo,
+                self.actions.videoAddKeyframe, self.actions.videoEditSpan,
+                self.actions.videoDeleteTrack,
+                self.actions.videoTrackForward,
+                self.actions.videoTrackBackward,
+                self.actions.videoAcceptSuggestion,
+                self.actions.videoRejectSuggestion,
+                self.actions.videoAcceptVisible,
+                self.actions.videoRejectVisible,
+                self.actions.videoAcceptRun,
+                self.actions.videoRejectRun,
+            )
+            if not editable:
+                for action in mutation_actions:
+                    action.setEnabled(False)
+            else:
+                for action in (
+                        self.actions.create, self.actions.create_polygon,
+                        self.actions.createMode, self.actions.editMode,
+                        self.actions.verify):
+                    action.setEnabled(True)
+            self.shape_selection_changed(False)
+            self.actions.saveAs.setEnabled(bool(snapshot.project_path))
+            self.add_recent_file(
+                snapshot.project_path or snapshot.source_path)
+            suffix = ' [read-only]' if snapshot.read_only else ''
+            self.setWindowTitle(
+                '%s %s%s' % (__appname__, snapshot.source_path, suffix))
+            self.update_status_bar()
+            self._start_interaction_session_for(snapshot.source_path)
+            self.canvas.setFocus(True)
+            if prepared.warning:
+                self.status(prepared.warning, delay=15000)
+            else:
+                self.status(
+                    'Opened video %s' % os.path.basename(
+                        snapshot.source_path))
+            self._plugin_document_ready = True
+            sync_verification = getattr(self, '_sync_verification_ui', None)
+            if sync_verification is not None:
+                sync_verification()
+            self._publish_plugin_document(new_generation=True, force=True)
+            committed = True
+        except Exception as exc:
+            if checkpoint is not None:
+                try:
+                    self._restore_video_publication_checkpoint(checkpoint)
+                except Exception as rollback_exc:
+                    raise _VideoPublicationError(
+                        'Video publication failed (%s); rollback failed (%s)'
+                        % (exc, rollback_exc)) from rollback_exc
+            raise _VideoPublicationError(str(exc)) from exc
+        finally:
+            if not committed and candidate_decoder is not None:
+                try:
+                    candidate_decoder.close()
+                except Exception as close_exc:
+                    raise _VideoPublicationError(
+                        'Could not dispose failed video candidate: %s'
+                        % close_exc) from close_exc
+        self.sam_controller.on_video_frame_changed(
+            self._dataset_generation, self.current_video_frame_ref)
+        self._queue_replaced_video_decoder_close(
+            checkpoint['video_decoder'], self._dataset_generation)
 
     def open_video(self, path, project_path=None):
         """Synchronous compatibility API for extensions and tests."""
@@ -3624,140 +5256,65 @@ class MainWindow(QMainWindow, WindowMixin):
         except Exception as exc:
             self.status('Error opening video: %s' % exc, delay=10000)
             return False
-        self._dataset_generation = self.task_coordinator.next_generation()
-        self._commit_video_open(prepared)
+        try:
+            self._commit_video_open(prepared)
+        except Exception as exc:
+            self.status('Error opening video: %s' % exc, delay=10000)
+            return False
         return True
 
     def request_save_video_project(self, _value=False, on_success=None):
-        snapshot = self.video_snapshot
         if getattr(self, '_propagation_handle', None) is not None:
             self.status('Cancel propagation before saving the video project')
             return None
-        if (self.document_kind != DocumentKind.VIDEO or snapshot is None
-                or snapshot.read_only or not snapshot.project_path):
+        if self.document_kind != DocumentKind.VIDEO:
             return None
-        if callable(on_success):
-            self._video_save_callbacks.append(on_success)
-        if self._video_save_active:
-            self._video_save_queued = True
-            return self._video_save_handle
-        model = self.video_model
-        if model is None or not model.dirty:
-            try:
-                checkpoint_project(snapshot.project_path)
-            except Exception as exc:
-                self.status(
-                    'Error saving video project: %s' % exc, delay=10000)
-                return None
-            self.set_clean()
-            callbacks, self._video_save_callbacks = \
-                self._video_save_callbacks, []
-            for callback in callbacks:
-                callback()
-            return None
-        request = model.build_save_request(snapshot.project_path)
-        generation = self._dataset_generation
-
-        def save(handle):
-            handle.check_cancelled()
-            return save_project_delta(
-                request, cancelled=handle.is_cancelled,
-                begin_commit=handle.begin_non_cancellable)
-
-        handle = self.task_coordinator.submit(
-            'background', save, priority=JobPriority.IMAGE_LOAD,
-            generation=generation)
-        self._video_save_handle = handle
-        self._video_save_active = True
-        self._video_save_queued = False
-        handle.result.connect(
-            lambda revision, req=request, gen=generation:
-            self._on_video_save_result(revision, req, gen))
-        handle.error.connect(
-            self._on_video_save_error)
-        handle.finished.connect(self._on_video_save_finished)
-        return handle
-
-    def _on_video_save_result(self, revision, request, generation):
-        if (revision is None or generation != self._dataset_generation
-                or self.video_model is None
-                or self.video_snapshot is None
-                or request.project_path != self.video_snapshot.project_path):
-            return
-        self.video_model.mark_saved(revision)
-        self.video_snapshot = replace(
-            self.video_snapshot, revision=revision)
-        if not self.video_model.dirty:
-            self.set_clean()
-        else:
-            self._video_save_queued = True
-        self.status('Saved video project to %s' % request.project_path)
-
-    def _on_video_save_error(self, message):
-        self._video_save_queued = False
-        self._video_save_callbacks = []
-        self._video_close_save_pending = False
-        self.status('Error saving video project: ' + message, delay=10000)
-
-    def _on_video_save_finished(self):
-        self._video_save_active = False
-        self._video_save_handle = None
-        if (self.video_model is not None and self.video_model.dirty
-                and self._video_save_queued):
-            self.request_save_video_project()
-            return
-        if self.video_model is not None and not self.video_model.dirty:
-            callbacks, self._video_save_callbacks = \
-                self._video_save_callbacks, []
-            for callback in callbacks:
-                callback()
+        return self._request_continuous_save_drain(on_success=on_success)
 
     def save_video_project(self):
-        snapshot = self.video_snapshot
         if getattr(self, '_propagation_handle', None) is not None:
             self.status('Cancel propagation before saving the video project')
             return False
+        snapshot = self.video_snapshot
         if (self.document_kind != DocumentKind.VIDEO or snapshot is None
                 or snapshot.read_only or not snapshot.project_path):
             return False
-        try:
-            if self.video_model is not None and self.video_model.dirty:
-                request = self.video_model.build_save_request(
-                    snapshot.project_path)
-                revision = save_project_delta(request)
-                self.video_model.mark_saved(revision)
-                self.video_snapshot = replace(
-                    self.video_snapshot, revision=revision)
-            checkpoint_project(snapshot.project_path)
-        except Exception as exc:
-            self.status('Error saving video project: %s' % exc, delay=10000)
-            return False
-        self.set_clean()
-        return True
+        return self._wait_for_continuous_save_drain()
 
     def _refresh_video_timeline_markers(self):
         if self.video_snapshot is None:
             return
-        by_track = {}
-        accepted = []
-        pending = []
-        for observation in self.video_observations:
-            by_track.setdefault(observation.track_id, []).append(
-                observation.pts)
-            if (observation.source == 'manual'
-                    and observation.review_state == 'accepted'
-                    and observation.anchor):
-                accepted.append(observation.pts)
-            elif observation.review_state == 'pending':
-                pending.append(observation.pts)
-        spans = tuple(
-            (min(values), max(values)) for values in by_track.values()
+        model = self.video_model
+        observations = (() if model is None else
+                        tuple(model.observations.values()))
+        frame_states = (() if model is None else
+                        tuple(model.frame_states.values()))
+        stored_gaps = (() if model is None else tuple(model.gaps.values()))
+        preview = tuple(self._propagation_preview.values())
+        preview_gaps = tuple(self._propagation_preview_gaps.values())
+        propagated_by_track = {}
+        for observation in observations + preview:
+            if observation.source == 'tracker':
+                propagated_by_track.setdefault(
+                    observation.track_id, []).append(observation.pts)
+        propagation = tuple(
+            (min(values), max(values))
+            for values in propagated_by_track.values()
             if values)
+        accepted = tuple(
+            item.pts for item in observations
+            if item.present and item.review_state == 'accepted')
+        pending = tuple(
+            item.pts for item in observations
+            if item.present and item.review_state == 'pending')
         verified = tuple(
-            state.pts for state in self.video_frame_states if state.verified)
+            state.pts for state in frame_states if state.verified)
+        gaps = tuple(
+            (item.start_pts, item.end_pts)
+            for item in stored_gaps + preview_gaps)
         self.video_timeline.set_markers(
-            spans=spans, accepted=accepted, pending=pending,
-            verified=verified)
+            accepted=accepted, pending=pending, verified=verified,
+            propagation=propagation, gaps=gaps)
 
     def _sync_video_model_views(self):
         model = self.video_model
@@ -3784,9 +5341,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.save.setEnabled(self.dirty)
         self.update_save_status(saved=not self.dirty)
         self._refresh_video_timeline_markers()
+        self._sync_pending_propagation_review()
         self._refresh_video_track_list()
         self.update_box_count()
         self._publish_plugin_document()
+        self._mark_continuous_save_dirty(self._document_revision)
+        if (self._assist_track_forward_anchor is not None
+                and not self._assist_track_forward_available()):
+            self._assist_track_forward_anchor = None
+        self._project_assist()
 
     def _shape_geometry(self, shape):
         inverse = (1.0 / self._image_scale_factor
@@ -3907,7 +5470,8 @@ class MainWindow(QMainWindow, WindowMixin):
             item.review_state == 'pending'
             for item in model.observations.values())
         has_run_pending = any(
-            key in self._tracking_run_keys
+            key in (self._tracking_run_keys
+                    | self._pending_propagation_keys)
             and item.review_state == 'pending'
             for key, item in model.observations.items())
         self.actions.videoAcceptVisible.setEnabled(
@@ -3943,8 +5507,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.edit.setEnabled(editable and has_track)
         self.actions.shapeLineColor.setEnabled(editable and has_track)
         self.actions.shapeFillColor.setEnabled(editable and has_track)
-        can_track = (track is not None
-                     and track.shape_type in ('rectangle', 'polygon'))
+        can_track = bool(self._qualifying_propagation_seeds(True))
         self.actions.videoTrackForward.setEnabled(can_track and editable)
         self.actions.videoTrackBackward.setEnabled(can_track and editable)
         self._sync_video_propagation_actions()
@@ -4170,8 +5733,14 @@ class MainWindow(QMainWindow, WindowMixin):
             generation=self._dataset_generation)
         self._propagation_handle = handle
         handle.progress.connect(self._on_propagation_batch)
-        handle.result.connect(self._on_propagation_result)
-        handle.error.connect(self._on_propagation_error)
+        handle.result.connect(
+            lambda result, origin_handle=handle, origin_request=request:
+            self._on_propagation_result(
+                result, origin_handle, origin_request))
+        handle.error.connect(
+            lambda message, origin_handle=handle, origin_request=request:
+            self._on_propagation_error(
+                message, origin_handle, origin_request))
         handle.finished.connect(
             lambda current=handle: self._on_propagation_finished(current))
         self._set_propagation_running(True)
@@ -4184,6 +5753,12 @@ class MainWindow(QMainWindow, WindowMixin):
         model = self.video_model
         if request is None or snapshot is None or model is None:
             return False
+        requested_tracks = {
+            track_id for track_id, _revision in request.track_revisions}
+        result_tracks = {
+            item.track_id for item in getattr(value, 'observations', ())}
+        result_tracks.update(
+            item.track_id for item in getattr(value, 'gaps', ()))
         return (
             value.request_id == request.request_id
             and value.generation == request.generation
@@ -4196,6 +5771,7 @@ class MainWindow(QMainWindow, WindowMixin):
             and snapshot.stream_index == request.stream_index
             and snapshot.time_base_num == request.time_base_num
             and snapshot.time_base_den == request.time_base_den
+            and result_tracks.issubset(requested_tracks)
             and all(track_id in model.tracks
                     and model.tracks[track_id].revision == revision
                     for track_id, revision in request.track_revisions))
@@ -4211,45 +5787,115 @@ class MainWindow(QMainWindow, WindowMixin):
             ((item.track_id, item.start_pts, item.end_pts), item)
             for item in batch.gaps)
         self._render_propagation_preview()
+        self._refresh_video_timeline_markers()
         self.video_timeline.set_propagation_progress(
             batch.processed_frames, batch.total_frames,
             batch.active_tracks, batch.completed_tracks,
             batch.eta_seconds, len(self._propagation_preview_gaps),
             running=True)
 
-    def _on_propagation_result(self, result):
+    def _propagation_callback_is_current(self, handle, request):
+        return (
+            self._propagation_handle is handle
+            and self._active_propagation_request is request)
+
+    def _on_propagation_result(self, result, handle, request):
+        if not self._propagation_callback_is_current(handle, request):
+            return
         if not self._propagation_is_current(result):
             self.cancel_video_propagation()
             return
-        model = self.video_model
-        before = self._propagation_before_state
-        self._propagation_handle = None
-        self._active_propagation_request = None
-        self._propagation_before_state = None
-        self._propagation_preview = {}
-        self._propagation_preview_gaps = {}
-        applied = model.apply_propagation_result(result)
-        after = model.snapshot_state()
-        if before != after:
-            self.undo_stack.push(VideoModelCommand(
-                self, before, after, 'Propagate video objects'))
-            self._on_video_model_mutation()
-        self._materialize_video_frame(self.current_video_frame_ref.pts)
-        self._set_propagation_running(False)
-        self.status(
-            'Propagation complete: %s observations, %s gaps, %s failures' % (
-                len(applied.observations), len(applied.gaps),
-                len(applied.failures)))
+        merged = self._merged_propagation_result(request, result=result)
+        state = self._take_propagation_state()
+        self._stage_pending_propagation(
+            merged, state['before'], 'Stage propagated video results',
+            'Propagation complete')
 
-    def _on_propagation_error(self, message):
-        self._clear_propagation_state()
+    def _on_propagation_error(self, message, handle, request):
+        if not self._propagation_callback_is_current(handle, request):
+            return
+        message = str(message)
+        merged = replace(
+            self._merged_propagation_result(
+                request, unresolved=True, unresolved_reason='failed'),
+            failures=tuple(
+                (track_id, message)
+                for track_id, _revision in request.track_revisions))
+        state = self._take_propagation_state()
+        self._stage_pending_propagation(
+            merged, state['before'], 'Stage interrupted video results',
+            'Propagation interrupted')
         self.status('Video propagation failed: ' + message, delay=10000)
 
     def _on_propagation_finished(self, handle):
         if self._propagation_handle is handle:
-            self._clear_propagation_state()
+            self._finalize_cancelled_propagation(handle)
 
-    def _clear_propagation_state(self):
+    def _unresolved_propagation_gaps(self, request, observations, gaps,
+                                     reason='cancelled'):
+        directions = ((request.direction,) if request.direction else (-1, 1))
+        backend = normalize_propagation_backend(
+            self.video_propagation_backend)
+        backend = 'propagation' if backend == 'auto' else backend
+        values = []
+        for track_id, _revision in request.track_revisions:
+            track_observations = tuple(
+                item for item in observations if item.track_id == track_id)
+            track_gaps = tuple(
+                item for item in gaps if item.track_id == track_id)
+            for direction in directions:
+                if direction > 0:
+                    frontier = max(
+                        (request.current_pts,)
+                        + tuple(item.pts for item in track_observations
+                                if item.pts > request.current_pts)
+                        + tuple(item.end_pts for item in track_gaps
+                                if item.end_pts > request.current_pts))
+                    start_pts, end_pts = frontier + 1, request.end_pts
+                else:
+                    frontier = min(
+                        (request.current_pts,)
+                        + tuple(item.pts for item in track_observations
+                                if item.pts < request.current_pts)
+                        + tuple(item.start_pts for item in track_gaps
+                                if item.start_pts < request.current_pts))
+                    start_pts, end_pts = request.start_pts, frontier - 1
+                if end_pts >= start_pts:
+                    values.append(TrackGapRecord(
+                        track_id, int(start_pts), int(end_pts), reason,
+                        backend, request.document_revision))
+        return tuple(values)
+
+    def _merged_propagation_result(self, request, result=None,
+                                   unresolved=False,
+                                   unresolved_reason='cancelled'):
+        observations = dict(self._propagation_preview)
+        gaps = dict(self._propagation_preview_gaps)
+        failures = ()
+        if result is not None:
+            observations.update(
+                ((item.track_id, int(item.pts)), item)
+                for item in result.observations)
+            gaps.update(
+                ((item.track_id, int(item.start_pts), int(item.end_pts)), item)
+                for item in result.gaps)
+            failures = result.failures
+        if unresolved:
+            for item in self._unresolved_propagation_gaps(
+                    request, tuple(observations.values()),
+                    tuple(gaps.values()), reason=unresolved_reason):
+                gaps[(item.track_id, item.start_pts, item.end_pts)] = item
+        return PropagationResult(
+            request.request_id, request.generation, request.document_revision,
+            observations=tuple(observations.values()),
+            gaps=tuple(gaps.values()), failures=tuple(failures))
+
+    def _take_propagation_state(self):
+        state = {
+            'handle': self._propagation_handle,
+            'request': self._active_propagation_request,
+            'before': self._propagation_before_state,
+        }
         self._propagation_handle = None
         self._active_propagation_request = None
         self._propagation_before_state = None
@@ -4257,14 +5903,108 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview_gaps = {}
         if hasattr(self, 'canvas'):
             self.canvas.set_propagation_preview_shapes([])
+        return state
+
+    def _stage_pending_propagation(self, result, before, description,
+                                   status_prefix):
+        model = self.video_model
+        if model is None or before is None:
+            self._set_propagation_running(False)
+            return None
+        try:
+            staged = model.stage_propagation_result(result)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._set_propagation_running(False)
+            self._sync_pending_propagation_review()
+            self._refresh_video_timeline_markers()
+            self.status(
+                'Propagation result could not be staged: %s' % exc,
+                delay=10000)
+            return None
+        self._pending_propagation_keys = {
+            (item.track_id, item.pts) for item in staged.observations}
+        self._pending_propagation_gap_keys = {
+            (item.track_id, item.start_pts, item.end_pts)
+            for item in staged.gaps}
+        self._pending_propagation_failures = len(staged.failures)
+        after = model.snapshot_state()
+        if before != after:
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, description))
+            self._on_video_model_mutation()
+        self._set_propagation_running(False)
+        self._sync_pending_propagation_review()
+        if self.current_video_frame_ref is not None:
+            self._materialize_video_frame(self.current_video_frame_ref.pts)
+        self.status(
+            '%s: %s pending, %s gaps, %s failures' % (
+                status_prefix, len(staged.observations), len(staged.gaps),
+                len(staged.failures)))
+        return staged
+
+    def _sync_pending_propagation_review(self):
+        model = self.video_model
+        pending = 0
+        gaps = 0
+        if model is not None:
+            pending = sum(
+                key in model.observations
+                and model.observations[key].review_state == 'pending'
+                for key in self._pending_propagation_keys)
+            gaps = sum(
+                key in model.gaps
+                for key in self._pending_propagation_gap_keys)
+        editable = self._video_editable()
+        self.actions.videoAcceptRun.setEnabled(bool(pending) and editable)
+        self.actions.videoRejectRun.setEnabled(bool(pending) and editable)
+        self.video_timeline.set_propagation_review(
+            pending, gaps, self._pending_propagation_failures)
+
+    def _finalize_cancelled_propagation(self, handle=None):
+        if handle is not None and self._propagation_handle is not handle:
+            return False
+        request = self._active_propagation_request
+        if request is None:
+            self._clear_propagation_state()
+            return False
+        identity = PropagationResult(
+            request.request_id, request.generation,
+            request.document_revision)
+        if not self._propagation_is_current(identity):
+            self._clear_propagation_state()
+            return False
+        merged = self._merged_propagation_result(
+            request, unresolved=True, unresolved_reason='cancelled')
+        state = self._take_propagation_state()
+        self._stage_pending_propagation(
+            merged, state['before'], 'Stage cancelled video results',
+            'Propagation cancelled')
+        return True
+
+    def _clear_propagation_state(self):
+        self._take_propagation_state()
         if hasattr(self, 'video_timeline'):
             self._set_propagation_running(False)
+            self._sync_pending_propagation_review()
+        if self.video_snapshot is not None:
+            self._refresh_video_timeline_markers()
 
-    def cancel_video_propagation(self):
+    def cancel_video_propagation(self, _checked=False):
         handle = getattr(self, '_propagation_handle', None)
         if handle is not None:
             handle.cancel()
+            return self._finalize_cancelled_propagation(handle)
         self._clear_propagation_state()
+        return False
+
+    def _abandon_video_propagation(self):
+        handle = getattr(self, '_propagation_handle', None)
+        if handle is not None:
+            handle.cancel()
+            self._clear_propagation_state()
+            return True
+        self._clear_propagation_state()
+        return False
 
     def _start_correction_regeneration(self, track_id, correction_pts):
         model = self.video_model
@@ -4735,13 +6475,15 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
         self.cancel_video_tracking()
         before = self.video_model.snapshot_state()
-        for track_id, pts in keys:
-            self.video_model.review(track_id, pts, review_state)
+        reviewed = self.video_model.review_many(keys, review_state)
+        if not reviewed:
+            return False
         after = self.video_model.snapshot_state()
         self.undo_stack.push(VideoModelCommand(
             self, before, after, description))
         self._on_video_model_mutation()
         self._materialize_video_frame(self.current_video_frame_ref.pts)
+        self._sync_pending_propagation_review()
         return True
 
     def accept_current_suggestion(self):
@@ -4773,9 +6515,21 @@ class MainWindow(QMainWindow, WindowMixin):
             '%s visible tracker suggestions' % review_state.title())
 
     def review_full_propagation(self, review_state):
+        if review_state == 'accepted':
+            return self.accept_pending_propagation()
+        if review_state == 'rejected':
+            return self.reject_pending_propagation()
+        raise ValueError('invalid review state: %s' % review_state)
+
+    def accept_pending_propagation(self):
         return self._review_video_keys(
-            tuple(self._tracking_run_keys), review_state,
-            '%s full tracker propagation' % review_state.title())
+            tuple(self._pending_propagation_keys), 'accepted',
+            'Accept propagated video results')
+
+    def reject_pending_propagation(self):
+        return self._review_video_keys(
+            tuple(self._pending_propagation_keys), 'rejected',
+            'Reject propagated video results')
 
     def _video_export_range_bounds(self, values):
         snapshot = self.video_snapshot
@@ -4941,6 +6695,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if playback and self._video_decode_in_flight:
             return None
         if not playback:
+            self._discard_workflow_draft()
             self.pause_video()
         cached = self.frame_cache.get(frame_ref)
         if cached is not None:
@@ -4959,8 +6714,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_frame_request_id += 1
         request_id = self._video_frame_request_id
         generation = self._dataset_generation
-        if playback:
-            self._video_decode_in_flight = True
+        identity = self.document_identity
+        # Every serialized decoder operation owns the session until finished.
+        # `pause_video()` is also the close/replacement cancellation boundary,
+        # so manual PTS seeks must be visible there just like playback ticks.
+        self._video_decode_in_flight = True
 
         def decode(handle):
             handle.check_cancelled()
@@ -4970,21 +6728,25 @@ class MainWindow(QMainWindow, WindowMixin):
             'video', decode, priority=JobPriority.IMAGE_LOAD,
             key='video-frame', latest=True, generation=generation)
         handle.result.connect(
-            lambda result, rid=request_id, gen=generation, playing=playback:
-            self._on_video_frame_result(result, rid, gen, playing))
+            lambda result, rid=request_id, gen=generation, playing=playback,
+            origin=identity:
+            self._on_video_frame_result(
+                result, rid, gen, playing, origin))
         handle.error.connect(
-            lambda message, rid=request_id:
-            self._on_video_frame_error(message, rid))
+            lambda message, rid=request_id, origin=identity:
+            self._on_video_frame_error(message, rid, origin))
         handle.finished.connect(
             lambda rid=request_id:
             self._on_video_decode_finished(rid))
         return handle
 
     def _on_video_frame_result(self, result, request_id, generation,
-                               playback=False):
+                               playback=False, identity=None):
         snapshot = self.video_snapshot
         if (request_id != self._video_frame_request_id
                 or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))
                 or snapshot is None):
             return
         if result is None:
@@ -4995,8 +6757,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.frame_cache.put(result)
         self._commit_video_frame(result, playback=playback)
 
-    def _on_video_frame_error(self, message, request_id):
-        if request_id != self._video_frame_request_id:
+    def _on_video_frame_error(self, message, request_id, identity=None):
+        if (request_id != self._video_frame_request_id
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
         self.pause_video()
         self.status('Error decoding video frame: ' + message, delay=10000)
@@ -5007,6 +6771,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _commit_video_frame(self, result, playback=False):
         assert QApplication.instance().thread() == self.thread()
+        self._pending_image_navigation_center = False
+        self._pending_video_scroll_ratios = (
+            self._scroll_ratios()
+            if self.view_transform.mode is ViewMode.MANUAL else None)
         self.image = result.image
         self._image_scale_factor = (
             result.display_width / self.video_snapshot.width
@@ -5019,6 +6787,7 @@ class MainWindow(QMainWindow, WindowMixin):
             state.pts == result.frame_ref.pts and state.verified
             for state in self.video_frame_states)
         self.canvas.verified = verified
+        self._sync_verification_ui()
         self.canvas.locked = (
             not self._video_editable()
             or (verified and self.lock_on_verify_option.isChecked()))
@@ -5032,14 +6801,19 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.video_model, result.frame_ref.pts)
             self.canvas.load_shapes([])
         self.video_timeline.set_current_frame(result.frame_ref)
-        self.paint_canvas()
+        self._schedule_view_projection()
         self.update_status_bar()
+        self.workflow.navigate()
+        self._apply_workflow_state()
         if not playback:
             self._schedule_video_prefetch(result.frame_ref)
+        self.sam_controller.on_video_frame_changed(
+            self._dataset_generation, result.frame_ref)
 
     def request_next_video_frame(self):
         if self.current_video_frame_ref is None:
             return None
+        self._discard_workflow_draft()
         self.pause_video()
         self._navigation_direction = 1
         cached = self.frame_cache.video_neighbor(
@@ -5054,6 +6828,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def request_previous_video_frame(self):
         if self.current_video_frame_ref is None:
             return None
+        self._discard_workflow_draft()
         self.pause_video()
         self._navigation_direction = -1
         cached = self.frame_cache.video_neighbor(
@@ -5178,11 +6953,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 or file_path.lower().endswith(VIDEO_EXTENSIONS)):
             return self.request_open_video(
                 file_path, skip_prompt=skip_prompt)
+        self._clear_video_runtime_setup()
         if file_path in self._path_to_idx:
             return self.request_load_file(
                 file_path, skip_prompt=skip_prompt)
         if not skip_prompt and self.dirty:
-            if self.auto_saving.isChecked() and self.default_save_dir:
+            if self.save_changes_automatically.isChecked():
                 self.request_save_file(
                     on_success=lambda: self.request_open_file(
                         file_path, skip_prompt=True))
@@ -5196,12 +6972,10 @@ class MainWindow(QMainWindow, WindowMixin):
                         file_path, skip_prompt=True))
                 return None
         previous_snapshot = self.dataset_snapshot
-        self._dataset_generation = self.task_coordinator.next_generation()
-        generation = self._dataset_generation
         save_dir = self.default_save_dir or os.path.dirname(file_path)
         replacement = DatasetSnapshot.from_images(
             (file_path,), root_dir=os.path.dirname(file_path),
-            save_dir=save_dir, generation=generation)
+            save_dir=save_dir, generation=self._dataset_generation)
         return self.request_load_file(
             file_path, skip_prompt=skip_prompt,
             replacement_snapshot=replacement,
@@ -5219,8 +6993,10 @@ class MainWindow(QMainWindow, WindowMixin):
                 u'Cannot open annotation file',
                 u'<p>Open the image it describes instead.</p>')
             return None
+        self._clear_video_runtime_setup()
+        self._supersede_pending_replacement_requests()
         if not skip_prompt and self.dirty:
-            if self.auto_saving.isChecked() and self.default_save_dir:
+            if self.save_changes_automatically.isChecked():
                 self.request_save_file(
                     on_success=lambda: self.request_load_file(
                         file_path, skip_prompt=True,
@@ -5238,18 +7014,19 @@ class MainWindow(QMainWindow, WindowMixin):
                         previous_snapshot=previous_snapshot))
                 return None
 
-        self._load_request_id += 1
         request_id = self._load_request_id
         generation = self._dataset_generation
+        identity = self.document_identity
         cached = (None if replacement_snapshot is not None
                   else self.frame_cache.get(file_path))
-        self.canvas.setEnabled(False)
-        self._show_loading_veil('Loading %s…' % os.path.basename(file_path))
+        loading_owner = ('image', request_id)
+        self._show_replacement_loading(
+            loading_owner, 'Loading %s…' % os.path.basename(file_path))
         if cached is not None:
             QTimer.singleShot(
                 0, lambda: self._on_image_result(
-                    cached, request_id, generation,
-                    replacement_snapshot))
+                    cached, request_id, generation, replacement_snapshot,
+                    identity, file_path, previous_snapshot))
             return None
 
         resolver = (replacement_snapshot.resolver
@@ -5274,44 +7051,138 @@ class MainWindow(QMainWindow, WindowMixin):
             'interactive', load, priority=JobPriority.IMAGE_LOAD,
             key='image-load', latest=True, generation=generation)
         handle.result.connect(
-            lambda result, rid=request_id, gen=generation:
+            lambda result, rid=request_id, gen=generation, origin=identity,
+            target=file_path, previous=previous_snapshot:
             self._on_image_result(
-                result, rid, gen, replacement_snapshot))
+                result, rid, gen, replacement_snapshot, origin, target,
+                previous))
         handle.error.connect(
-            lambda message, rid=request_id, gen=generation:
+            lambda message, rid=request_id, gen=generation, target=file_path,
+            replacement=replacement_snapshot, previous=previous_snapshot,
+            origin=identity:
             self._on_image_load_error(
-                message, rid, gen, previous_snapshot))
+                message, rid, gen, target, replacement, previous, origin))
         return handle
 
     def _on_image_load_error(self, message, request_id, generation,
-                             previous_snapshot=None):
+                             requested_path=None, replacement_snapshot=None,
+                             previous_snapshot=None, identity=None):
         if (request_id != self._load_request_id
-                or generation != self._dataset_generation):
+                or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
         self._pending_navigation_index = None
-        self.canvas.setEnabled(bool(self.file_path))
-        self._hide_loading_veil()
-        if previous_snapshot is not None:
-            self.dataset_snapshot = previous_snapshot.with_generation(
-                generation)
-            if self.dataset_snapshot.image_paths:
-                self.annotation_catalog.start(self.dataset_snapshot)
-        self.status('Error reading image: ' + message)
+        self._settle_replacement_loading(
+            ('image', request_id), settle_unowned=True)
+        text = 'Error reading image: ' + message
+        self.status(text)
+        self._show_inline_open_error(
+            text,
+            lambda: self.request_load_file(
+                requested_path, skip_prompt=True,
+                replacement_snapshot=replacement_snapshot,
+                previous_snapshot=previous_snapshot),
+            self.open_file)
 
     def _on_image_result(self, result, request_id, generation,
-                         replacement_snapshot=None):
+                         replacement_snapshot=None, identity=None,
+                         requested_path=None, previous_snapshot=None):
         if (result is None or request_id != self._load_request_id
-                or generation != self._dataset_generation):
+                or generation != self._dataset_generation
+                or (identity is not None
+                    and not self._is_current_document(identity))):
             return
-        if replacement_snapshot is not None:
-            self._commit_dataset_snapshot(replacement_snapshot)
-        self._commit_image_result(result)
-        self.frame_cache.put(result)
+        if result.annotation_error:
+            self._on_image_load_error(
+                'Annotation error: ' + result.annotation_error,
+                request_id, generation, requested_path or result.path,
+                replacement_snapshot, previous_snapshot, identity)
+            return
+        center_after_projection = bool(
+            replacement_snapshot is None
+            and self.document_kind == DocumentKind.IMAGE
+            and self.file_path
+            and result.path != self.file_path)
+        try:
+            self._publish_staged_image_result(
+                result, replacement_snapshot=replacement_snapshot,
+                center_after_projection=center_after_projection)
+        except Exception as exc:
+            self._on_image_load_error(
+                'Error opening image: %s' % exc,
+                request_id, generation, requested_path or result.path,
+                replacement_snapshot, previous_snapshot, identity)
+            return
         self._pending_navigation_index = None
-        self._hide_loading_veil()
+        self._settle_replacement_loading(
+            ('image', request_id), settle_unowned=True)
         self._schedule_prefetch(result.path)
 
-    def _commit_image_result(self, result):
+    def _capture_image_publication_checkpoint(self):
+        """Capture the image projections that a replacement may overwrite."""
+        checkpoint = self._capture_video_publication_checkpoint()
+        checkpoint.update({
+            'dataset_snapshot': self.dataset_snapshot,
+            'last_open_dir': self.last_open_dir,
+            'dir_name': self.dir_name,
+            'default_save_dir': self.default_save_dir,
+            'directory_request_id': self._directory_request_id,
+        })
+        return checkpoint
+
+    def _restore_image_publication_checkpoint(self, checkpoint):
+        """Restore an image workspace after a failed GUI publication."""
+        self._restore_video_publication_checkpoint(checkpoint)
+        self.dataset_snapshot = checkpoint['dataset_snapshot']
+        self.last_open_dir = checkpoint['last_open_dir']
+        self.dir_name = checkpoint['dir_name']
+        self.default_save_dir = checkpoint['default_save_dir']
+        self._directory_request_id = checkpoint['directory_request_id']
+        self.gallery_widget.set_dataset_snapshot(self.dataset_snapshot)
+        if hasattr(self, 'full_gallery') and self.full_gallery:
+            self.full_gallery.set_dataset_snapshot(self.dataset_snapshot)
+        self.annotation_catalog.cancel()
+        if self.dataset_snapshot.image_paths:
+            self.annotation_catalog.start(self.dataset_snapshot)
+
+    def _publish_staged_image_result(self, result, replacement_snapshot=None,
+                                     center_after_projection=False):
+        """Commit a completely validated image candidate or restore live work."""
+        if result.annotation_error:
+            raise ValueError('Annotation error: %s' % result.annotation_error)
+        checkpoint = self._capture_image_publication_checkpoint()
+        old_decoder = checkpoint['video_decoder']
+        try:
+            # reset_state() schedules decoder shutdown. Keep a live video
+            # decoder detached until every image projection is committed so a
+            # rollback never reattaches a decoder already queued to close.
+            if old_decoder is not None:
+                self.video_decoder = None
+            if replacement_snapshot is not None:
+                save_handle = getattr(self, '_save_handle', None)
+                candidate_generation = self.task_coordinator.next_generation(
+                    exclude_handles=(() if save_handle is None
+                                     else (save_handle,)))
+                self._dataset_generation = candidate_generation
+                replacement_snapshot = replacement_snapshot.with_generation(
+                    candidate_generation)
+                self._discard_workflow_draft()
+                self._commit_dataset_snapshot(replacement_snapshot)
+            else:
+                self._discard_workflow_draft()
+            self._commit_image_result(
+                result, center_after_projection=center_after_projection)
+            if replacement_snapshot is not None:
+                self._start_interaction_session_for(result.path)
+            self.frame_cache.put(result)
+        except Exception:
+            self._restore_image_publication_checkpoint(checkpoint)
+            raise
+        self._queue_replaced_video_decoder_close(
+            old_decoder, self._dataset_generation)
+
+    def _commit_image_result(self, result, center_after_projection=False):
         """Apply worker data; this method is the GUI-thread mutation boundary."""
         trace_started = None
         if trace_recorder is not None:
@@ -5326,10 +7197,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self.image_data = None
         self.image = result.image
         self.file_path = result.path
+        self.continuous_save.reset(
+            self._continuous_document_key(), self._dataset_generation,
+            self._document_revision)
         self.cur_img_idx = self._path_to_idx.get(
             result.path, self.cur_img_idx)
         self.canvas.verified = result.verified
         self.canvas.load_pixmap(QPixmap.fromImage(result.image))
+        self._pending_image_navigation_center = center_after_projection
         if result.annotation_format is not None:
             format_names = {
                 LabelFileFormat.PASCAL_VOC: FORMAT_PASCALVOC,
@@ -5357,8 +7232,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.edge_alignment_option.isChecked()
         self.set_clean()
         self.canvas.setEnabled(True)
-        self.adjust_scale(initial=True)
-        self.paint_canvas()
+        self._schedule_view_projection()
         self.add_recent_file(result.path)
         self.toggle_actions(True)
         if result.path in self._path_to_idx:
@@ -5368,6 +7242,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setWindowTitle(
             __appname__ + ' ' + result.path + ' ' + self.counter_str())
         self.update_status_bar()
+        self.workflow.navigate()
+        self._apply_workflow_state()
         self.canvas.setFocus(True)
         self._update_current_image_stats()
         if result.annotation_error:
@@ -5378,6 +7254,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 args={'path': hash_path(result.path),
                       'shapes': len(result.shapes)})
         self._plugin_document_ready = True
+        self._sync_verification_ui()
         self._publish_plugin_document(new_generation=True, force=True)
 
     def request_next_image(self, _value=False):
@@ -5457,6 +7334,72 @@ class MainWindow(QMainWindow, WindowMixin):
             self.frame_cache.put(result)
 
     def load_file(self, file_path=None):
+        """Synchronously stage and publish an image without clearing live work."""
+        requested = (file_path if file_path is not None
+                     else self.settings.get(SETTING_FILENAME))
+        if not requested:
+            return False
+        requested = os.path.abspath(ustr(requested))
+        if (is_video_project(requested)
+                or requested.lower().endswith(VIDEO_EXTENSIONS)):
+            return self.open_video(requested)
+        if LabelFile.is_label_file(requested):
+            message = ('Cannot open annotation file %s; open the image it '
+                       'describes instead.' % requested)
+            # Preserve the legacy startup feedback only when there is no live
+            # workspace to protect. Replacement failures use the one inline
+            # recovery surface rather than a second modal interruption.
+            if self.file_path is None:
+                self.error_message(u'Cannot open annotation file', message)
+            return self._sync_image_candidate_failed(message, requested)
+
+        resolver = self._active_annotation_resolver(requested)
+        try:
+            result = load_image_result(
+                requested, resolver=resolver,
+                image_list=tuple(self.m_img_list),
+                save_dir=self.default_save_dir,
+                label_file_format=self.label_file_format)
+            if result is None:
+                raise ValueError('image loading was cancelled')
+            if result.annotation_error:
+                raise ValueError('Annotation error: %s' % result.annotation_error)
+        except Exception as exc:
+            return self._sync_image_candidate_failed(
+                'Error reading image: %s' % exc, requested)
+
+        starts_new_session = requested not in self._path_to_idx
+        center_after_projection = bool(
+            not starts_new_session
+            and self.document_kind == DocumentKind.IMAGE
+            and self.file_path
+            and requested != self.file_path)
+        replacement = None
+        if starts_new_session:
+            save_dir = self.default_save_dir or os.path.dirname(requested)
+            replacement = DatasetSnapshot.from_images(
+                (requested,), root_dir=os.path.dirname(requested),
+                save_dir=save_dir, generation=self._dataset_generation)
+        try:
+            self._publish_staged_image_result(
+                result, replacement_snapshot=replacement,
+                center_after_projection=center_after_projection)
+        except Exception as exc:
+            return self._sync_image_candidate_failed(
+                'Error opening image: %s' % exc, requested)
+        self.status('Loaded %s' % os.path.basename(requested))
+        return True
+
+    def _sync_image_candidate_failed(self, message, requested_path):
+        """Report an uncommitted synchronous candidate without touching live UI."""
+        self.status(str(message))
+        self._show_inline_open_error(
+            str(message),
+            lambda path=requested_path: self.load_file(path),
+            self.open_file)
+        return False
+
+    def _load_file_destructive_compatibility(self, file_path=None):
         """Load the specified file, or the last opened file if None."""
         requested = (file_path if file_path is not None
                      else self.settings.get(SETTING_FILENAME))
@@ -5465,6 +7408,14 @@ class MainWindow(QMainWindow, WindowMixin):
             if (is_video_project(requested)
                     or requested.lower().endswith(VIDEO_EXTENSIONS)):
                 return self.open_video(requested)
+        starts_new_session = (
+            bool(requested) and requested not in self._path_to_idx)
+        center_after_projection = bool(
+            not starts_new_session
+            and self.document_kind == DocumentKind.IMAGE
+            and self.file_path
+            and requested != self.file_path)
+        self._discard_workflow_draft()
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
@@ -5507,6 +7458,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 # Load image with memory-efficient downsampling for large images
                 self.label_file = None
                 self.canvas.verified = False
+                self._sync_verification_ui()
 
                 # Use QImageReader for memory-efficient loading
                 reader = QImageReader(unicode_file_path)
@@ -5552,7 +7504,11 @@ class MainWindow(QMainWindow, WindowMixin):
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.on_image_changed()
             self.file_path = unicode_file_path
+            self.continuous_save.reset(
+                self._continuous_document_key(), self._dataset_generation,
+                self._document_revision)
             self.canvas.load_pixmap(QPixmap.fromImage(image))
+            self._pending_image_navigation_center = center_after_projection
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
             self.set_clean()
@@ -5562,8 +7518,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 checked_action = self.grid_size_group.checkedAction()
                 self.canvas._grid_size = checked_action.data() if checked_action else 32
                 self.canvas._edge_alignment = self.edge_alignment_option.isChecked()
-            self.adjust_scale(initial=True)
-            self.paint_canvas()
+            self._schedule_view_projection()
             self.add_recent_file(self.file_path)
             self.toggle_actions(True)
             self.show_bounding_box_from_annotation_file(self.file_path)
@@ -5574,6 +7529,11 @@ class MainWindow(QMainWindow, WindowMixin):
             # Update status bar widgets
             self.update_status_bar()
             self.update_save_status(saved=True)
+            if starts_new_session:
+                self._start_interaction_session()
+            else:
+                self.workflow.navigate()
+                self._apply_workflow_state()
 
             # Default: select the last canonical shape in the unified view.
             if self.canvas.shapes:
@@ -5632,12 +7592,15 @@ class MainWindow(QMainWindow, WindowMixin):
                     annotation_path, file_path)
 
     def resizeEvent(self, event):
-        if self.canvas and not self.image.isNull()\
-           and self.zoom_mode != self.MANUAL_ZOOM:
-            self.adjust_scale()
         super(MainWindow, self).resizeEvent(event)
+        if hasattr(self, 'workspace_shell'):
+            self.workspace_shell.set_available_width(event.size().width())
+        self._schedule_view_projection()
         if self._loading_veil is not None and self._loading_veil.isVisible():
             self._loading_veil.setGeometry(self.centralWidget().rect())
+        if (getattr(self, 'inline_open_error', None) is not None
+                and self.inline_open_error.isVisible()):
+            self._layout_inline_open_error()
 
     def paint_canvas(self):
         assert not self.image.isNull(), "cannot paint null image"
@@ -5647,50 +7610,125 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.adjustSize()
         self.canvas.update()
 
+    def _zoom_widget_changed(self, value):
+        """Treat direct spin-box input as an explicit manual zoom command."""
+        if self._applying_view_projection:
+            return
+        self.view_transform.choose_manual(value)
+        self._sync_view_actions()
+
+    def _sync_view_actions(self):
+        """Project the authoritative mode into legacy actions and state."""
+        mode = self.view_transform.mode
+        self.zoom_mode = {
+            ViewMode.FIT_WINDOW: self.FIT_WINDOW,
+            ViewMode.FIT_WIDTH: self.FIT_WIDTH,
+            ViewMode.MANUAL: self.MANUAL_ZOOM,
+        }[mode]
+        for action, checked in (
+                (self.actions.fitWindow, mode is ViewMode.FIT_WINDOW),
+                (self.actions.fitWidth, mode is ViewMode.FIT_WIDTH)):
+            blocked = action.blockSignals(True)
+            action.setChecked(checked)
+            action.blockSignals(blocked)
+
+    def _schedule_view_projection(self):
+        """Coalesce fit work until Qt has finished the current layout pass."""
+        if self._view_projection_scheduled:
+            return
+        self._view_projection_scheduled = True
+        QTimer.singleShot(0, self._apply_view_projection)
+
+    def _apply_view_projection(self):
+        """Apply the active view mode using the actual scroll-area viewport."""
+        self._view_projection_scheduled = False
+        pixmap = self.canvas.pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+        viewport = self.scroll_area.viewport().size()
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            return
+        projection = self.view_transform.project(
+            (viewport.width(), viewport.height()),
+            (pixmap.width(), pixmap.height()))
+        self._applying_view_projection = True
+        try:
+            self.zoom_widget.setValue(projection.percent)
+        finally:
+            self._applying_view_projection = False
+        self._sync_view_actions()
+        self.paint_canvas()
+        center_image = self._pending_image_navigation_center
+        self._pending_image_navigation_center = False
+        if center_image and self.view_transform.mode is ViewMode.MANUAL:
+            for orientation in (Qt.Horizontal, Qt.Vertical):
+                bar = self.scroll_bars[orientation]
+                bar.setValue(bar.maximum() // 2)
+        scroll_ratios = self._pending_video_scroll_ratios
+        self._pending_video_scroll_ratios = None
+        if scroll_ratios is not None:
+            self._restore_scroll_ratios(scroll_ratios)
+
     def adjust_scale(self, initial=False):
-        value = self.scalers[self.FIT_WINDOW if initial else self.zoom_mode]()
-        self.zoom_widget.setValue(int(100 * value))
+        """Compatibility entry point; layout owns when projection is applied."""
+        if initial:
+            self.view_transform.choose_fit_window()
+            self._sync_view_actions()
+        self._schedule_view_projection()
 
     def scale_fit_window(self):
-        """Figure out the size of the pixmap in order to fit the main widget."""
+        """Return the legacy fit ratio for the actual canvas viewport."""
+        viewport = self.scroll_area.viewport().size()
         return view_scaling.fit_window_scale(
-            self.centralWidget().width(), self.centralWidget().height(),
+            viewport.width(), viewport.height(),
             self.canvas.pixmap.width(), self.canvas.pixmap.height())
 
     def scale_fit_width(self):
+        viewport = self.scroll_area.viewport().size()
         return view_scaling.fit_width_scale(
-            self.centralWidget().width(), self.canvas.pixmap.width())
+            viewport.width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
-        if self._reset_all_in_progress:
+        if not getattr(self, '_initialization_complete', False):
+            self._minimal_close_teardown()
+            event.accept()
+            return
+        if getattr(self, '_reset_all_in_progress', False):
             self._shutdown_workers()
             event.accept()
             return
 
-        if self._video_close_save_pending:
+        if self._shutdown_force or self._shutdown_ready:
+            self._finish_async_shutdown(force=self._shutdown_force)
+            event.accept()
+            return
+
+        coordinator = self._shutdown_coordinator
+        if coordinator is not None and coordinator.state in (
+                'waiting', 'timed_out'):
+            if coordinator.state == 'timed_out':
+                self._show_shutdown_timeout(
+                    coordinator.activity.active_jobs())
             event.ignore()
             return
 
-        if self.document_kind == DocumentKind.VIDEO and self.dirty:
+        if hasattr(self, '_video_playback_timer'):
+            self.pause_video()
+        if getattr(self, '_propagation_handle', None) is not None:
+            # Quit is a reviewable cancellation boundary. Stage accumulated
+            # observations and gaps before the save owner is drained.
+            self.cancel_video_propagation()
+
+        if self.dirty:
             answer = self.discard_changes_dialog()
             if answer == QMessageBox.Cancel:
                 event.ignore()
                 return
             if answer == QMessageBox.Yes:
                 self._video_close_save_pending = True
-                handle = self.request_save_video_project(
-                    on_success=self._finish_video_close_after_save)
-                if handle is None and self.dirty:
-                    self._video_close_save_pending = False
-                    self._video_save_callbacks = []
-                    self.status(
-                        'Could not save the video project; close cancelled',
-                        delay=10000)
-                event.ignore()
-                return
-        elif not self.may_continue():
-            event.ignore()
-            return
+            else:
+                self._shutdown_discard_confirmed = True
+                self._video_close_save_pending = False
 
         settings = self.settings
         # If it loads images from dir, don't load it at the beginning
@@ -5716,10 +7754,9 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             settings[SETTING_LAST_OPEN_DIR] = ''
 
-        settings[SETTING_AUTO_SAVE] = self.auto_saving.isChecked()
-        settings[SETTING_AUTO_SAVE_ENABLED] = self.auto_save_enabled.isChecked()
-        settings[SETTING_AUTO_SAVE_INTERVAL] = self._get_current_auto_save_interval()
-        settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
+        settings[SETTING_CONTINUOUS_SAVE] = \
+            self.save_changes_automatically.isChecked()
+        settings[SETTING_PROMPT_POLICY] = self.workflow.snapshot.prompt_policy.value
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
         settings[SETTING_LOCK_ON_VERIFY] = self.lock_on_verify_option.isChecked()
@@ -5732,16 +7769,348 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_SHORTCUTS] = self.shortcut_config.to_dict()
         settings[SETTING_SAM_OUTPUT_MODE] = self.sam_output_mode
         settings.save()
-        self._shutdown_workers()
+        self._begin_async_shutdown()
+        event.ignore()
+
+    def _minimal_close_teardown(self):
+        """Release only owners known to exist on an incomplete window."""
+        shutdown = getattr(self, '_shutdown_coordinator', None)
+        if shutdown is not None:
+            try:
+                shutdown.cancel()
+            except Exception:
+                pass
+        coordinator = getattr(self, 'task_coordinator', None)
+        all_done = True
+        if coordinator is not None:
+            try:
+                all_done = coordinator.shutdown(wait_ms=0)
+            except Exception:
+                all_done = False
+        decoder = getattr(self, 'video_decoder', None)
+        if decoder is not None and all_done:
+            try:
+                decoder.close()
+                self.video_decoder = None
+            except Exception:
+                pass
+
+    def _authorize_shutdown_save(self, key, generation, intent):
+        authority = self._shutdown_save_authority
+        if authority is None:
+            return {}
+        permit = self.task_coordinator.authorize_shutdown_save(
+            authority, key, generation,
+            self._continuous_save_submission_owner, intent)
+        return {
+            'shutdown_permit': permit,
+            'shutdown_owner': self._continuous_save_submission_owner,
+            'shutdown_intent': intent,
+        }
+
+    def _revoke_shutdown_save_authority(self):
+        authority = self._shutdown_save_authority
+        if authority is None:
+            return
+        self.task_coordinator.revoke_shutdown_save_authority(authority)
+        self._shutdown_save_authority = None
+
+    def _begin_async_shutdown(self):
+        if self._shutdown_coordinator is not None:
+            return
+        if self._shutdown_discard_confirmed:
+            self.continuous_save.reset(
+                self._continuous_document_key(), self._dataset_generation,
+                self._document_revision)
+        elif self.continuous_save.state != 'failed':
+            self._request_continuous_save_drain()
+            if (self.document_kind == DocumentKind.NONE
+                    and not self.continuous_save.is_drained):
+                self.continuous_save.drain()
+        self._video_close_save_pending = not self.continuous_save.is_drained
+        self._freeze_shutdown_workspace()
+        activity = _WindowShutdownActivity(self)
+        coordinator = ShutdownCoordinator(
+            activity, timeout_ms=5000, parent=self)
+        self._shutdown_activity = activity
+        self._shutdown_coordinator = coordinator
+        coordinator.ready.connect(self._on_shutdown_ready)
+        coordinator.timedOut.connect(self._show_shutdown_timeout)
+        coordinator.begin()
+
+    def _freeze_shutdown_workspace(self):
+        """Keep the draining document immutable while close is pending."""
+        self._shutdown_restore_focus = QApplication.focusWidget()
+        self._shutdown_widget_states = []
+        for widget_name in (
+                'workspace_pages', 'workspace_shell', 'workspace_inspector',
+                'tool_rail', 'command_bar'):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                self._shutdown_widget_states.append(
+                    (widget, widget.isEnabled()))
+                widget.setEnabled(False)
+        self._shutdown_action_states = []
+        for item in self.findChildren(QAction):
+            self._shutdown_action_states.append(
+                (item, item.isEnabled()))
+            item.setEnabled(False)
+
+    def _restore_shutdown_workspace(self):
+        for widget, enabled in self._shutdown_widget_states:
+            widget.setEnabled(enabled)
+        for action, enabled in self._shutdown_action_states:
+            action.setEnabled(enabled)
+        self._shutdown_widget_states = []
+        self._shutdown_action_states = []
+        focus = self._shutdown_restore_focus
+        self._shutdown_restore_focus = None
+        if (focus is None or not QWidget.isVisible(focus)
+                or not QWidget.isEnabled(focus)):
+            focus = getattr(self, 'canvas', None)
+        if focus is not None:
+            QTimer.singleShot(
+                0, lambda target=focus:
+                target.setFocus(Qt.OtherFocusReason))
+
+    def _on_shutdown_ready(self):
+        if self._shutdown_ready or self._shutdown_force:
+            return
+        self._revoke_shutdown_save_authority()
+        self._shutdown_ready = True
+        self._video_close_save_pending = False
+        self._hide_shutdown_timeout()
+        decoder = self._close_video_decoder(close_decoder=False)
+        self._shutdown_decoder = decoder
+        if decoder is not None:
+            decoder.close()
+            self._shutdown_decoder = None
+        QTimer.singleShot(0, self.close)
+
+    def _ensure_shutdown_surface(self):
+        if self._shutdown_surface is not None:
+            return self._shutdown_surface
+        surface = QWidget(self)
+        surface.setObjectName('shutdownTimeoutSurface')
+        surface.setAccessibleName('Shutdown waiting')
+        surface.setStyleSheet(
+            'QWidget#shutdownTimeoutSurface {'
+            ' background: rgba(20, 24, 32, 235); color: white; }')
+        layout = QVBoxLayout(surface)
+        layout.setContentsMargins(48, 48, 48, 48)
+        layout.addStretch(1)
+        heading = QLabel('Still finishing work', surface)
+        heading.setObjectName('shutdownTimeoutHeading')
+        heading.setAccessibleName('Still finishing work')
+        layout.addWidget(heading, 0, Qt.AlignHCenter)
+        remaining = QLabel(surface)
+        remaining.setObjectName('shutdownRemainingWork')
+        remaining.setAccessibleName('Remaining shutdown work')
+        remaining.setWordWrap(True)
+        remaining.setAlignment(Qt.AlignCenter)
+        layout.addWidget(remaining)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        wait_button = QToolButton(surface)
+        wait_button.setText('Wait')
+        wait_button.setAccessibleName('Wait another five seconds')
+        wait_button.setFocusPolicy(Qt.StrongFocus)
+        wait_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        wait_button.setMinimumSize(72, 32)
+        wait_button.clicked.connect(self._wait_for_shutdown_again)
+        buttons.addWidget(wait_button)
+        force_button = QToolButton(surface)
+        force_button.setText('Force Quit')
+        force_button.setAccessibleName('Force Quit')
+        force_button.setFocusPolicy(Qt.StrongFocus)
+        force_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        force_button.setMinimumSize(96, 32)
+        force_button.clicked.connect(self._request_force_shutdown)
+        buttons.addWidget(force_button)
+        save_button = QToolButton(surface)
+        save_button.setText('Save')
+        save_button.setAccessibleName('Retry saving before quit')
+        save_button.setFocusPolicy(Qt.StrongFocus)
+        save_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        save_button.setMinimumSize(72, 32)
+        save_button.clicked.connect(self._retry_failed_shutdown_save)
+        buttons.addWidget(save_button)
+        discard_button = QToolButton(surface)
+        discard_button.setText('Discard')
+        discard_button.setAccessibleName('Discard unsaved changes and quit')
+        discard_button.setFocusPolicy(Qt.StrongFocus)
+        discard_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        discard_button.setMinimumSize(80, 32)
+        discard_button.clicked.connect(self._discard_failed_shutdown_save)
+        buttons.addWidget(discard_button)
+        cancel_button = QToolButton(surface)
+        cancel_button.setText('Cancel')
+        cancel_button.setAccessibleName('Cancel quit and return to editing')
+        cancel_button.setFocusPolicy(Qt.StrongFocus)
+        cancel_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        cancel_button.setMinimumSize(72, 32)
+        cancel_button.clicked.connect(self._cancel_shutdown_recovery)
+        buttons.addWidget(cancel_button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        layout.addStretch(1)
+        QWidget.setTabOrder(wait_button, force_button)
+        QWidget.setTabOrder(force_button, save_button)
+        QWidget.setTabOrder(save_button, discard_button)
+        QWidget.setTabOrder(discard_button, cancel_button)
+        self._shutdown_surface = surface
+        self._shutdown_remaining_label = remaining
+        self._shutdown_wait_button = wait_button
+        self._shutdown_force_button = force_button
+        self._shutdown_save_button = save_button
+        self._shutdown_discard_button = discard_button
+        self._shutdown_cancel_button = cancel_button
+        return surface
+
+    def _show_shutdown_timeout(self, jobs):
+        surface = self._ensure_shutdown_surface()
+        names = tuple(str(name) for name in jobs) or (
+            'Finishing background work',)
+        self._shutdown_remaining_label.setText(
+            'Remaining: %s' % ', '.join(names))
+        failed_save = self.continuous_save.state == 'failed'
+        self._shutdown_wait_button.setVisible(not failed_save)
+        self._shutdown_force_button.setVisible(not failed_save)
+        self._shutdown_save_button.setVisible(failed_save)
+        self._shutdown_discard_button.setVisible(failed_save)
+        self._shutdown_cancel_button.setVisible(failed_save)
+        surface.setGeometry(self.rect())
+        surface.show()
+        surface.raise_()
+        (self._shutdown_save_button if failed_save
+         else self._shutdown_wait_button).setFocus(Qt.OtherFocusReason)
+
+    def _hide_shutdown_timeout(self):
+        if self._shutdown_surface is not None:
+            self._shutdown_surface.hide()
+
+    def _wait_for_shutdown_again(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if coordinator is None or coordinator.state != 'timed_out':
+            return
+        self._hide_shutdown_timeout()
+        coordinator.wait_again()
+
+    def _retry_failed_shutdown_save(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if (coordinator is None or coordinator.state != 'timed_out'
+                or self.continuous_save.state != 'failed'):
+            return
+        self._hide_shutdown_timeout()
+        self.continuous_save.drain()
+        coordinator.wait_again()
+
+    def _discard_failed_shutdown_save(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if (coordinator is None or coordinator.state != 'timed_out'
+                or self.continuous_save.state != 'failed'):
+            return
+        self._shutdown_discard_confirmed = True
+        self.continuous_save.reset(
+            self._continuous_document_key(), self._dataset_generation,
+            self._document_revision)
+        self._hide_shutdown_timeout()
+        coordinator.wait_again()
+
+    def _cancel_shutdown_recovery(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if (coordinator is None or coordinator.state != 'timed_out'
+                or self.continuous_save.state != 'failed'):
+            return
+        coordinator.cancel()
+        try:
+            coordinator.ready.disconnect(self._on_shutdown_ready)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            coordinator.timedOut.disconnect(self._show_shutdown_timeout)
+        except (TypeError, RuntimeError):
+            pass
+        coordinator.deleteLater()
+        self.task_coordinator.abort_shutdown()
+        self._shutdown_save_authority = None
+        self._shutdown_activity = None
+        self._shutdown_coordinator = None
+        self._shutdown_ready = False
+        self._shutdown_force = False
+        self._shutdown_finished = False
+        self._shutdown_decoder = None
+        self._shutdown_discard_confirmed = False
+        self._video_close_save_pending = False
+        self._hide_shutdown_timeout()
+        self._restore_shutdown_workspace()
+        self._plugin_document_ready = (
+            self.document_kind != DocumentKind.NONE)
+        self._publish_plugin_document(new_generation=True, force=True)
+
+    def _request_force_shutdown(self, _checked=False):
+        coordinator = self._shutdown_coordinator
+        if coordinator is None or coordinator.state != 'timed_out':
+            return
+        activity = self._shutdown_activity
+        save_unresolved = bool(
+            activity.has_unresolved_save_work()
+            if activity is not None
+            else not self.continuous_save.is_drained)
+        unsaved = bool(
+            save_unresolved
+            or (not self._shutdown_discard_confirmed and self.dirty))
+        if unsaved:
+            answer = QMessageBox.warning(
+                self, 'Force Quit with unsaved changes',
+                'The newest changes are not durably saved. Force Quit may '
+                'lose them. Quit anyway?',
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel)
+            if answer != QMessageBox.Yes:
+                self._shutdown_force_button.setFocus(Qt.OtherFocusReason)
+                return
+        self._revoke_shutdown_save_authority()
+        coordinator.force_requested()
+        self._shutdown_force = True
+        self._video_close_save_pending = False
+        self._hide_shutdown_timeout()
+        self.close()
+
+    def _finish_async_shutdown(self, force=False):
+        if self._shutdown_finished:
+            return
+        self._shutdown_finished = True
+        self._dismiss_class_picker()
+        self._clear_video_runtime_setup()
+        self._plugin_document_ready = False
+        if hasattr(self, 'plugin_manager'):
+            self.plugin_manager.shutdown()
+        self.annotation_catalog.cancel()
+        if hasattr(self, 'sam_controller'):
+            self.sam_controller.cancel()
+        self._shutdown_save_authority = None
+        decoder = self._shutdown_decoder
+        self._shutdown_decoder = None
+        if force and decoder is None:
+            decoder = self._close_video_decoder(close_decoder=False)
+        all_done = self.task_coordinator.shutdown(wait_ms=0)
+        if decoder is not None and all_done:
+            decoder.close()
 
     def _finish_video_close_after_save(self):
         if not self._video_close_save_pending:
             return
         self._video_close_save_pending = False
-        QTimer.singleShot(0, self.close)
+        coordinator = self._shutdown_coordinator
+        if coordinator is not None:
+            coordinator.poll()
+        else:
+            QTimer.singleShot(0, self.close)
 
     def _shutdown_workers(self):
         self._dismiss_class_picker()
+        self._clear_video_runtime_setup()
         self._plugin_document_ready = False
         self._publish_plugin_document(new_generation=True, force=True)
         if hasattr(self, 'plugin_manager'):
@@ -6255,6 +8624,8 @@ class MainWindow(QMainWindow, WindowMixin):
         """Synchronous compatibility path used by tests and extensions."""
         if not self.may_continue() or not dir_path:
             return False
+        self._clear_video_runtime_setup()
+        self._supersede_pending_replacement_requests()
         self._dataset_generation = self.task_coordinator.next_generation()
         with trace_span('directory.scan', args={
                 'root': hash_path(dir_path)}):
@@ -6272,9 +8643,11 @@ class MainWindow(QMainWindow, WindowMixin):
         """Transactionally scan a directory without clearing the live dataset."""
         if not dir_path:
             return None
+        self._clear_video_runtime_setup()
+        self._supersede_pending_replacement_requests()
         dir_path = os.path.abspath(ustr(dir_path))
         if not skip_prompt and self.dirty:
-            if self.auto_saving.isChecked() and self.default_save_dir:
+            if self.save_changes_automatically.isChecked():
                 self.request_save_file(
                     on_success=lambda: self.request_import_dir_images(
                         dir_path, skip_prompt=True))
@@ -6287,12 +8660,13 @@ class MainWindow(QMainWindow, WindowMixin):
                     on_success=lambda: self.request_import_dir_images(
                         dir_path, skip_prompt=True))
                 return None
-        previous_snapshot = self.dataset_snapshot
-        self._dataset_generation = self.task_coordinator.next_generation()
+        request_id = self._directory_request_id
         generation = self._dataset_generation
+        identity = self.document_identity
         save_dir = self.default_save_dir or dir_path
         extensions = self._supported_image_extensions()
-        self._show_loading_veil('Scanning directory…')
+        owner = ('directory', request_id)
+        self._show_replacement_loading(owner, 'Scanning directory…')
 
         def scan(handle):
             with trace_span('directory.scan', args={'root': hash_path(dir_path)}):
@@ -6307,15 +8681,19 @@ class MainWindow(QMainWindow, WindowMixin):
             'background', scan, priority=JobPriority.CATALOG,
             key='directory-scan', latest=True, generation=generation)
         handle.progress.connect(
-            lambda value, g=generation:
+            lambda value, rid=request_id, g=generation, origin=identity:
             self.status('Scanning: %d files, %d images' % value)
-            if g == self._dataset_generation else None)
+            if (rid == self._directory_request_id
+                and g == self._dataset_generation
+                and self._is_current_document(origin)) else None)
         handle.result.connect(
-            lambda snapshot, g=generation:
-            self._on_directory_snapshot(snapshot, g))
+            lambda snapshot, rid=request_id, g=generation, root=dir_path,
+            origin=identity:
+            self._on_directory_snapshot(snapshot, rid, g, root, origin))
         handle.error.connect(
-            lambda message, g=generation, previous=previous_snapshot:
-            self._on_directory_scan_error(message, g, previous))
+            lambda message, rid=request_id, g=generation, root=dir_path,
+            origin=identity:
+            self._on_directory_scan_error(message, rid, g, root, origin))
         return handle
 
     def _supported_image_extensions(self):
@@ -6323,26 +8701,82 @@ class MainWindow(QMainWindow, WindowMixin):
             '.%s' % fmt.data().decode('ascii').lower()
             for fmt in QImageReader.supportedImageFormats())
 
-    def _on_directory_snapshot(self, snapshot, generation):
-        if generation != self._dataset_generation or snapshot is None:
+    def _on_directory_snapshot(self, snapshot, request_id, generation,
+                               dir_path, identity):
+        """Stage the first image before committing a scanned directory."""
+        if (request_id != self._directory_request_id
+                or generation != self._dataset_generation
+                or not self._is_current_document(identity)):
             return
-        self._commit_dataset_snapshot(snapshot)
-        self._hide_loading_veil()
-        if snapshot.image_paths:
-            self.cur_img_idx = 0
-            self.request_load_file(snapshot.image_paths[0], skip_prompt=True)
+        if snapshot is None or not snapshot.image_paths:
+            self._on_directory_scan_error(
+                'no displayable images were found', request_id, generation,
+                dir_path, identity)
+            return
+        first_path = snapshot.image_paths[0]
 
-    def _on_directory_scan_error(self, message, generation,
-                                 previous_snapshot=None):
-        if generation != self._dataset_generation:
+        def load_first(handle):
+            return load_image_result(
+                first_path, resolver=snapshot.resolver,
+                image_list=snapshot.image_paths, save_dir=snapshot.save_dir,
+                label_file_format=self.label_file_format,
+                cancelled=handle.is_cancelled)
+
+        handle = self.task_coordinator.submit(
+            'interactive', load_first, priority=JobPriority.IMAGE_LOAD,
+            key='directory-first-image', latest=True, generation=generation)
+        handle.result.connect(
+            lambda result, rid=request_id, g=generation, candidate=snapshot,
+            root=dir_path, origin=identity:
+            self._on_directory_first_image(
+                result, candidate, rid, g, root, origin))
+        handle.error.connect(
+            lambda message, rid=request_id, g=generation, root=dir_path,
+            origin=identity:
+            self._on_directory_scan_error(message, rid, g, root, origin))
+
+    def _on_directory_first_image(self, result, snapshot, request_id,
+                                  generation, dir_path, identity):
+        if (request_id != self._directory_request_id
+                or generation != self._dataset_generation
+                or not self._is_current_document(identity)):
             return
-        self._hide_loading_veil()
-        if previous_snapshot is not None:
-            self.dataset_snapshot = previous_snapshot.with_generation(
-                generation)
-            if self.dataset_snapshot.image_paths:
-                self.annotation_catalog.start(self.dataset_snapshot)
-        self.status('Directory scan failed: ' + message)
+        if result is None:
+            self._on_directory_scan_error(
+                'first image did not finish loading', request_id, generation,
+                dir_path, identity)
+            return
+        if result.annotation_error:
+            self._on_directory_scan_error(
+                'Annotation error: ' + result.annotation_error,
+                request_id, generation, dir_path, identity)
+            return
+        try:
+            self._publish_staged_image_result(
+                result, replacement_snapshot=snapshot)
+        except Exception as exc:
+            self._on_directory_scan_error(
+                'Error opening first image: %s' % exc,
+                request_id, generation, dir_path, identity)
+            return
+        self._settle_replacement_loading(
+            ('directory', request_id), settle_unowned=True)
+        self._schedule_prefetch(result.path)
+
+    def _on_directory_scan_error(self, message, request_id, generation,
+                                 dir_path, identity):
+        if (request_id != self._directory_request_id
+                or generation != self._dataset_generation
+                or not self._is_current_document(identity)):
+            return
+        self._settle_replacement_loading(
+            ('directory', request_id), settle_unowned=True)
+        text = 'Directory scan failed: ' + message
+        self.status(text)
+        self._show_inline_open_error(
+            text,
+            lambda: self.request_import_dir_images(dir_path, skip_prompt=True),
+            self.open_dir_dialog)
 
     def _commit_dataset_snapshot(self, snapshot):
         """Atomically replace all dataset-facing widgets on the GUI thread."""
@@ -6367,11 +8801,16 @@ class MainWindow(QMainWindow, WindowMixin):
         if getattr(self, 'gallery_stats', None) is not None:
             self.gallery_stats.clear_stats()
         self.reset_state()
+        self._start_interaction_session()
 
         self.file_list_widget.setUpdatesEnabled(False)
         try:
             self.file_list_widget.clear()
-            self.file_list_widget.addItems(self.m_img_list)
+            for path in self.m_img_list:
+                item = QListWidgetItem(os.path.basename(path) or path)
+                item.setData(Qt.UserRole, path)
+                item.setToolTip(path)
+                self.file_list_widget.addItem(item)
         finally:
             self.file_list_widget.setUpdatesEnabled(True)
         self.gallery_widget.set_dataset_snapshot(snapshot)
@@ -6397,6 +8836,70 @@ class MainWindow(QMainWindow, WindowMixin):
         self._loading_veil.show()
         self._loading_veil.raise_()
 
+    def _show_replacement_loading(self, owner, text, disable_canvas=False):
+        self._replacement_loading_owner = owner
+        if disable_canvas:
+            self.canvas.setEnabled(False)
+        self._show_loading_veil(text)
+
+    def _layout_inline_open_error(self):
+        banner = getattr(self, 'inline_open_error', None)
+        pages = getattr(self, 'workspace_pages', None)
+        if banner is None or pages is None:
+            return
+        surface = pages.page_surface
+        margin = scale_px(8)
+        banner.setGeometry(
+            margin, margin, max(0, surface.width() - 2 * margin),
+            max(scale_px(40), banner.sizeHint().height()))
+
+    def _show_inline_open_error(self, message, retry, chooser):
+        """Keep a failed replacement recoverable above the live document."""
+        previous_focus = QApplication.focusWidget()
+        self._inline_open_retry = retry
+        self._inline_open_chooser = chooser
+        self.last_inline_error = str(message)
+        self._layout_inline_open_error()
+        self.inline_open_error.show_error(message)
+        self.inline_open_error.raise_()
+        # The retry is reachable and receives focus when no live workspace
+        # control owns it.  On a transactional rollback, preserve the
+        # restored document focus instead of stealing it for the banner.
+        if self._is_meaningful_workspace_focus(previous_focus):
+            previous_focus.setFocus(Qt.OtherFocusReason)
+
+    def _clear_inline_open_error(self):
+        self._inline_open_retry = None
+        self._inline_open_chooser = None
+        self.last_inline_error = None
+        banner = getattr(self, 'inline_open_error', None)
+        if banner is not None:
+            banner.clear()
+
+    def _retry_inline_open(self):
+        retry = self._inline_open_retry
+        self._clear_inline_open_error()
+        if retry is not None:
+            retry()
+
+    def _choose_another_inline_open(self):
+        chooser = self._inline_open_chooser
+        self._clear_inline_open_error()
+        if chooser is not None:
+            chooser()
+
+    def _settle_replacement_loading(self, owner=None,
+                                    settle_unowned=False):
+        if self._replacement_loading_owner is None:
+            if not settle_unowned:
+                return False
+        elif owner is not None and owner != self._replacement_loading_owner:
+            return False
+        self._replacement_loading_owner = None
+        self._hide_loading_veil()
+        self.canvas.setEnabled(bool(self.file_path))
+        return True
+
     def _hide_loading_veil(self):
         if self._loading_veil is not None:
             self._loading_veil.hide()
@@ -6411,6 +8914,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.current_video_frame_ref.pts,
                 not bool(self.canvas.verified))
             self.canvas.verified = not bool(self.canvas.verified)
+            self._sync_verification_ui()
             self._on_video_model_mutation()
             return self.save_video_project()
         # Proceeding next image without dialog if having any label
@@ -6427,6 +8931,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     return
 
             self.canvas.verified = self.label_file.verified
+            self._sync_verification_ui()
             if self.lock_on_verify_option.isChecked():
                 self.canvas.locked = self.canvas.verified
             self.paint_canvas()
@@ -6443,22 +8948,26 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.current_video_frame_ref.pts,
                 not bool(self.canvas.verified))
             self.canvas.verified = not bool(self.canvas.verified)
+            self._sync_verification_ui()
             if self.lock_on_verify_option.isChecked():
                 self.canvas.locked = self.canvas.verified
             self._on_video_model_mutation()
             self.paint_canvas()
-            return self.request_save_video_project()
+            self.continuous_save.flush()
+            return self._video_save_handle
         if self.file_path is None:
             return None
         if self.label_file is None:
             self.label_file = LabelFile()
         self.label_file.verified = not bool(self.canvas.verified)
         self.canvas.verified = self.label_file.verified
+        self._sync_verification_ui()
         if self.lock_on_verify_option.isChecked():
             self.canvas.locked = self.canvas.verified
         self.set_dirty()
         self.paint_canvas()
-        return self.request_save_file()
+        self.continuous_save.flush()
+        return self._save_handle
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
@@ -6532,11 +9041,114 @@ class MainWindow(QMainWindow, WindowMixin):
         if filename:
             self.request_open_video(ustr(filename))
 
+    def _dispatch_continuous_save(self, ticket):
+        if ticket.document_key != self._continuous_document_key():
+            return
+        if self.document_kind == DocumentKind.VIDEO:
+            self._dispatch_continuous_video_save(ticket)
+        elif self.document_kind == DocumentKind.IMAGE:
+            handle = self._dispatch_image_save(ticket)
+            if handle is None:
+                self.continuous_save.fail(
+                    ticket, 'Automatic save could not be started')
+            else:
+                self._save_handle = handle
+
+    def _request_save_or_retry(self, _value=False):
+        return self.request_save_file(_value)
+
+    def _dispatch_continuous_video_save(self, ticket):
+        snapshot = self.video_snapshot
+        model = self.video_model
+        if (snapshot is None or model is None or snapshot.read_only
+                or not snapshot.project_path):
+            self.continuous_save.fail(ticket, 'Video project is not writable')
+            return
+        request = model.build_save_request(snapshot.project_path)
+        generation = ticket.generation
+
+        def save(handle):
+            handle.check_cancelled()
+            return save_project_delta(
+                request, cancelled=handle.is_cancelled,
+                begin_commit=handle.begin_non_cancellable)
+
+        shutdown_capability = self._authorize_shutdown_save(
+            'continuous-save:' + request.project_path,
+            generation, ticket)
+        handle = self.task_coordinator.submit(
+            'background', save, priority=JobPriority.IMAGE_LOAD,
+            key='continuous-save:' + request.project_path, latest=True,
+            generation=generation, **shutdown_capability)
+        self._video_save_handle = handle
+        self._video_save_active = True
+        handle.result.connect(
+            lambda revision, req=request, current=ticket:
+            self._on_continuous_video_save_result(
+                revision, req, current))
+        handle.error.connect(
+            lambda message, current=ticket:
+            self._on_continuous_save_error(current, message))
+        handle.finished.connect(
+            lambda current=handle:
+            self._clear_continuous_video_save_handle(current))
+
+    def _clear_continuous_video_save_handle(self, handle):
+        if self._video_save_handle is handle:
+            self._video_save_handle = None
+            self._video_save_active = False
+        self._sync_verification_ui()
+
+    def _on_continuous_video_save_result(self, revision, request, ticket):
+        if (ticket.generation != self._dataset_generation
+                or ticket.document_key != self._continuous_document_key()
+                or self.video_model is None
+                or self.video_snapshot is None):
+            return
+        if (revision is None
+                or request.project_path != self.video_snapshot.project_path):
+            self._on_continuous_save_error(
+                ticket, 'Video save did not publish a durable revision')
+            return
+        self.video_model.mark_saved(revision)
+        self.video_snapshot = replace(
+            self.video_snapshot, revision=revision)
+        if not self.video_model.dirty:
+            self.set_clean()
+        self.continuous_save.complete(ticket)
+        self.status('Saved video project to %s' % request.project_path)
+
+    def _on_continuous_save_error(self, ticket, message):
+        if not self.continuous_save.fail(ticket, message):
+            return
+        self._save_drain_callbacks = []
+        self._video_close_save_pending = False
+        self.status('Error saving annotation: ' + str(message))
+
     def request_save_file(self, _value=False, on_success=None,
-                          annotation_base=None):
-        """Queue an immutable, revision-aware save for GUI workflows."""
+                          annotation_base=None, continuous_ticket=None):
+        """Join the ticketed serializer and drain through the newest edit."""
         if self.document_kind == DocumentKind.VIDEO:
             return self.request_save_video_project(on_success=on_success)
+        if not self.file_path:
+            return None
+        if continuous_ticket is not None:
+            return self._dispatch_image_save(
+                continuous_ticket, annotation_base=annotation_base)
+        if annotation_base is not None:
+            if not self.dirty:
+                # Saving an unchanged image to a new target still needs a
+                # ticket, so it joins the same serialization lane.
+                self.set_dirty()
+            identity = (
+                self._continuous_document_key(), self._dataset_generation,
+                self._document_revision)
+            self._image_save_target_overrides[identity] = ustr(annotation_base)
+        return self._request_continuous_save_drain(on_success=on_success)
+
+    def _dispatch_image_save(self, continuous_ticket,
+                             annotation_base=None):
+        """Build one immutable image request for a coordinator ticket."""
         if not self.file_path:
             return None
         degradation_formats = {
@@ -6547,6 +9159,11 @@ class MainWindow(QMainWindow, WindowMixin):
         if degradation and not self._check_polygon_degradation(degradation):
             return None
 
+        override_identity = (
+            continuous_ticket.document_key, continuous_ticket.generation,
+            continuous_ticket.revision)
+        annotation_base = self._image_save_target_overrides.pop(
+            override_identity, annotation_base)
         if annotation_base:
             annotation_base = ustr(annotation_base)
         elif (self.default_save_dir is not None
@@ -6600,7 +9217,7 @@ class MainWindow(QMainWindow, WindowMixin):
             shapes=tuple(serialized),
             class_list=tuple(self.label_hist),
             verified=bool(self.canvas.verified),
-            revision=self._document_revision,
+            revision=continuous_ticket.revision,
         )
         save_lock = self._save_locks.setdefault(
             request.annotation_path, threading.Lock())
@@ -6614,78 +9231,104 @@ class MainWindow(QMainWindow, WindowMixin):
                         request, cancelled=handle.is_cancelled,
                         begin_commit=handle.begin_non_cancellable)
 
+        shutdown_capability = self._authorize_shutdown_save(
+            'save:' + request.image_path,
+            self._dataset_generation, continuous_ticket)
         handle = self.task_coordinator.submit(
             'background', save, priority=JobPriority.IMAGE_LOAD,
             key='save:' + request.image_path, latest=True,
-            generation=self._dataset_generation)
+            generation=self._dataset_generation, **shutdown_capability)
         self._save_handle = handle
         handle.result.connect(
-            lambda path, req=request, callback=on_success,
-            gen=self._dataset_generation:
-            self._on_save_result(path, req, callback, gen))
-        handle.error.connect(self._on_save_error)
+            lambda path, req=request, gen=continuous_ticket.generation,
+            ticket=continuous_ticket:
+            self._on_save_result(path, req, None, gen, ticket))
+        handle.error.connect(
+            lambda message, ticket=continuous_ticket:
+            self._on_save_error(message, ticket))
+        handle.finished.connect(
+            lambda current=handle:
+            self._clear_continuous_image_save_handle(current))
         return handle
 
-    def _on_save_result(self, path, request, on_success, generation=None):
+    def _clear_continuous_image_save_handle(self, handle):
+        if self._save_handle is handle:
+            self._save_handle = None
+
+    def _on_save_result(self, path, request, on_success, generation=None,
+                        continuous_ticket=None):
         if path is None:
+            if continuous_ticket is not None:
+                self._on_continuous_save_error(
+                    continuous_ticket,
+                    'Image save did not publish a durable path')
+            else:
+                self.status('Error saving annotation: no durable path')
             return
-        if (generation is not None
-                and generation != self._dataset_generation):
+        if ((generation is not None
+             and generation != self._dataset_generation)
+                or (continuous_ticket is not None
+                    and continuous_ticket.document_key
+                    != self._continuous_document_key())):
+            # The immutable write can still improve the old dataset entry;
+            # it must never mark the newly committed document clean.
+            self._record_annotation_written(
+                path, image_path=request.image_path)
+            if continuous_ticket is not None:
+                self.continuous_save.complete(continuous_ticket)
             self.status('Saved superseded document to %s' % path)
             return
-        self._record_annotation_written(path)
-        if (self.file_path == request.image_path
-                and self._document_revision == request.revision):
+        self._record_annotation_written(path, image_path=request.image_path)
+        current_revision = (
+            self.file_path == request.image_path
+            and self._document_revision == request.revision)
+        if current_revision:
             self.set_clean()
+        if continuous_ticket is not None:
+            self.continuous_save.complete(continuous_ticket)
         self.status('Saved to %s' % path)
         if self.file_path == request.image_path:
             self._update_current_image_gallery_status()
+            self._sync_verification_ui()
         if callable(on_success):
             on_success()
 
-    def _on_save_error(self, message):
+    def _on_save_error(self, message, continuous_ticket=None):
+        if continuous_ticket is not None:
+            self._on_continuous_save_error(continuous_ticket, message)
+            return
         self.status('Error saving annotation: ' + message)
 
-    def _record_annotation_written(self, path):
+    def _record_annotation_written(self, path, image_path=None):
         if getattr(self, 'dataset_snapshot', None) is None:
             return
+        target_image = image_path or self.file_path
         self.dataset_snapshot = self.dataset_snapshot.with_annotation_file(
-            path, image_path=self.file_path)
-        if self.file_path:
-            self.frame_cache.remove(self.file_path)
+            path, image_path=target_image)
+        current_image = bool(
+            target_image and target_image == self.file_path)
+        if current_image:
+            self.frame_cache.remove(target_image)
         resolver = self.dataset_snapshot.resolver
         self.gallery_widget.set_annotation_resolver(resolver)
         if hasattr(self, 'full_gallery') and self.full_gallery:
             self.full_gallery.set_annotation_resolver(resolver)
         self.annotation_catalog._json_cache.invalidate(path)
-        if self.file_path:
+        if (current_image
+                and not self.task_coordinator.is_shutting_down):
             self.annotation_catalog.invalidate(
-                self.file_path, snapshot=self.dataset_snapshot)
+                target_image, snapshot=self.dataset_snapshot)
 
     def save_file(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:
             return self.save_video_project()
         if not self.file_path:
             return False
-
-        if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            resolver = self._active_annotation_resolver(self.file_path)
-            shared_path = (
-                self._shared_annotation_path(self.file_path, resolver)
-                if self.label_file_format in (
-                    LabelFileFormat.CREATE_ML, LabelFileFormat.COCO)
-                else None)
-            saved_path = shared_path or annotation_output_base(
-                self.file_path, ustr(self.default_save_dir), self.m_img_list,
-                resolver=resolver)
-            return self._save_file(saved_path)
-        else:
-            # Mirrors request_save_file: beside the image, never a dialog.
-            image_file_dir = os.path.dirname(self.file_path)
-            image_file_name = os.path.basename(self.file_path)
-            saved_file_name = os.path.splitext(image_file_name)[0]
-            saved_path = os.path.join(image_file_dir, saved_file_name)
-            return self._save_file(saved_path)
+        if not self.dirty:
+            # Preserve the compatibility API's explicit-save semantics while
+            # still routing the write through an immutable coordinator ticket.
+            self.set_dirty()
+        return self._wait_for_continuous_save_drain()
 
     def save_file_as(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:
@@ -6701,7 +9344,16 @@ class MainWindow(QMainWindow, WindowMixin):
                 return False
             return True
         assert not self.image.isNull(), "cannot save empty image"
-        return self._save_file(self.save_file_dialog())
+        annotation_base = self.save_file_dialog()
+        if not annotation_base:
+            return False
+        if not self.dirty:
+            self.set_dirty()
+        identity = (
+            self._continuous_document_key(), self._dataset_generation,
+            self._document_revision)
+        self._image_save_target_overrides[identity] = ustr(annotation_base)
+        return self._wait_for_continuous_save_drain()
 
     def request_save_file_as(self, _value=False):
         """Choose a target on the GUI thread and write it asynchronously."""
@@ -6786,11 +9438,29 @@ class MainWindow(QMainWindow, WindowMixin):
     def close_file(self, _value=False):
         if not self.may_continue():
             return
+        self._discard_workflow_draft(show_status=False)
         self.reset_state()
+        self._clear_dataset_state()
+        self._start_interaction_session()
+        self.gallery_mode_enabled = False
+        blocked = self.actions.galleryMode.blockSignals(True)
+        self.actions.galleryMode.setChecked(False)
+        self.actions.galleryMode.blockSignals(blocked)
+        self.workspace_pages.set_page('empty')
+        self._sync_workspace_context('empty')
+        self.statusBar().clearMessage()
+        self.label_dimensions.setText('0 x 0')
+        self.label_image_count.setText('Image: 0 / 0')
+        self.label_box_count.setText('Objects: 0')
+        self.label_active_tool.setText('Select')
+        self.label_zoom.setText('Zoom: 100%')
+        self.setWindowTitle(__appname__)
         self.set_clean()
         self.toggle_actions(False)
         self.canvas.setEnabled(False)
         self.actions.saveAs.setEnabled(False)
+        self._sync_command_bar()
+        self.workspace_shell.update()
 
     def delete_image(self):
         delete_path = self.file_path
@@ -7124,6 +9794,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_PASCALVOC)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_yolo_txt_by_filename(self, txt_path):
         if self.file_path is None:
@@ -7146,6 +9817,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_YOLO)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_create_ml_json_by_filename(self, json_path, file_path):
         if self.file_path is None:
@@ -7165,6 +9837,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_CREATEML)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_coco_json_by_filename(self, json_path, file_path):
         """Load annotations from a COCO JSON file for the given image.
@@ -7190,6 +9863,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_COCO)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def load_yolo_seg_by_filename(self, txt_path):
         """Load annotations from a YOLO-seg text file.
@@ -7216,6 +9890,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_format(FORMAT_YOLO_SEG)
         self.load_labels(loaded.shapes)
         self.canvas.verified = loaded.verified
+        self._sync_verification_ui()
 
     def copy_previous_bounding_boxes(self):
         current_index = self._path_to_idx.get(self.file_path, 0)
@@ -7267,47 +9942,6 @@ class MainWindow(QMainWindow, WindowMixin):
             # Update toolbar icon size
             if hasattr(self, 'tools') and self.tools:
                 self.tools.update_icon_size(size)
-
-    # Auto-save timer methods (Issue #13)
-    def _toggle_auto_save_timer(self):
-        """Toggle timer-based auto-save."""
-        if self.auto_save_enabled.isChecked():
-            interval = self._get_current_auto_save_interval()
-            self.auto_save_timer.start(interval * 1000)  # Convert to ms
-        else:
-            self.auto_save_timer.stop()
-
-    def _set_auto_save_interval(self):
-        """Set auto-save interval from menu selection."""
-        action = self.sender()
-        if action:
-            interval = action.data()
-            if self.auto_save_enabled.isChecked():
-                self.auto_save_timer.start(interval * 1000)
-
-    def _get_current_auto_save_interval(self):
-        """Get currently selected auto-save interval in seconds."""
-        for action in self.auto_save_interval_group.actions():
-            if action.isChecked():
-                return action.data()
-        return 60  # Default 1 minute
-
-    def _auto_save_triggered(self):
-        """Synchronous auto-save compatibility hook for extensions/tests.
-
-        Delegates to save_file so there is exactly one place that decides
-        where an annotation lands; this used to carry its own copy of that
-        resolution and could drift from the real save path.
-        """
-        if not self.dirty or not self.file_path:
-            return
-        self.status("Auto-saving...")
-        self.save_file()
-
-    def _request_auto_save_triggered(self):
-        if self.dirty and self.file_path:
-            self.status("Auto-saving...")
-            self.request_save_file()
 
     # Dark mode methods (Issue #7)
     def _toggle_dark_mode(self):
@@ -7383,6 +10017,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # recognize the previous theme's color token.
             is_saved = self.label_save_status.toolTip() == 'Saved'
             self._update_save_status_style(saved=is_saved)
+        self._sync_verification_ui()
 
         # Re-render every icon that new_action() recorded a resource name for.
         # Buttons bound with setDefaultAction follow their action, so this

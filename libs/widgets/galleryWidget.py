@@ -9,8 +9,10 @@ try:
 except ImportError:
     from PyQt4.QtGui import (QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush,
                               QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-                              QListView, QSlider, QLabel, QPolygonF)
-    from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPoint, QPointF
+                              QListView, QSlider, QLabel, QPushButton, QFrame,
+                              QPolygonF)
+    from PyQt4.QtCore import (Qt, QSize, QObject, pyqtSignal, QRunnable,
+                             QThreadPool, QTimer, QPoint, QPointF)
 
 import json
 import math
@@ -737,10 +739,13 @@ class GalleryWidget(QWidget):
     MAX_ICON_SIZE = 300
 
     def __init__(self, parent=None, show_size_slider=False,
-                 coordinator=None):
+                 coordinator=None, initial_icon_size=None):
         super().__init__(parent)
 
-        self._icon_size = self.DEFAULT_ICON_SIZE
+        size = (self.DEFAULT_ICON_SIZE if initial_icon_size is None
+                else int(initial_icon_size))
+        self._icon_size = max(
+            self.MIN_ICON_SIZE, min(self.MAX_ICON_SIZE, size))
         self._show_size_slider = show_size_slider
         self._save_dir = None  # Directory where annotations are saved
         self._coordinator = coordinator
@@ -787,6 +792,7 @@ class GalleryWidget(QWidget):
     def _setup_ui(self):
         """Initialize UI components."""
         self.list_widget = QListWidget(self)
+        self.list_widget.setAccessibleName('Dataset gallery')
         self.list_widget.setViewMode(QListView.IconMode)
         self._apply_icon_size()
         self.list_widget.setResizeMode(QListView.Adjust)
@@ -807,13 +813,19 @@ class GalleryWidget(QWidget):
         self._current_theme = Theme.LIGHT
         self._slider_frame = None
         self._preset_buttons = []
+        self.status_legend_labels = []
+        self._status_legend_swatches = {}
+        self.interaction_hint = None
 
         if self._show_size_slider:
             # Container frame for better visual grouping
             self._slider_frame = QFrame()
             self._slider_frame.setAutoFillBackground(True)  # Required for stylesheet bg
-            slider_layout = QHBoxLayout(self._slider_frame)
-            slider_layout.setContentsMargins(10, 8, 10, 8)
+            controls_layout = QVBoxLayout(self._slider_frame)
+            controls_layout.setContentsMargins(10, 6, 10, 6)
+            controls_layout.setSpacing(4)
+            slider_layout = QHBoxLayout()
+            slider_layout.setContentsMargins(0, 0, 0, 0)
             slider_layout.setSpacing(8)
 
             # Preset size buttons
@@ -835,6 +847,7 @@ class GalleryWidget(QWidget):
 
             # Size slider
             self.size_slider = QSlider(Qt.Horizontal)
+            self.size_slider.setAccessibleName('Thumbnail size')
             self.size_slider.setMinimum(self.MIN_ICON_SIZE)
             self.size_slider.setMaximum(self.MAX_ICON_SIZE)
             self.size_slider.setValue(self._icon_size)
@@ -845,6 +858,29 @@ class GalleryWidget(QWidget):
             self.size_value_label = QLabel(f"{self._icon_size}px")
             self.size_value_label.setMinimumWidth(scale_px(50))
             slider_layout.addWidget(self.size_value_label)
+
+            controls_layout.addLayout(slider_layout)
+
+            context_layout = QHBoxLayout()
+            context_layout.setContentsMargins(0, 0, 0, 0)
+            context_layout.setSpacing(scale_px(6))
+            self.interaction_hint = QLabel(
+                'Click to select · Double-click to open')
+            self.interaction_hint.setAccessibleName('Gallery interaction')
+            context_layout.addWidget(self.interaction_hint)
+            context_layout.addStretch(1)
+            for status, text in (
+                    (AnnotationStatus.NO_LABELS, 'Unannotated'),
+                    (AnnotationStatus.HAS_LABELS, 'Annotated'),
+                    (AnnotationStatus.VERIFIED, 'Verified')):
+                swatch = QLabel('●')
+                swatch.setProperty('annotationStatus', status.value)
+                label = QLabel(text)
+                self._status_legend_swatches[status] = swatch
+                self.status_legend_labels.append(label)
+                context_layout.addWidget(swatch)
+                context_layout.addWidget(label)
+            controls_layout.addLayout(context_layout)
 
             layout.addWidget(self._slider_frame)
 
@@ -905,6 +941,14 @@ class GalleryWidget(QWidget):
                 btn.setStyleSheet(styles['button'])
             if hasattr(self, 'size_value_label'):
                 self.size_value_label.setStyleSheet(styles['label'])
+            if self.interaction_hint is not None:
+                self.interaction_hint.setStyleSheet(styles['label'])
+            for label in self.status_legend_labels:
+                label.setStyleSheet(styles['label'])
+            for status, swatch in self._status_legend_swatches.items():
+                swatch.setStyleSheet(
+                    'color: %s; background: transparent;' %
+                    self._status_colors[status].name())
         if hasattr(self, 'size_slider'):
             self.size_slider.setStyleSheet(get_slider_style(theme))
         # Style the list widget for proper text colors
@@ -1008,7 +1052,6 @@ class GalleryWidget(QWidget):
             display_name = filename
 
         item = QListWidgetItem(display_name)
-        item.setToolTip(filename)
         grid_size = self._icon_size + 20
         item.setSizeHint(QSize(grid_size, grid_size + 20))
 
@@ -1020,10 +1063,26 @@ class GalleryWidget(QWidget):
 
         # Store path in item's data
         item.setData(Qt.UserRole, image_path)
+        self._update_item_status_text(item, image_path)
 
         self.list_widget.addItem(item)
         self._path_to_item[image_path] = item
         self._update_item_filter_visibility(image_path)
+
+    @staticmethod
+    def _status_text(status):
+        return {
+            AnnotationStatus.NO_LABELS: 'Unannotated',
+            AnnotationStatus.HAS_LABELS: 'Annotated',
+            AnnotationStatus.VERIFIED: 'Verified',
+        }.get(status, 'Status loading')
+
+    def _update_item_status_text(self, item, image_path):
+        filename = os.path.basename(image_path)
+        status_text = self._status_text(self._statuses.get(image_path))
+        item.setToolTip('%s\n%s' % (filename, status_text))
+        item.setData(
+            Qt.AccessibleTextRole, '%s, %s' % (filename, status_text))
 
     def _schedule_thumbnail_load(self, delay_ms=100):
         """Debounced thumbnail loading - prevents flooding during rapid navigation."""
@@ -1238,6 +1297,7 @@ class GalleryWidget(QWidget):
 
         if image_path in self._path_to_item:
             item = self._path_to_item[image_path]
+            self._update_item_status_text(item, image_path)
             self._update_item_filter_visibility(image_path)
             # Reload icon with new border color
             cached = self.thumbnail_cache.get(image_path)
@@ -1250,6 +1310,7 @@ class GalleryWidget(QWidget):
         for path, status in statuses.items():
             if path in self._path_to_item:
                 item = self._path_to_item[path]
+                self._update_item_status_text(item, path)
                 self._update_item_filter_visibility(path)
                 cached = self.thumbnail_cache.get(path)
                 if cached:

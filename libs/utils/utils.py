@@ -5,13 +5,15 @@ import re
 import sys
 
 try:
-    from PyQt5.QtGui import QIcon, QColor, QPainter, QPixmap
+    from PyQt5.QtGui import QIcon, QColor, QKeySequence, QPainter, QPixmap
     from PyQt5.QtCore import QRegExp, QSize
     from PyQt5.QtWidgets import QPushButton, QAction, QMenu, QWidget
     QT5 = True
 except ImportError:
-    from PyQt4.QtGui import QIcon, QColor, QPushButton, QAction, QMenu, QWidget, QRegExpValidator
-    from PyQt4.QtCore import QRegExp
+    from PyQt4.QtGui import (
+        QIcon, QColor, QKeySequence, QPainter, QPixmap, QPushButton, QAction,
+        QMenu, QWidget, QRegExpValidator)
+    from PyQt4.QtCore import QRegExp, QSize
     QT5 = False
 
 # QRegExpValidator location differs between Qt versions
@@ -125,6 +127,13 @@ def distance(p):
 def format_shortcut(text):
     mod, key = text.split('+', 1)
     return '<b>%s</b>+<b>%s</b>' % (mod, key)
+
+
+def native_shortcut_text(sequence):
+    """Return a shortcut formatted for the host platform's conventions."""
+    if not isinstance(sequence, QKeySequence):
+        sequence = QKeySequence(sequence)
+    return sequence.toString(QKeySequence.NativeText)
 
 
 def generate_color_by_text(text):

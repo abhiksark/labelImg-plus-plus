@@ -1,6 +1,9 @@
 """Tests for utility functions in libs/utils.py."""
+import builtins
+import importlib.util
 import os
 import sys
+import types
 import unittest
 
 # Set offscreen platform for headless testing
@@ -13,15 +16,111 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from PyQt5.QtWidgets import QApplication, QMenu, QToolBar, QWidget
 from PyQt5.QtCore import QPointF
+from PyQt5.QtGui import QKeySequence
 
 from libs.utils.utils import (
     Struct, new_action, new_icon, add_actions, format_shortcut,
     generate_color_by_text, natural_sort, distance, trimmed,
-    have_qstring, util_qt_strlistclass
+    have_qstring, native_shortcut_text, util_qt_strlistclass
 )
+from libs.utils.styles import Theme
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
+
+
+def test_native_shortcut_text_delegates_to_qt_native_format():
+    sequence = QKeySequence('Ctrl+G')
+    assert native_shortcut_text(sequence) == sequence.toString(
+        QKeySequence.NativeText)
+
+
+def test_themed_icon_imports_its_painting_dependencies_on_pyqt4(monkeypatch):
+    class LegacyPixmap(object):
+        def isNull(self):
+            return False
+
+        def rect(self):
+            return object()
+
+    class LegacyIcon(object):
+        def __init__(self, _path=None):
+            self.added = []
+
+        def pixmap(self, _size):
+            return LegacyPixmap()
+
+        def addPixmap(self, pixmap):
+            self.added.append(pixmap)
+
+        def isNull(self):
+            return False
+
+    class LegacyPainter(object):
+        CompositionMode_SourceIn = object()
+
+        def __init__(self, _pixmap):
+            pass
+
+        def setCompositionMode(self, _mode):
+            pass
+
+        def fillRect(self, _rect, _color):
+            pass
+
+        def end(self):
+            pass
+
+    class LegacySize(object):
+        def __init__(self, width, height):
+            self.width = width
+            self.height = height
+
+    qt4 = types.ModuleType('PyQt4')
+    qt4.__path__ = []
+    qt_gui = types.ModuleType('PyQt4.QtGui')
+    qt_core = types.ModuleType('PyQt4.QtCore')
+    for name, value in {
+            'QIcon': LegacyIcon,
+            'QColor': object,
+            'QKeySequence': object,
+            'QPainter': LegacyPainter,
+            'QPixmap': LegacyPixmap,
+            'QPushButton': object,
+            'QAction': object,
+            'QMenu': object,
+            'QWidget': object,
+            'QRegExpValidator': object,
+    }.items():
+        setattr(qt_gui, name, value)
+    qt_core.QRegExp = object
+    qt_core.QSize = LegacySize
+    qt4.QtGui = qt_gui
+    qt4.QtCore = qt_core
+
+    real_import = builtins.__import__
+
+    def import_without_pyqt5(name, *args, **kwargs):
+        if name.startswith('PyQt5'):
+            raise ImportError('exercise the supported PyQt4 branch')
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as isolated:
+        isolated.setitem(sys.modules, 'PyQt4', qt4)
+        isolated.setitem(sys.modules, 'PyQt4.QtGui', qt_gui)
+        isolated.setitem(sys.modules, 'PyQt4.QtCore', qt_core)
+        isolated.setattr(builtins, '__import__', import_without_pyqt5)
+        module_path = os.path.join(
+            dir_name, '..', '..', 'libs', 'utils', 'utils.py')
+        spec = importlib.util.spec_from_file_location(
+            'legacy_qt_utils_under_test', module_path)
+        legacy_utils = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(legacy_utils)
+
+    icon = legacy_utils.themed_icon('next', Theme.DARK)
+
+    assert not icon.isNull()
+    assert len(icon.added) == 1
 
 
 class TestGenerateColorByText(unittest.TestCase):

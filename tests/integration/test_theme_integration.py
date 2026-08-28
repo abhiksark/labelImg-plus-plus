@@ -12,8 +12,10 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
+from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import QApplication
 from labelImgPlusPlus import MainWindow
+from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
 
 app = QApplication.instance() or QApplication(sys.argv)
 
@@ -37,6 +39,11 @@ def test_theme_integration():
     assert win.canvas._theme == toggled_theme
     assert win.gallery_widget._current_theme == toggled_theme
     assert win.command_bar._current_theme == toggled_theme
+
+    win.dark_mode_action.setChecked(True)
+    win._toggle_dark_mode()
+    expected = hex_to_qcolor(get_theme_colors(Theme.DARK)['surface'])
+    assert win.tool_rail.palette().color(QPalette.Window) == expected
 
     # Toggle back.
     win.dark_mode_action.setChecked(initial_checked)

@@ -20,8 +20,8 @@ class SegmentationBackend(ABC):
         """Run the (expensive) image encoder on an (H, W, 3) uint8 RGB array."""
 
     @abstractmethod
-    def predict(self, points, labels):
-        """Given [(x, y), ...] and [1, ...], return an (H, W) bool mask."""
+    def predict(self, prompt):
+        """Return an (H, W) bool mask for an immutable Assist prompt."""
 
     @property
     @abstractmethod
@@ -78,15 +78,32 @@ class OnnxSamBackend(SegmentationBackend):
         self._orig_size = (h, w)
         self._scale = (new_w / w, new_h / h)
 
-    def predict(self, points, labels):
+    def predict(self, prompt):
         import numpy as np
         if self._embeddings is None:
             raise RuntimeError("set_image must be called before predict")
         sx, sy = self._scale
-        # SAM's ONNX decoder wants a [0,0]/-1 padding point appended when no
-        # box prompt is present, and coords in the resized-image frame.
-        coords = [[x * sx, y * sy] for x, y in points] + [[0.0, 0.0]]
-        marks = list(labels) + [-1]
+        if prompt.mode == 'points':
+            points = tuple(prompt.positive_points) + tuple(
+                prompt.negative_points)
+            labels = ([1] * len(prompt.positive_points)
+                      + [0] * len(prompt.negative_points))
+            if not points:
+                raise ValueError('a point prompt needs at least one point')
+            # The decoder requires one padding point only when no box is used.
+            coords = [[x * sx, y * sy] for x, y in points]
+            coords.append([0.0, 0.0])
+            marks = labels + [-1]
+        elif prompt.mode == 'box':
+            if prompt.box is None or len(prompt.box) != 4:
+                raise ValueError('a box prompt needs four bounds')
+            left, top, right, bottom = prompt.box
+            if right <= left or bottom <= top:
+                raise ValueError('a box prompt needs positive area')
+            coords = [[left * sx, top * sy], [right * sx, bottom * sy]]
+            marks = [2, 3]
+        else:
+            raise ValueError('unsupported Assist prompt mode: %s' % prompt.mode)
         h, w = self._orig_size
         masks, _, _ = self._decoder.run(None, {
             "image_embeddings": self._embeddings,
@@ -107,13 +124,19 @@ class OnnxSamBackend(SegmentationBackend):
         return self._embeddings is not None
 
 
-def load_backend(settings):
+def load_backend(settings, manifest=None, cache_dir=None):
     """Return (backend, None) on success or (None, error_message) on failure."""
-    from libs.integrations.model_cache import resolve_models
+    from libs.integrations.model_cache import (
+        ModelSetupRequiredError, resolve_models)
 
     try:
-        encoder_path, decoder_path = resolve_models(settings)
-    except Exception as exc:  # network, SHA mismatch, disk, half-set pair
+        resolver_args = {'cache_dir': cache_dir}
+        if manifest is not None:
+            resolver_args['manifest'] = manifest
+        encoder_path, decoder_path = resolve_models(settings, **resolver_args)
+    except ModelSetupRequiredError as exc:
+        return None, exc
+    except Exception as exc:  # invalid custom path pair or cache filesystem error
         return None, "Could not obtain the SAM model files: %s" % exc
 
     try:

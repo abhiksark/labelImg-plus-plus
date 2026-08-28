@@ -12,7 +12,9 @@ import os
 import sys
 import tempfile
 import shutil
+import time
 import unittest
+from types import SimpleNamespace
 
 # Set offscreen platform for headless testing
 if 'QT_QPA_PLATFORM' not in os.environ:
@@ -26,9 +28,473 @@ from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QMessageBox, QToolButton  # noqa: E402
 
-from labelImgPlusPlus import get_main_app  # noqa: E402
+from labelImgPlusPlus import DocumentKind, get_main_app  # noqa: E402
+from libs.core.annotation_workflow import AnnotationTool  # noqa: E402
 from libs.core.shape import Shape  # noqa: E402
 from libs.formats.annotation_paths import annotation_output_base  # noqa: E402
+
+
+def _wait(app, predicate, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        QTest.qWait(5)
+    return False
+
+
+def _write_image(path):
+    image = QImage(80, 60, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(path))
+
+
+def test_initial_fit_uses_final_canvas_viewport(tmp_path):
+    """The first fit projection must use the laid-out canvas viewport."""
+    app, window = get_main_app()
+    image_path = tmp_path / 'wide.png'
+    image = QImage(1600, 900, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    try:
+        window.resize(800, 600)
+        window.show()
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(
+            app, lambda: (window.canvas.pixmap is not None
+                          and window.canvas.scale != 1.0))
+        app.processEvents()
+        viewport = window.scroll_area.viewport().rect()
+        painted_width = window.canvas.pixmap.width() * window.canvas.scale
+        painted_height = window.canvas.pixmap.height() * window.canvas.scale
+        assert painted_width <= viewport.width() + 1
+        assert painted_height <= viewport.height() + 1
+        assert window.actions.fitWindow.isChecked()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_opening_another_standalone_image_starts_a_fresh_view_session(
+        tmp_path):
+    """Replacement content must not inherit manual zoom or armed tools."""
+    first, second = tmp_path / 'first.png', tmp_path / 'second.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        window.show()
+        window.request_open_file(str(first), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(first))
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window.set_zoom(125)
+
+        window.request_open_file(str(second), skip_prompt=True)
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.view_transform.mode.value == 'fit_window'
+        assert window.actions.fitWindow.isChecked()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_manual_zoom_survives_dataset_navigation(tmp_path):
+    """Navigation within one dataset retains an explicitly selected zoom."""
+    first, second = tmp_path / 'first.png', tmp_path / 'second.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window.set_zoom(125)
+
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.zoom_widget.value() == 125
+        assert window.view_transform.mode.value == 'manual'
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_manual_image_navigation_centers_both_scrollbars(tmp_path):
+    """A differently sized image keeps manual zoom but starts centered."""
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    for path, size in ((first, (1200, 900)), (second, (1800, 1400))):
+        image = QImage(size[0], size[1], QImage.Format_RGB32)
+        image.fill(Qt.white)
+        assert image.save(str(path))
+    app, window = get_main_app()
+    try:
+        window.resize(640, 480)
+        window.show()
+        assert window.import_dir_images(str(tmp_path))
+        window.set_zoom(100)
+        app.processEvents()
+        horizontal = window.scroll_bars[Qt.Horizontal]
+        vertical = window.scroll_bars[Qt.Vertical]
+        assert horizontal.maximum() > 0
+        assert vertical.maximum() > 0
+        horizontal.setValue(0)
+        vertical.setValue(vertical.maximum())
+
+        window.request_next_image()
+
+        assert _wait(
+            app, lambda: (window.file_path == str(second)
+                          and horizontal.maximum() > 0
+                          and vertical.maximum() > 0))
+        QTest.qWait(5)
+        app.processEvents()
+        assert window.zoom_widget.value() == 100
+        assert abs(horizontal.value() - horizontal.maximum() // 2) <= 1
+        assert abs(vertical.value() - vertical.maximum() // 2) <= 1
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_direct_zoom_widget_input_selects_manual_mode(tmp_path):
+    """Typing a zoom percentage must take ownership away from fit mode."""
+    image_path = tmp_path / 'image.png'
+    _write_image(image_path)
+    _app, window = get_main_app()
+    try:
+        assert window.load_file(str(image_path))
+        window.set_fit_window()
+
+        window.zoom_widget.setValue(125)
+
+        assert window.view_transform.mode.value == 'manual'
+        assert not window.actions.fitWindow.isChecked()
+        assert not window.actions.fitWidth.isChecked()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_fit_reprojects_after_resize_and_inspector_change(tmp_path):
+    """Layout changes reproject the active fit mode from the canvas viewport."""
+    image_path = tmp_path / 'large.png'
+    image = QImage(1600, 900, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    assert image.save(str(image_path))
+    app, window = get_main_app()
+    try:
+        window.resize(800, 600)
+        window.show()
+        window.request_open_file(str(image_path), skip_prompt=True)
+        assert _wait(app, lambda: window.canvas.scale != 1.0)
+        initial = window.zoom_widget.value()
+
+        window.resize(1200, 600)
+        assert _wait(app, lambda: window.zoom_widget.value() > initial)
+        window.set_inspector_collapsed(True)
+        assert _wait(
+            app, lambda: window.workspace_shell.is_inspector_collapsed())
+        resized = window.zoom_widget.value()
+
+        window.set_inspector_collapsed(False)
+        assert _wait(app, lambda: window.zoom_widget.value() < resized)
+        window.set_inspector_collapsed(True)
+        assert _wait(app, lambda: window.zoom_widget.value() == resized)
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_manual_video_scroll_restores_from_projection(monkeypatch):
+    """A manual video frame restores ratios inside the projection callback."""
+    image = QImage(1600, 1200, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    _app, window = get_main_app()
+    restored = []
+    try:
+        window.resize(800, 600)
+        window.show()
+        window._set_document_kind(DocumentKind.VIDEO)
+        window.video_snapshot = SimpleNamespace(
+            width=1600, height=1200, read_only=False,
+            source_path='test.mp4', project_path=None)
+        window.video_frame_states = ()
+        window.video_model = None
+        monkeypatch.setattr(window, '_materialize_video_frame',
+                            lambda _pts: None)
+        monkeypatch.setattr(window.video_timeline, 'set_current_frame',
+                            lambda _frame_ref: None)
+        monkeypatch.setattr(window, '_restore_scroll_ratios',
+                            lambda ratios: restored.append(ratios))
+        first = SimpleNamespace(
+            image=image, display_width=1600,
+            frame_ref=SimpleNamespace(pts=1))
+        window._commit_video_frame(first, playback=True)
+        window._apply_view_projection()
+        window.set_zoom(125)
+        _app.processEvents()
+        horizontal = window.scroll_bars[Qt.Horizontal]
+        vertical = window.scroll_bars[Qt.Vertical]
+        horizontal.setValue(horizontal.maximum() // 3)
+        vertical.setValue(vertical.maximum() * 2 // 3)
+        expected = (
+            float(horizontal.value()) / horizontal.maximum(),
+            float(vertical.value()) / vertical.maximum())
+        second = SimpleNamespace(
+            image=image, display_width=1600,
+            frame_ref=SimpleNamespace(pts=2))
+
+        window._commit_video_frame(second, playback=True)
+        assert restored == []
+        window._apply_view_projection()
+
+        assert restored == [expected]
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_rectangle_class_and_tool_survive_commit_and_navigation(tmp_path):
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window._active_class_selected('vehicle')
+        window.activate_box_tool()
+        window.canvas.commit_rectangle((2, 2, 20, 20))
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.RECTANGLE
+        assert window.canvas.mode == window.canvas.CREATE
+        assert window.canvas.selected_shape is None
+
+        window.set_clean()
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.canvas.mode == window.canvas.CREATE
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_new_dataset_clears_selection_but_retains_class_choices(tmp_path):
+    first_dir, second_dir = tmp_path / 'one', tmp_path / 'two'
+    first_dir.mkdir()
+    second_dir.mkdir()
+    _write_image(first_dir / 'a.png')
+    _write_image(second_dir / 'b.png')
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(first_dir))
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        assert window.import_dir_images(str(second_dir))
+        app.processEvents()
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert 'vehicle' in window.active_class_control.choices()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_polygon_class_and_tool_survive_commit_and_navigation(tmp_path):
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window.canvas.commit_polygon(((2, 2), (20, 2), (12, 20)))
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.POLYGON
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+        assert window.canvas.selected_shape is None
+
+        window.set_clean()
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_canvas_escape_selects_workflow_before_image_navigation(tmp_path):
+    first, second = tmp_path / 'a.png', tmp_path / 'b.png'
+    _write_image(first)
+    _write_image(second)
+    app, window = get_main_app()
+    try:
+        assert window.import_dir_images(str(tmp_path))
+        window._active_class_selected('vehicle')
+        window.activate_box_tool()
+
+        QTest.keyClick(window.canvas, Qt.Key_Escape)
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.canvas.mode == window.canvas.EDIT
+
+        window.request_next_image()
+        assert _wait(app, lambda: window.file_path == str(second))
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.canvas.mode == window.canvas.EDIT
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_object_list_selection_enters_select_without_resetting_polygon(tmp_path):
+    image_path = tmp_path / 'one.png'
+    _write_image(image_path)
+    app, window = get_main_app()
+    try:
+        assert window.load_file(str(image_path))
+        shape = Shape(label='vehicle')
+        for point in ((5, 5), (40, 5), (40, 40), (5, 40)):
+            shape.add_point(QPointF(*point))
+        shape.close()
+        window.canvas.shapes.append(shape)
+        window.add_label(shape)
+        identity = window.annotation_model.identity_for_shape(shape)
+        window.activate_polygon_tool()
+
+        # Navigation synchronizes rows programmatically and must preserve the
+        # armed tool.
+        window._select_annotation_identity(identity)
+        assert window.workflow.snapshot.active_tool is AnnotationTool.POLYGON
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+
+        index = window.annotation_proxy.index(0, 0)
+        window.label_list.selectionModel().clearSelection()
+        window.label_list.selectionModel().setCurrentIndex(
+            index, window.label_list.selectionModel().ClearAndSelect)
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.canvas.selected_shape is shape
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_opening_standalone_image_starts_new_workflow_session(tmp_path):
+    image_path = tmp_path / 'one.png'
+    _write_image(image_path)
+    _app, window = get_main_app()
+    try:
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        assert window.load_file(str(image_path))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_video_and_project_commits_start_new_workflow_sessions(
+        tmp_path, monkeypatch):
+    image = QImage(64, 48, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    decoders = []
+
+    class ControlledDecoder:
+        def __init__(self):
+            self.close_count = 0
+
+        def close(self):
+            self.close_count += 1
+
+    def prepared(source_path, project_path):
+        decoder = ControlledDecoder()
+        decoders.append(decoder)
+        frame_ref = SimpleNamespace(pts=0)
+        frame = SimpleNamespace(
+            image=image, display_width=64, frame_ref=frame_ref,
+            cache_key=('video', 'test', str(source_path)), byte_size=64 * 48 * 4)
+        snapshot = SimpleNamespace(
+            initial_frame=frame, revision=0, source_path=str(source_path),
+            project_path=str(project_path), width=64, height=48,
+            read_only=False, fingerprint='test', stream_index=0,
+            time_base_num=1, time_base_den=12, duration_pts=2,
+            start_pts=0, average_rate_num=12, average_rate_den=1)
+        return SimpleNamespace(
+            snapshot=snapshot, decoder=decoder, tracks=(), observations=(),
+            frame_states=(), classes=(), gaps=(), warning=None)
+
+    app, window = get_main_app()
+    try:
+        monkeypatch.setattr(window, '_refresh_video_timeline_markers',
+                            lambda: None)
+        monkeypatch.setattr(window, '_materialize_video_frame',
+                            lambda _pts: None)
+        monkeypatch.setattr(window, 'adjust_scale',
+                            lambda initial=False: None)
+        monkeypatch.setattr(window, 'paint_canvas', lambda: None)
+        monkeypatch.setattr(window, 'update_status_bar', lambda: None)
+        monkeypatch.setattr(window, '_publish_plugin_document',
+                            lambda **_kwargs: None)
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window._commit_video_open(
+            prepared(tmp_path / 'clip.mp4', tmp_path / 'clip.sqlite'))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.video_decoder is decoders[-1]
+
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+        window._commit_video_open(
+            prepared(tmp_path / 'clip.mp4', tmp_path / 'clip.sqlite'))
+        assert window.workflow.snapshot.active_class is None
+        assert window.workflow.snapshot.active_tool is AnnotationTool.SELECT
+        assert window.video_decoder is decoders[-1]
+        assert _wait(app, lambda: decoders[0].close_count == 1)
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+
+
+def test_video_frame_commit_preserves_active_polygon_workflow(monkeypatch):
+    image = QImage(64, 48, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    app, window = get_main_app()
+    try:
+        window._set_document_kind(DocumentKind.VIDEO)
+        window.video_snapshot = SimpleNamespace(
+            width=64, height=48, read_only=False,
+            source_path='test.mp4', project_path=None)
+        window.video_frame_states = ()
+        window.video_model = None
+        monkeypatch.setattr(window, '_materialize_video_frame',
+                            lambda _pts: None)
+        monkeypatch.setattr(window.video_timeline, 'set_current_frame',
+                            lambda _frame_ref: None)
+        monkeypatch.setattr(window, 'paint_canvas', lambda: None)
+        monkeypatch.setattr(window, 'update_status_bar', lambda: None)
+        window._active_class_selected('vehicle')
+        window.activate_polygon_tool()
+
+        result = SimpleNamespace(
+            image=image, display_width=64,
+            frame_ref=SimpleNamespace(pts=1))
+        window._commit_video_frame(result, playback=True)
+        assert window.workflow.snapshot.active_class == 'vehicle'
+        assert window.workflow.snapshot.active_tool is AnnotationTool.POLYGON
+        assert window.canvas.mode == window.canvas.CREATE_POLYGON
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
 
 
 class TestMainWindowFileOperations(unittest.TestCase):
@@ -61,6 +527,55 @@ class TestMainWindowFileOperations(unittest.TestCase):
         image.fill(0xFFFFFF)
         self.assertTrue(image.save(path))
         return path
+
+    def _load_test_image(self):
+        self.assertTrue(self.win.load_file(self.test_image_path))
+
+    def test_verification_state_is_persistent_in_action_and_status(self):
+        self._load_test_image()
+        self.win.canvas.verified = False
+        self.win._sync_verification_ui()
+        self.assertEqual(self.win.actions.verify.text(), 'Verify')
+        self.assertFalse(self.win.label_verification_status.isVisible())
+
+        self.win.canvas.verified = True
+        self.win._sync_verification_ui()
+        self.assertEqual(self.win.actions.verify.text(), 'Verified')
+        self.assertIn('unverified', self.win.actions.verify.toolTip().lower())
+        self.assertEqual(
+            self.win.label_verification_status.text(), '● Verified')
+
+    def test_verification_chip_survives_async_save_completion(self):
+        from unittest.mock import patch
+
+        self._load_test_image()
+        save_handle = object()
+        self.win._save_handle = save_handle
+        with patch.object(self.win.continuous_save, 'flush') as flush:
+            result = self.win.request_verify_image()
+
+        flush.assert_called_once_with()
+        self.assertIs(result, save_handle)
+        self.assertTrue(self.win.canvas.verified)
+        self.assertTrue(self.win.label_verification_status.property(
+            'statusAvailable'))
+        self.assertEqual(
+            self.win.label_verification_status.text(), '● Verified')
+
+        request = SimpleNamespace(
+            image_path=self.win.file_path,
+            revision=self.win._document_revision)
+        output_path = os.path.join(self.temp_dir, 'test_image.xml')
+        with patch.object(self.win, '_record_annotation_written'), \
+                patch.object(
+                    self.win, '_update_current_image_gallery_status'):
+            self.win._on_save_result(
+                output_path, request, None, self.win._dataset_generation)
+
+        self.assertFalse(self.win.dirty)
+        self.assertEqual(self.win.actions.verify.text(), 'Verified')
+        self.assertTrue(self.win.label_verification_status.property(
+            'statusAvailable'))
 
     def test_load_file_valid_image(self):
         """Test loading a valid image file."""
@@ -205,8 +720,11 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         event = MagicMock()
         settings = MagicMock()
+        self.win.set_dirty()
         with patch.object(self.win, 'settings', settings), \
-                patch.object(self.win, 'may_continue', return_value=False):
+                patch.object(
+                    self.win, 'discard_changes_dialog',
+                    return_value=QMessageBox.Cancel):
             self.win.closeEvent(event)
 
         event.ignore.assert_called_once_with()
@@ -446,17 +964,27 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.win.default_save_dir = None
         self.win.load_file(self.test_image_path)
         self.win.label_file = None
+        self.win.save_changes_automatically.setChecked(False)
         self.win.set_dirty()
+        self.assertEqual(self.win.continuous_save.state, 'pending')
+        self.assertGreater(
+            self.win.continuous_save._newest_revision,
+            self.win.continuous_save._durable_revision)
+        self.assertIsNone(self.win.continuous_save._in_flight)
 
         expected = os.path.splitext(self.test_image_path)[0]
-        with patch.object(self.win, 'save_file_dialog') as dialog, \
-                patch.object(self.win, 'save_labels',
-                             return_value=True) as save_labels:
-            self.assertTrue(self.win.save_file())
+        from libs.core.save_pipeline import write_save_request
+        try:
+            with patch.object(self.win, 'save_file_dialog') as dialog, \
+                    patch('labelImgPlusPlus.write_save_request',
+                          wraps=write_save_request) as atomic_write:
+                self.assertTrue(self.win.save_file())
+        finally:
+            self.win.save_changes_automatically.setChecked(True)
 
         dialog.assert_not_called()
-        save_labels.assert_called_once()
-        written = save_labels.call_args[0][0]
+        atomic_write.assert_called_once()
+        written = atomic_write.call_args[0][0].annotation_path
         self.assertEqual(os.path.splitext(written)[0], expected)
         self.assertFalse(self.win.dirty)
 
@@ -467,7 +995,9 @@ class TestMainWindowFileOperations(unittest.TestCase):
         self.win.load_file(self.test_image_path)
         self.win.set_dirty()
 
-        with patch.object(self.win, 'save_labels', return_value=False):
+        with patch(
+                'labelImgPlusPlus.write_save_request',
+                side_effect=RuntimeError('writer rejected save')):
             self.assertFalse(self.win.save_file())
 
         self.assertTrue(self.win.dirty)
@@ -549,6 +1079,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Save as YOLO
         from libs.formats.labelFile import LabelFileFormat
         self.win.label_file_format = LabelFileFormat.YOLO
+        self.win.set_dirty()
         self.win.save_file()
 
         # Check TXT file exists
@@ -848,6 +1379,24 @@ class TestMainWindowAnnotations(unittest.TestCase):
 
         self.assertEqual(len(self.win.canvas.shapes), 1)
         self.assertEqual(self.win.canvas.shapes[0].label, 'person')
+
+    def test_completed_rectangle_uses_the_active_class_control(self):
+        """A completed shape must not retain a removed legacy control path."""
+        try:
+            self.win.active_class_control.confirm_each.setChecked(False)
+            self.win._active_class_selected('vehicle')
+            existing_count = len(self.win.canvas.shapes)
+
+            self.win.canvas.commit_rectangle((10, 10, 60, 60))
+            self.app.processEvents()
+
+            self.assertIsNone(self.win.canvas.provisional_shape)
+            self.assertEqual(len(self.win.canvas.shapes), existing_count + 1)
+            self.assertEqual(self.win.canvas.shapes[-1].label, 'vehicle')
+        finally:
+            self.win.canvas.load_shapes([])
+            self.win.annotation_model.clear()
+            self.win.set_clean()
 
     def test_delete_shape(self):
         """Test deleting an annotation."""
@@ -1409,7 +1958,7 @@ class TestMainWindowChromeScalesForHiDPI(unittest.TestCase):
             cls.app, cls.win = get_main_app()
 
     def test_slim_status_and_canvas_buttons_double_at_2x(self):
-        self.assertEqual(self.win.workspace_pages.status_strip.height(), 48)
+        self.assertEqual(self.win.workspace_pages.status_strip.height(), 56)
         button = self.win.workspace_pages.canvas_chrome.findChildren(
             QToolButton)[0]
         self.assertEqual(button.width(), 64)
@@ -1540,6 +2089,11 @@ class TestCanvasKeepsFocusForToolShortcuts(unittest.TestCase):
         Hooking selection would fire on arrow-key moves too and yank focus
         away mid-navigation.
         """
+        self.win.resize(1200, 700)
+        self.app.processEvents()
+        self.win.set_inspector_collapsed(False)
+        self.win.workspace_inspector.set_selected_tab('objects')
+        self.app.processEvents()
         self.win.load_file(self.paths[0])
         self.app.processEvents()
         for label in ('person', 'car'):

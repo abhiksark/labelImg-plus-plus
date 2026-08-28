@@ -45,6 +45,33 @@ def test_latest_request_cancels_pending_job():
     coordinator.shutdown()
 
 
+def test_cancel_handle_reports_and_removes_pending_job_without_running_it():
+    """Targeted cancellation must expose a never-started reconciliation."""
+    coordinator = TaskCoordinator(logical_cpus=1)
+    gate = threading.Event()
+    started = threading.Event()
+    ran = []
+
+    def blocker(_handle):
+        started.set()
+        gate.wait(1)
+
+    try:
+        coordinator.submit('sam', blocker, priority=0)
+        assert started.wait(1)
+        queued = coordinator.submit(
+            'sam', lambda _handle: ran.append(True), priority=10)
+
+        assert coordinator.cancel_handle(queued) == 'pending'
+
+        assert queued.is_cancelled()
+        assert not coordinator.has_active_handle(queued)
+        assert ran == []
+    finally:
+        gate.set()
+        coordinator.shutdown()
+
+
 def test_pending_jobs_run_in_priority_order():
     coordinator = TaskCoordinator(logical_cpus=1)
     gate = threading.Event()
@@ -87,6 +114,40 @@ def test_generation_cancellation_discards_result():
     coordinator.shutdown()
 
 
+def test_next_generation_preserves_only_explicit_in_flight_owner():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    gate = threading.Event()
+    started = threading.Event()
+    ran = []
+
+    def blocker(_handle):
+        started.set()
+        gate.wait(1)
+
+    blocker_handle = coordinator.submit('interactive', blocker, priority=0)
+    assert started.wait(1)
+    preserved = coordinator.submit(
+        'interactive', lambda _handle: ran.append('preserved'), priority=10)
+    cancelled = coordinator.submit(
+        'interactive', lambda _handle: ran.append('cancelled'), priority=20)
+
+    try:
+        generation = coordinator.next_generation(
+            exclude_handles=(preserved,))
+
+        assert generation == 1
+        assert blocker_handle.is_cancelled()
+        assert not preserved.is_cancelled()
+        assert cancelled.is_cancelled()
+        assert coordinator.has_active_handle(preserved)
+        assert not coordinator.has_active_handle(cancelled)
+        gate.set()
+        assert _wait_until(lambda: ran == ['preserved'])
+    finally:
+        gate.set()
+        coordinator.shutdown()
+
+
 def test_video_lane_is_single_threaded_and_independent():
     coordinator = TaskCoordinator(logical_cpus=8)
     assert coordinator.pool('video').maxThreadCount() == 1
@@ -94,3 +155,44 @@ def test_video_lane_is_single_threaded_and_independent():
     assert coordinator.pool('video') is not coordinator.pool('background')
     assert 'video' in coordinator.queue_depths()
     coordinator.shutdown()
+
+
+def test_cancel_after_worker_result_disposes_suppressed_result():
+    coordinator = TaskCoordinator(logical_cpus=1)
+    produced = threading.Event()
+    release = threading.Event()
+    delivered = []
+    finished = []
+
+    class Resource:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    resource = Resource()
+
+    def work(_handle):
+        produced.set()
+        assert release.wait(1)
+        return resource
+
+    try:
+        handle = coordinator.submit(
+            'video', work, key='prepared-video', latest=True,
+            on_discard=lambda result: result.close())
+        handle.result.connect(delivered.append)
+        handle.finished.connect(lambda: finished.append(True))
+        assert produced.wait(1)
+        release.set()
+        assert coordinator.pool('video').waitForDone(1000)
+
+        handle.cancel()
+        assert _wait_until(lambda: finished)
+
+        assert delivered == []
+        assert resource.closed
+    finally:
+        release.set()
+        coordinator.shutdown()

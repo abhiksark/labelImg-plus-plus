@@ -91,3 +91,23 @@ def test_image_edits_visibility_and_undo_use_canonical_shape(
         assert shape.line_color == old_color
     finally:
         _close(window)
+
+
+def test_difficult_is_enabled_only_for_an_editable_selection(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path)
+    try:
+        assert not window.diffc_button.isEnabled()
+        window.diffc_button.setChecked(True)
+        window.shape_selection_changed(False)
+        assert not window.diffc_button.isEnabled()
+        assert not window.diffc_button.isChecked()
+
+        shape = _shape('crate')
+        window.canvas.shapes.append(shape)
+        window.add_label(shape)
+        window.canvas.select_shape(shape)
+        window.shape_selection_changed(True)
+        assert window.diffc_button.isEnabled()
+    finally:
+        _close(window)

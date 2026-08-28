@@ -3,6 +3,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app
+from libs.core.assist_state import AssistPhase
 from libs.core.sam_types import SamResult
 from libs.core.shape import Shape, ShapeType
 from libs.core.video_types import DocumentKind
@@ -39,6 +40,72 @@ def _enter_class(window, text):
     QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
 
 
+def test_picker_is_hidden_when_the_window_first_appears(tmp_path):
+    """The child picker must not paint until provisional geometry exists."""
+    app, window = get_main_app()
+    try:
+        window.show()
+        app.processEvents()
+
+        assert not window.class_picker.isVisible()
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+
+
+def test_polygon_picker_accepts_return_without_mouse_focus(tmp_path):
+    """Polygon completion must hand keyboard focus to class confirmation."""
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window.activate_polygon_tool()
+        shape = Shape(shape_type=ShapeType.POLYGON)
+        for point in ((15, 15), (100, 15), (60, 90)):
+            shape.add_point(QPointF(*point))
+        window.canvas.current = shape
+        window.canvas.finalise()
+        app.processEvents()
+        app.processEvents()
+
+        assert window.class_picker.isVisible()
+        assert window.class_picker.edit.hasFocus()
+        window.class_picker.edit.setText('coast')
+        QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
+        app.processEvents()
+
+        assert [item.label for item in window.canvas.shapes] == ['coast']
+        assert window.canvas.hasFocus()
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_picker_reclaims_focus_after_originating_event_unwinds(tmp_path):
+    """Deferred focus must win if the originating canvas event re-focuses."""
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window.show()
+        app.processEvents()
+        anchor = window.canvas.mapToGlobal(window.canvas.rect().center())
+
+        window.class_picker.open_at(('car', 'person'), 'car', anchor)
+        window.canvas.setFocus(Qt.MouseFocusReason)
+        assert window.canvas.hasFocus()
+        app.processEvents()
+
+        assert window.class_picker.edit.hasFocus()
+    finally:
+        window.class_picker.cancel()
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
 def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         tmp_path):
     app, window = get_main_app()
@@ -62,10 +129,10 @@ def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         assert window.annotation_model.rowCount() == 1
         assert window.dirty
         assert window.undo_stack.can_undo()
-        # Creation is transient: confirming a box hands the user back to
-        # Select with the new shape selected.
-        assert window.actions.editMode.isChecked()
-        assert window.canvas.selected_shape is shape
+        # Creation stays armed and the post-commit cue is not editable
+        # selection.
+        assert window.actions.create.isChecked()
+        assert window.canvas.selected_shape is None
         assert window.canvas.hasFocus()
 
         window.undo_action()
@@ -100,30 +167,52 @@ def test_escape_discards_provisional_shape_without_document_mutation(tmp_path):
         app.processEvents()
 
 
-def test_default_and_single_class_modes_bypass_after_required_confirmation(
-        tmp_path):
+def test_canvas_escape_cancels_provisional_before_selecting_tool(tmp_path):
     app, window = get_main_app()
     try:
         _prepare_image(window, tmp_path)
-        window.use_default_label_checkbox.setChecked(True)
-        window.default_label = 'dog'
+        _finalise_rectangle(window)
+        assert window.workflow.snapshot.provisional
+
+        QTest.keyClick(window.canvas, Qt.Key_Escape)
+        app.processEvents()
+        assert window.canvas.provisional_shape is None
+        assert not window.workflow.snapshot.provisional
+        assert window.workflow.snapshot.active_tool.value == 'rectangle'
+        assert window.canvas.mode == window.canvas.CREATE
+
+        QTest.keyClick(window.canvas, Qt.Key_Escape)
+        app.processEvents()
+        assert window.workflow.snapshot.active_tool.value == 'select'
+        assert window.canvas.mode == window.canvas.EDIT
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_active_class_reuses_after_required_confirmation(tmp_path):
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window._active_class_selected('dog')
         _finalise_rectangle(window)
         assert [shape.label for shape in window.canvas.shapes] == ['dog']
         assert not window.class_picker.isVisible()
 
-        window.use_default_label_checkbox.setChecked(False)
-        window.single_class_mode.setChecked(True)
-        window._session_last_class = None
+        window.active_class_control.confirm_each.setChecked(True)
         _finalise_rectangle(window, 50, 10)
         assert window.class_picker.isVisible()
         _enter_class(window, 'car')
         app.processEvents()
+        window.active_class_control.confirm_each.setChecked(False)
         _finalise_rectangle(window, 90, 10)
         app.processEvents()
         assert [shape.label for shape in window.canvas.shapes] == [
             'dog', 'car', 'car']
         assert not window.class_picker.isVisible()
-        assert window.actions.editMode.isChecked()
+        assert window.actions.create.isChecked()
     finally:
         window.dirty = False
         window.close()
@@ -153,7 +242,8 @@ def test_document_reset_cancels_picker_and_drops_only_provisional_geometry(
         app.processEvents()
 
 
-def test_sam_picker_escape_discards_result_without_mutation(tmp_path):
+def test_assist_picker_escape_keeps_preview_without_document_mutation(
+        tmp_path):
     app, window = get_main_app()
     try:
         _prepare_image(window, tmp_path)
@@ -161,18 +251,30 @@ def test_sam_picker_escape_discards_result_without_mutation(tmp_path):
         result = SamResult(
             polygon=((10.0, 10.0), (80.0, 10.0), (80.0, 60.0)),
             bounds=(10.0, 10.0, 81.0, 61.0))
-        window.sam_controller._on_finished(
-            window.sam_controller._gen, result, None)
-        assert window.canvas.provisional_shape is not None
+        window.assist_state.ready('test-assist')
+        window._assist_document_identity = window.document_identity
+        window.assist_state.start_run(window._dataset_generation)
+        window._on_assist_preview(window._dataset_generation, result)
+        assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+        assert window.canvas.assist_preview_shape is not None
+        assert window.canvas.provisional_shape is None
+
+        assert window.accept_assist_preview() is False
         assert window.class_picker.isVisible()
 
         QTest.keyClick(window.class_picker.edit, Qt.Key_Escape)
         app.processEvents()
+        assert window.assist_state.snapshot.phase is AssistPhase.PREVIEW
+        assert window.canvas.assist_preview_shape is not None
         assert window.canvas.provisional_shape is None
         assert window.canvas.shapes == []
         assert window.annotation_model.rowCount() == 0
         assert not window.dirty
         assert not window.undo_stack.can_undo()
+
+        assert window.reject_assist_preview() is True
+        assert window.assist_state.snapshot.phase is AssistPhase.READY
+        assert window.canvas.assist_preview_shape is None
     finally:
         window.dirty = False
         window.close()

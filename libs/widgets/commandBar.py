@@ -76,6 +76,9 @@ class CommandBar(QWidget):
         self.position_label.setAccessibleName('Document position')
         self.next_button = self._action_button(
             next_action, 'nextButton', 'Next')
+        self._document_navigation_is_video = False
+        previous_action.changed.connect(self._refresh_document_navigation)
+        next_action.changed.connect(self._refresh_document_navigation)
 
         self.save_button = self._action_button(
             save_action, 'saveButton', 'Save')
@@ -151,13 +154,44 @@ class CommandBar(QWidget):
         button.setAccessibleName(accessible_name)
         return button
 
-    def set_document(self, name, dirty=False, full_path=None, read_only=False):
+    def set_document(self, name, dirty=False, full_path=None, read_only=False,
+                     video=False):
         display = name or 'No document'
         if read_only:
             display += ' · Read only'
         self.document_label.setText(display)
         self.document_label.setToolTip(full_path or display)
         self.dirty_indicator.setVisible(bool(dirty))
+        self._set_document_navigation(bool(video))
+
+    def _set_document_navigation(self, video):
+        self._document_navigation_is_video = bool(video)
+        self._refresh_document_navigation()
+
+    def _refresh_document_navigation(self):
+        if self._document_navigation_is_video:
+            labels = ('Previous document', 'Next document')
+            tooltips = labels
+            status_tips = labels
+            accessible = labels
+        else:
+            labels = (
+                self.previous_button.defaultAction().text(),
+                self.next_button.defaultAction().text())
+            tooltips = (
+                self.previous_button.defaultAction().toolTip(),
+                self.next_button.defaultAction().toolTip())
+            status_tips = (
+                self.previous_button.defaultAction().statusTip(),
+                self.next_button.defaultAction().statusTip())
+            accessible = ('Previous', 'Next')
+        for button, text, tooltip, status_tip, name in zip(
+                (self.previous_button, self.next_button),
+                labels, tooltips, status_tips, accessible):
+            button.setText(text)
+            button.setToolTip(tooltip)
+            button.setStatusTip(status_tip)
+            button.setAccessibleName(name)
 
     def set_position(self, text):
         self.position_label.setText(text or '— / —')

@@ -45,16 +45,16 @@ LIGHT_COLORS = {
     'surface': '#ffffff',
     'surface_subtle': '#f1f3f6',
     'surface_raised': '#ffffff',
-    'border': '#dfe3e8',
-    'border_strong': '#c8d0da',
+    'border': '#7d8c9c',
+    'border_strong': '#66778b',
     'text': '#182230',
     'text_secondary': '#5d6b7a',
     'text_disabled': '#9aa4b2',
     'accent': '#2563eb',
     'accent_hover': '#1d4ed8',
     'accent_pressed': '#1e40af',
-    'accent_light': '#dbeafe',
-    'accent_text': '#1d4ed8',
+    'accent_light': '#2563eb',
+    'accent_text': '#ffffff',
     'on_accent': '#ffffff',
     'focus': '#2563eb',
     'hover': '#eef2f6',
@@ -91,18 +91,18 @@ DARK_COLORS = {
     'surface': '#2d2d2d',
     'surface_subtle': '#252525',
     'surface_raised': '#343434',
-    'border': '#404040',
-    'border_strong': '#565656',
+    'border': '#808080',
+    'border_strong': '#a0a0a0',
     'text': '#e0e0e0',
     'text_secondary': '#a0a0a0',
     'text_disabled': '#666666',
     'accent': '#4da6ff',
     'accent_hover': '#70b7ff',
     'accent_pressed': '#2f8fe8',
-    'accent_light': '#264f78',
-    # Lightened from #4da6ff, which sat at 3.32:1 on accent_light and failed
-    # the 4.5:1 body-text bar for every selected row, menu item and caption.
-    'accent_text': '#a8d3ff',
+    'accent_light': '#4da6ff',
+    # Selected workspace rows use an on-accent foreground so their text and
+    # boundary both retain their required contrast on every surface.
+    'accent_text': '#101820',
     'on_accent': '#101820',
     'focus': '#70b7ff',
     'hover': '#3d3d3d',
@@ -145,7 +145,10 @@ def hex_to_qcolor(hex_color, alpha=255):
     Returns:
         QColor object
     """
-    from PyQt5.QtGui import QColor
+    try:
+        from PyQt5.QtGui import QColor
+    except ImportError:
+        from PyQt4.QtGui import QColor
     hex_clean = hex_color.lstrip('#')
     r, g, b = tuple(int(hex_clean[i:i+2], 16) for i in (0, 2, 4))
     return QColor(r, g, b, alpha)
@@ -680,7 +683,7 @@ QWidget#workspaceStatusStrip {{
 }}
 QWidget#workspaceStatusStrip QLabel {{
     color: {c['text_secondary']};
-    font-size: {scale_px(10)}px;
+    font-size: {scale_px(11)}px;
 }}
 QWidget#emptyWorkspacePage {{
     background: {c['background']};

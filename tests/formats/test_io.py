@@ -64,6 +64,33 @@ class TestPascalVocIO(unittest.TestCase):
         reader = PascalVocReader(xml_path)
         self.assertTrue(reader.verified)
 
+    def test_continuous_save_roundtrip_preserves_voc_semantics(self):
+        """A normal rewrite keeps existing geometry, label, and verification."""
+        xml_path = os.path.join(self.temp_dir, 'continuous.xml')
+        initial = PascalVocWriter('folder', 'img.jpg', (100, 100, 3))
+        initial.verified = True
+        initial.add_bnd_box(10, 20, 40, 60, 'cat', difficult=True)
+        initial.save(xml_path)
+
+        loaded = PascalVocReader(xml_path)
+        updated = PascalVocWriter('folder', 'img.jpg', (100, 100, 3))
+        updated.verified = loaded.verified
+        for label, points, _line, _fill, difficult, _shape_type in \
+                loaded.get_shapes():
+            updated.add_bnd_box(
+                points[0][0], points[0][1], points[2][0], points[2][1],
+                label, difficult)
+        updated.add_bnd_box(50, 10, 80, 30, 'dog', difficult=False)
+        updated.save(xml_path)
+
+        reopened = PascalVocReader(xml_path)
+        self.assertTrue(reopened.verified)
+        self.assertEqual(
+            [(shape[0], shape[1], shape[4]) for shape in reopened.get_shapes()],
+            [('cat', [(10, 20), (40, 20), (40, 60), (10, 60)], True),
+             ('dog', [(50, 10), (80, 10), (80, 30), (50, 30)], False)],
+        )
+
     def test_grayscale_image(self):
         """Test handling of grayscale image (depth=1)."""
         xml_path = os.path.join(self.temp_dir, 'gray.xml')
@@ -138,6 +165,42 @@ class TestCreateMLIO(unittest.TestCase):
         points = read_shapes[0][1]
         self.assertEqual(points[0], (100, 100))  # top-left
         self.assertEqual(points[2], (200, 200))  # bottom-right
+
+    def test_continuous_save_roundtrip_preserves_createml_semantics(self):
+        """A normal rewrite retains existing label, geometry, and verified state."""
+        json_path = os.path.join(self.temp_dir, 'continuous.json')
+        initial = CreateMLWriter(
+            'folder', 'img.jpg', (100, 100, 3),
+            [{'label': 'cat',
+              'points': ((10, 20), (40, 20), (40, 60), (10, 60))}],
+            json_path,
+        )
+        initial.verified = True
+        initial.write()
+
+        loaded = CreateMLReader(json_path, 'folder/img.jpg')
+        shapes = [
+            {'label': shape[0], 'points': tuple(shape[1])}
+            for shape in loaded.get_shapes()
+        ]
+        shapes.append({
+            'label': 'dog',
+            'points': ((50, 10), (80, 10), (80, 30), (50, 30)),
+        })
+        updated = CreateMLWriter(
+            'folder', 'img.jpg', (100, 100, 3), shapes, json_path)
+        updated.verified = loaded.verified
+        updated.write()
+
+        reopened = CreateMLReader(json_path, 'folder/img.jpg')
+        self.assertTrue(reopened.verified)
+        self.assertEqual(
+            [(shape[0], shape[1]) for shape in reopened.get_shapes()],
+            [('cat', [(10.0, 20.0), (40.0, 20.0),
+                      (40.0, 60.0), (10.0, 60.0)]),
+             ('dog', [(50.0, 10.0), (80.0, 10.0),
+                      (80.0, 30.0), (50.0, 30.0)])],
+        )
 
     def test_polygon_roundtrip_uses_extreme_vertices_after_first_three(self):
         """CreateML degrades a polygon to its full enclosing box."""

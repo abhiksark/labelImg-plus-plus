@@ -8,12 +8,47 @@ segfaults at interpreter shutdown (exit 139) even though every test passes.
 """
 
 import gc
+import hashlib
 import os
+import shutil
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 _TEST_APPLICATION = None
+_SETTINGS_ENV = 'LABELIMGPP_SETTINGS_PATH'
+_MISSING = object()
+_ORIGINAL_SETTINGS_ENV = _MISSING
+_TEST_SETTINGS_DIR = None
+_USER_SETTINGS_PATH = os.path.expanduser('~/.labelImgSettings.json')
+_USER_SETTINGS_STATE = None
+
+
+def _file_state(path):
+    """Return content and metadata needed to detect a settings-file write."""
+    try:
+        stat = os.stat(path)
+        with open(path, 'rb') as stream:
+            digest = hashlib.sha256(stream.read()).hexdigest()
+        return digest, stat.st_mtime_ns, stat.st_size
+    except FileNotFoundError:
+        return None
+
+
+def pytest_configure(config):
+    """Route every test Settings instance to one isolated session file."""
+    del config
+    global _ORIGINAL_SETTINGS_ENV, _TEST_SETTINGS_DIR, _USER_SETTINGS_STATE
+    if _TEST_SETTINGS_DIR is not None:
+        return
+    _ORIGINAL_SETTINGS_ENV = os.environ.get(_SETTINGS_ENV, _MISSING)
+    _USER_SETTINGS_STATE = _file_state(_USER_SETTINGS_PATH)
+    _TEST_SETTINGS_DIR = tempfile.mkdtemp(
+        prefix='labelimgpp-pytest-settings-')
+    path = os.path.join(
+        _TEST_SETTINGS_DIR, 'session-settings-%s.json' % os.getpid())
+    os.environ[_SETTINGS_ENV] = path
 
 
 def pytest_sessionstart(session):
@@ -34,7 +69,7 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):
     """Close every top-level widget and quit QApplication before exit."""
-    del session, exitstatus
+    del exitstatus
     global _TEST_APPLICATION
     try:
         from PyQt5.QtWidgets import QApplication
@@ -62,3 +97,24 @@ def pytest_sessionfinish(session, exitstatus):
     app.quit()
     _TEST_APPLICATION = None
     gc.collect()
+
+    if _file_state(_USER_SETTINGS_PATH) != _USER_SETTINGS_STATE:
+        reporter = session.config.pluginmanager.getplugin('terminalreporter')
+        if reporter is not None:
+            reporter.write_sep(
+                '!', 'test run modified ~/.labelImgSettings.json')
+        session.exitstatus = 1
+
+
+def pytest_unconfigure(config):
+    """Restore the caller environment and remove the isolated settings file."""
+    del config
+    global _ORIGINAL_SETTINGS_ENV, _TEST_SETTINGS_DIR
+    if _ORIGINAL_SETTINGS_ENV is _MISSING:
+        os.environ.pop(_SETTINGS_ENV, None)
+    else:
+        os.environ[_SETTINGS_ENV] = _ORIGINAL_SETTINGS_ENV
+    if _TEST_SETTINGS_DIR is not None:
+        shutil.rmtree(_TEST_SETTINGS_DIR, ignore_errors=True)
+    _ORIGINAL_SETTINGS_ENV = _MISSING
+    _TEST_SETTINGS_DIR = None

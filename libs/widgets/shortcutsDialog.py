@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
+from libs.utils.utils import native_shortcut_text
 
 
 class ShortcutsDialog(QDialog):
@@ -75,7 +76,8 @@ class ShortcutsDialog(QDialog):
             self.table.setCellWidget(row, 1, sc_edit)
 
             # Default (read-only, gray)
-            default_item = QTableWidgetItem(self.config.get_default(name))
+            default_item = QTableWidgetItem(native_shortcut_text(
+                self.config.get_default(name)))
             default_item.setFlags(default_item.flags() & ~Qt.ItemIsEditable)
             colors = get_theme_colors(self._theme)
             default_item.setForeground(hex_to_qcolor(colors['text_secondary']))

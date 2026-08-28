@@ -37,14 +37,14 @@ Requires-Dist: lxml
 Provides-Extra: sam
 Requires-Dist: onnxruntime; extra == "sam"
 Requires-Dist: numpy; extra == "sam"
-Requires-Dist: opencv-python-headless<6,>=4.8; extra == "sam"
+Requires-Dist: opencv-python-headless<4.13,>=4.11; extra == "sam"
 Provides-Extra: video
 Requires-Dist: av<13,>=12.3; python_version == "3.8" and extra == "video"
 Requires-Dist: av<16,>=15.1; python_version == "3.9" and extra == "video"
 Requires-Dist: av<18,>=17.1; python_version == "3.10" and extra == "video"
 Requires-Dist: av<19,>=18; python_version >= "3.11" and extra == "video"
 Requires-Dist: numpy; extra == "video"
-Requires-Dist: opencv-python-headless<6,>=4.8; extra == "video"
+Requires-Dist: opencv-python-headless<4.13,>=4.11; extra == "video"
 Provides-Extra: profile
 Requires-Dist: psutil; extra == "profile"
 Requires-Dist: py-spy; extra == "profile"

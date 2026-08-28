@@ -20,7 +20,9 @@ libs/__init__.py
 libs/resources.py
 libs/core/__init__.py
 libs/core/annotation_catalog.py
+libs/core/annotation_workflow.py
 libs/core/commands.py
+libs/core/continuous_save.py
 libs/core/dataset.py
 libs/core/image_pipeline.py
 libs/core/keypoint_config.py
@@ -34,6 +36,7 @@ libs/core/save_pipeline.py
 libs/core/settings.py
 libs/core/shape.py
 libs/core/shortcut_config.py
+libs/core/shutdown_coordinator.py
 libs/core/task_coordinator.py
 libs/core/ultralytics_export.py
 libs/core/video_decoder.py
@@ -41,10 +44,12 @@ libs/core/video_export.py
 libs/core/video_model.py
 libs/core/video_project.py
 libs/core/video_propagation.py
+libs/core/video_runtime.py
 libs/core/video_sam2.py
 libs/core/video_session.py
 libs/core/video_tracking.py
 libs/core/video_types.py
+libs/core/view_transform.py
 libs/core/workspace_settings.py
 libs/data/predefined_classes.txt
 libs/formats/__init__.py
@@ -77,6 +82,7 @@ libs/utils/ustr.py
 libs/utils/utils.py
 libs/utils/window_geometry.py
 libs/widgets/__init__.py
+libs/widgets/activeClassControl.py
 libs/widgets/annotationInspector.py
 libs/widgets/batchVerifyDialog.py
 libs/widgets/canvas.py
@@ -99,6 +105,7 @@ libs/widgets/toolBar.py
 libs/widgets/toolRail.py
 libs/widgets/ultralyticsExportDialog.py
 libs/widgets/videoExportDialog.py
+libs/widgets/videoSetupCard.py
 libs/widgets/videoTimelineWidget.py
 libs/widgets/view_scaling.py
 libs/widgets/workspaceInspector.py

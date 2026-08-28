@@ -15,7 +15,7 @@ libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication
 
@@ -849,6 +849,31 @@ class TestGalleryTheme(unittest.TestCase):
         gallery.apply_theme(Theme.DARK)
         expected = hex_to_qcolor(get_theme_colors(Theme.DARK)['status_verified'])
         self.assertEqual(gallery._status_colors[AnnotationStatus.VERIFIED], expected)
+
+
+class TestGalleryControlsContract(unittest.TestCase):
+    def test_full_gallery_controls_explain_status_and_activation(self):
+        gallery = GalleryWidget(
+            show_size_slider=True, initial_icon_size=150)
+        self.assertEqual(gallery._icon_size, 150)
+        self.assertEqual(
+            gallery.list_widget.accessibleName(), 'Dataset gallery')
+        self.assertEqual(
+            gallery.interaction_hint.text(),
+            'Click to select · Double-click to open')
+        self.assertEqual(
+            [label.text() for label in gallery.status_legend_labels],
+            ['Unannotated', 'Annotated', 'Verified'])
+
+    def test_thumbnail_accessible_text_includes_status(self):
+        gallery = GalleryWidget()
+        path = '/images/frame.png'
+        gallery._add_item(path)
+        gallery.update_status(path, AnnotationStatus.VERIFIED)
+
+        item = gallery.list_widget.item(0)
+        self.assertIn('Verified', item.data(Qt.AccessibleTextRole))
+        self.assertIn('Verified', item.toolTip())
 
 
 class TestBoundedThumbnailScheduling(unittest.TestCase):

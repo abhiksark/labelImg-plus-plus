@@ -10,6 +10,7 @@ import struct
 from PyQt5.QtGui import QImage
 
 from libs.core.video_project import fingerprint_video
+from libs.core.video_runtime import VIDEO_INSTALL_COMMAND
 from libs.core.video_types import (
     VideoFrameRef, VideoFrameResult, VideoSessionSnapshot,
 )
@@ -18,7 +19,7 @@ from libs.core.video_types import (
 VIDEO_EXTENSIONS = ('.mp4', '.mov', '.mkv', '.avi')
 VIDEO_INSTALL_HINT = (
     'Smart video annotation requires optional dependencies. Install them with '
-    '`pip install "labelimgplusplus[video]"`.')
+    '`%s`.' % VIDEO_INSTALL_COMMAND)
 
 
 class VideoDependencyError(RuntimeError):
@@ -131,8 +132,11 @@ class PreparedVideoOpen:
 class VideoDecoderSession:
     """One decoder context serialized by TaskCoordinator's video lane."""
 
-    def __init__(self, source_path, stream_index=None, cancelled=None):
-        av, np = load_video_dependencies()
+    def __init__(self, source_path, stream_index=None, cancelled=None,
+                 dependencies=None):
+        av, np = (
+            dependencies if dependencies is not None
+            else load_video_dependencies())
         self._av = av
         self._np = np
         self.source_path = os.path.abspath(os.fspath(source_path))

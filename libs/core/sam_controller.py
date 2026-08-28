@@ -6,22 +6,30 @@ canvas on the main thread. Top-level imports are Qt + stdlib only; numpy and the
 libs.integrations heavy modules are imported lazily inside methods so MainWindow
 can import this controller unconditionally.
 
-The first segmentation also loads the model (download + session build) inside
-the worker,
-so the UI never blocks: a click on an unloaded backend shows "Loading SAM…" and
-the model is built off the main thread.
+After explicit Assist setup, the first segmentation loads the cached model and
+builds its session inside the worker, so the UI never blocks: a click on an
+unloaded backend shows "Loading SAM…" and the model is built off the main
+thread. Model acquisition is owned by the Assist download action.
 """
 
-from PyQt5.QtCore import QObject, QPointF, QRunnable, QThreadPool, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
+from libs.core.assist_state import AssistFailureKind, AssistPrompt
 from libs.core.profiling import recorder as trace_recorder
 
 
 class _SamSignals(QObject):
     # (generation, SamResult or None, backend created this run or None)
     finished = pyqtSignal(int, object, object)
-    failed = pyqtSignal(int, str)         # (generation, message)
+    failed = pyqtSignal(int, object, str)  # (generation, kind, message)
+
+
+class _SamTaskFailure(RuntimeError):
+    """Typed worker failure safe to project across the Qt boundary."""
+
+    def __init__(self, kind, message):
+        super().__init__(str(message))
+        self.kind = kind
 
 
 class _SamTask(QRunnable):
@@ -29,14 +37,14 @@ class _SamTask(QRunnable):
     main thread. Returns plain data; the controller mutates Qt state on the main
     thread in the connected slots."""
 
-    def __init__(self, generation, backend, settings, qimage, point, signals):
+    def __init__(self, generation, backend, settings, qimage, prompt, signals):
         super().__init__()
         self.setAutoDelete(True)
         self._generation = generation
         self._backend = backend           # existing backend, or None to load
         self._settings = settings
         self._qimage = qimage             # converted inside this worker
-        self._point = point
+        self._prompt = prompt
         self._signals = signals
 
     def run(self):
@@ -44,9 +52,14 @@ class _SamTask(QRunnable):
             generation, result, created = self.execute()
             if self._signals is not None:
                 self._signals.finished.emit(generation, result, created)
+        except _SamTaskFailure as exc:
+            if self._signals is not None:
+                self._signals.failed.emit(
+                    self._generation, exc.kind, str(exc))
         except Exception as exc:
             if self._signals is not None:
-                self._signals.failed.emit(self._generation, str(exc))
+                self._signals.failed.emit(
+                    self._generation, AssistFailureKind.INFERENCE, str(exc))
 
     def execute(self):
         from libs.integrations.mask_to_polygon import mask_to_sam_result
@@ -61,7 +74,11 @@ class _SamTask(QRunnable):
             if trace_recorder is not None:
                 trace_recorder.complete('sam.backend.load', started)
             if backend is None:
-                raise RuntimeError(error)
+                from libs.integrations.model_cache import ModelSetupRequiredError
+                kind = ('setup_required'
+                        if isinstance(error, ModelSetupRequiredError)
+                        else AssistFailureKind.RUNTIME)
+                raise _SamTaskFailure(kind, error)
             created = backend
         if self._qimage is not None:
             from libs.integrations.image_convert import qimage_to_rgb
@@ -71,30 +88,41 @@ class _SamTask(QRunnable):
             backend.set_image(qimage_to_rgb(self._qimage))
             if trace_recorder is not None:
                 trace_recorder.complete('sam.image.embed', started)
-        if self._point is None:
+        if self._prompt is None:
             return self._generation, None, created
         if trace_recorder is not None:
             import time
             started = time.perf_counter_ns()
-        mask = backend.predict(
-            [(self._point.x(), self._point.y())], [1])
+        try:
+            mask = backend.predict(self._prompt)
+        except _SamTaskFailure:
+            raise
+        except Exception as exc:
+            raise _SamTaskFailure(AssistFailureKind.INFERENCE, exc)
         result = mask_to_sam_result(mask)
         if trace_recorder is not None:
             trace_recorder.complete('sam.inference', started)
         return self._generation, result, created
 
 
-class SamController:
+class SamController(QObject):
+    previewReady = pyqtSignal(int, object)  # document generation, SamResult
+    previewFailed = pyqtSignal(int, object, str)
+
     def __init__(self, main_window):
+        super().__init__()
         self.mw = main_window
         self.backend = None
         self._busy = False
         self._gen = 0
-        self._embedded_key = None        # file_path the current embedding belongs to
+        self._content_key = None         # identity of the published image/frame
+        self._embedded_key = None        # content identity the embedding belongs to
         self._enabled = False
-        self._pending_click = None
+        self._pending_prompt = None
         self._pending_prepare = False
-        self._active_point = None
+        self._active_prompt = None
+        self._active_document_generation = int(
+            getattr(main_window, '_dataset_generation', 0))
         self._active_handle = None
         self._standalone_pool = QThreadPool()
         self._standalone_pool.setMaxThreadCount(1)
@@ -112,11 +140,27 @@ class SamController:
         self._embedded_key = None
 
     def on_image_changed(self):
+        self._on_content_changed(self.mw.file_path)
+
+    def on_video_frame_changed(self, session_generation, frame_ref):
+        """Invalidate Assist for one successfully published video frame."""
+        frame_key = getattr(frame_ref, 'cache_key', None)
+        if frame_key is None:  # Compatibility for lightweight frame adapters.
+            frame_key = ('pts', int(frame_ref.pts))
+        self._on_content_changed((
+            'video', int(session_generation), frame_key))
+
+    def _on_content_changed(self, content_key):
         # Invalidate the cached embedding AND discard any in-flight result, so a
         # segmentation started on the previous image can never commit onto the
         # new one (the stale generation is dropped in _on_finished).
+        self._content_key = content_key
         self._embedded_key = None
         self._gen += 1
+        self._pending_prompt = None
+        changed = getattr(self.mw, '_on_assist_document_changed', None)
+        if changed is not None:
+            changed()
         if self._enabled:
             if self._busy:
                 self._pending_prepare = True
@@ -126,7 +170,7 @@ class SamController:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
         if not self._enabled:
-            self._pending_click = None
+            self._pending_prompt = None
             self._pending_prepare = False
             self.cancel()
             return
@@ -142,24 +186,45 @@ class SamController:
         # and its handler clears it; this preserves the single-in-flight invariant
         # that serialises access to the non-thread-safe predictor.
         self._gen += 1
+        coordinator = getattr(self.mw, 'task_coordinator', None)
+        if coordinator is not None and self._active_handle is not None:
+            coordinator.cancel_handle(self._active_handle)
 
     def segment_at(self, point):
+        """Compatibility entry point for one positive Smart Point."""
+        self.run_prompt(AssistPrompt(
+            mode='points',
+            positive_points=((float(point.x()), float(point.y())),)))
+
+    def run_prompt(self, prompt):
+        """Run the latest immutable prompt; newer input invalidates old output."""
+        if not isinstance(prompt, AssistPrompt):
+            raise TypeError('prompt must be an AssistPrompt')
         if self._busy:
-            self._pending_click = QPointF(point)
+            self._pending_prompt = prompt
+            self._gen += 1
+            coordinator = getattr(self.mw, 'task_coordinator', None)
+            if coordinator is not None and self._active_handle is not None:
+                coordinator.cancel_handle(self._active_handle)
             self.mw.status("SAM working…")
             return
-        self._start(point)
+        self._start(prompt)
 
-    def _start(self, point):
+    def _start(self, prompt):
         # A not-yet-loaded backend has no embedding, so the first click must embed.
-        need_embed = self.backend is None or self._embedded_key != self.mw.file_path
+        content_key = (
+            self._content_key
+            if self._content_key is not None else self.mw.file_path)
+        need_embed = self.backend is None or self._embedded_key != content_key
         qimage = self.mw.image.copy() if need_embed else None
         self._busy = True
         self._gen += 1
-        self._active_point = point
+        self._active_prompt = prompt
+        self._active_document_generation = int(
+            getattr(self.mw, '_dataset_generation', 0))
         if need_embed:
-            self._embedded_key = self.mw.file_path
-        if point is None:
+            self._embedded_key = content_key
+        if prompt is None:
             message = "Preparing SAM…"
         else:
             message = "Loading SAM…" if self.backend is None else "Segmenting…"
@@ -167,26 +232,45 @@ class SamController:
         coordinator = getattr(self.mw, 'task_coordinator', None)
         if coordinator is not None:
             task = _SamTask(
-                self._gen, self.backend, self.mw.settings, qimage, point,
+                self._gen, self.backend, self.mw.settings, qimage, prompt,
                 None)
             from libs.core.task_coordinator import JobPriority
             handle = coordinator.submit(
-                'sam', lambda job: task.execute(),
+                'sam', lambda job: self._execute_task(task),
                 priority=JobPriority.IMAGE_LOAD, key='sam-active',
                 generation=coordinator.generation)
             self._active_handle = handle
-            handle.result.connect(
-                lambda value: self._on_finished(*value))
-            handle.error.connect(
-                lambda message, generation=self._gen:
-                self._on_failed(generation, message))
+            handle.result.connect(self._on_task_result)
+            handle.error.connect(lambda message, generation=self._gen:
+                                 self._on_failed(
+                                     generation,
+                                     AssistFailureKind.INFERENCE, message))
             handle.finished.connect(
                 lambda active=handle: self._on_task_finished(active))
         else:  # Compatibility for extensions constructing the controller alone.
             task = _SamTask(
-                self._gen, self.backend, self.mw.settings, qimage, point,
+                self._gen, self.backend, self.mw.settings, qimage, prompt,
                 self.signals)
             self._standalone_pool.start(task)
+
+    @staticmethod
+    def _execute_task(task):
+        """Return typed failures as data because JobHandle errors are text-only."""
+        try:
+            return 'finished', task.execute()
+        except _SamTaskFailure as exc:
+            return 'failed', task._generation, exc.kind, str(exc)
+        except Exception as exc:
+            return ('failed', task._generation,
+                    AssistFailureKind.INFERENCE, str(exc))
+
+    def _on_task_result(self, value):
+        if not value:
+            return
+        if value[0] == 'failed':
+            self._on_failed(*value[1:])
+        else:
+            self._on_finished(*value[1])
 
     def _on_task_finished(self, handle):
         if self._active_handle is not handle:
@@ -210,28 +294,31 @@ class SamController:
             self._start_pending()
             return
         if result is None:
-            if self._active_point is not None:
+            if self._active_prompt is not None:
                 self.mw.status("No object found, try another point")
             self._start_pending()
             return
-        output_mode = getattr(self.mw, 'sam_output_mode', 'polygon')
-        if output_mode == 'box':
-            self.mw.canvas.commit_rectangle(result.bounds)
-        else:
-            self.mw.canvas.commit_polygon(result.polygon)
+        self.previewReady.emit(self._document_generation(generation), result)
         self._start_pending()
 
-    def _on_failed(self, generation, message):
+    def _on_failed(self, generation, kind, message=None):
         # A failed run may not have embedded the image, so always force a fresh
         # embed on the next click (cheap, and robust even if cancel() is later
-        # wired to a UI action). Only the error dialog is gated on staleness.
+        # wired to a UI action). Only failure publication is gated on staleness.
         self._busy = False
         self._embedded_key = None
+        if message is None:  # compatibility with old two-argument callbacks
+            message = str(kind)
+            kind = AssistFailureKind.INFERENCE
         if generation != self._gen:
             self._start_pending()
             return
-        QMessageBox.warning(self.mw, "SAM", message)
+        self.previewFailed.emit(
+            self._document_generation(generation), kind, str(message))
         self._start_pending()
+
+    def _document_generation(self, fallback):
+        return int(getattr(self, '_active_document_generation', fallback))
 
     def _start_pending(self):
         if self._busy:
@@ -240,7 +327,7 @@ class SamController:
             self._pending_prepare = False
             self._start(None)
             return
-        if self._pending_click is not None:
-            point = self._pending_click
-            self._pending_click = None
-            self._start(point)
+        if self._pending_prompt is not None:
+            prompt = self._pending_prompt
+            self._pending_prompt = None
+            self._start(prompt)

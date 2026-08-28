@@ -73,6 +73,15 @@ class TestGalleryControlsScale(unittest.TestCase):
             gallery = GalleryWidget(show_size_slider=True)
         self.assertEqual(gallery.size_value_label.minimumWidth(), 100)
 
+    def test_full_gallery_keeps_logical_grid_and_decodes_for_device_ratio(self):
+        with patch.object(
+                GalleryWidget, 'devicePixelRatioF', return_value=2.0):
+            gallery = GalleryWidget(
+                show_size_slider=True, initial_icon_size=150)
+            self.assertEqual(gallery.list_widget.iconSize().width(), 150)
+            self.assertEqual(gallery.list_widget.gridSize().width(), 170)
+            self.assertEqual(gallery._thumbnail_decode_size(), 300)
+
 
 class TestKeypointPanelIndicatorsScale(unittest.TestCase):
     def test_status_label_fixed_width_doubles(self):

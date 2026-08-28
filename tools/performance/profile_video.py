@@ -36,6 +36,7 @@ from libs.core.video_export import export_video_frames  # noqa: E402
 from libs.core.video_tracking import track_optical_flow  # noqa: E402
 from libs.core.video_types import (  # noqa: E402
     ObservationRecord, TrackingRequest, TrackRecord, VideoExportRequest,
+    VideoFrameRef,
 )
 from libs.formats.labelFile import LabelFileFormat  # noqa: E402
 
@@ -199,6 +200,100 @@ def _event_loop_latency(application, path):
         timer.stop()
         coordinator.shutdown(5000)
         decoder.close()
+
+
+def run_video_soak(window, path, cycles=10, timeout=8.0):
+    """Exercise real video ownership through bounded open/play/seek/close cycles.
+
+    The summary is intentionally stateful rather than a pass/fail boolean so
+    release tooling can retain the final owner state when a cycle fails.
+    """
+    from labelImgPlusPlus import DocumentKind
+
+    application = QApplication.instance()
+    if application is None:
+        raise RuntimeError('run_video_soak requires a QApplication')
+    cycles = int(cycles)
+    if cycles < 1:
+        raise ValueError('cycles must be positive')
+    timeout = float(timeout)
+    if timeout <= 0:
+        raise ValueError('timeout must be positive')
+
+    started = time.monotonic()
+    completed = 0
+    failures = []
+    for cycle in range(1, cycles + 1):
+        try:
+            if not window.open_video(path):
+                raise RuntimeError('open_video returned False')
+            if (window.document_kind != DocumentKind.VIDEO
+                    or window.current_video_frame_ref is None
+                    or window.video_snapshot is None):
+                raise RuntimeError('video did not publish a first frame')
+
+            first_pts = window.current_video_frame_ref.pts
+            window.play_pause_video()
+            _wait_for(
+                application,
+                lambda: (window.current_video_frame_ref is not None
+                         and window.current_video_frame_ref.pts > first_pts),
+                timeout=timeout)
+            window.pause_video()
+
+            snapshot = window.video_snapshot
+            midpoint = (int(snapshot.start_pts or 0)
+                        + int(snapshot.duration_pts or 0) // 2)
+            frame_ref = VideoFrameRef(
+                snapshot.fingerprint, snapshot.stream_index, midpoint,
+                snapshot.time_base_num, snapshot.time_base_den)
+            window.request_video_frame(frame_ref)
+            _wait_for(
+                application,
+                lambda: (not window._video_decode_in_flight
+                         and not window.task_coordinator
+                         .queue_depths()['video']),
+                timeout=timeout)
+
+            window.dirty = False
+            window.close_file()
+            _wait_for(application, window.task_coordinator.is_idle,
+                      timeout=timeout)
+            if (window.video_decoder is not None
+                    or window.video_snapshot is not None
+                    or window._video_decode_in_flight
+                    or window.continuous_save._in_flight is not None):
+                raise RuntimeError('close left video or save ownership active')
+            completed += 1
+        except Exception as exc:
+            failures.append('cycle %d: %s' % (cycle, exc))
+            try:
+                window.pause_video()
+                window.dirty = False
+                window.close_file()
+                _wait_for(application, window.task_coordinator.is_idle,
+                          timeout=timeout)
+            except Exception as cleanup_error:
+                failures.append(
+                    'cycle %d cleanup: %s' % (cycle, cleanup_error))
+            break
+
+    coordinator = window.task_coordinator
+    return {
+        'cycles': cycles,
+        'completed_cycles': completed,
+        'failures': tuple(failures),
+        'remaining_jobs': coordinator.active_jobs(),
+        'queue_depths': coordinator.queue_depths(),
+        'elapsed_seconds': time.monotonic() - started,
+        'decoder_active': window.video_decoder is not None,
+        'session_active': window.video_snapshot is not None,
+        'save_state': window.continuous_save.state,
+        'save_in_flight': window.continuous_save._in_flight is not None,
+        'video_decode_in_flight': bool(window._video_decode_in_flight),
+        'document_kind': window.document_kind.value,
+        'document_identity': window.document_identity,
+    }
 
 
 def _gui_workflow_metrics(application, path):

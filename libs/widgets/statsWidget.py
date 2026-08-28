@@ -47,6 +47,11 @@ class StatsWidget(QWidget):
 
         self.total_images_label = QLabel("Images: 0")
         self.annotated_label = QLabel("Annotated: 0 (0%)")
+        self.annotated_label.setToolTip(
+            'Annotated includes verified images and reviewed images with '
+            'zero objects.')
+        self.annotated_label.setAccessibleDescription(
+            self.annotated_label.toolTip())
         self.verified_label = QLabel("Verified: 0 (0%)")
 
         self.progress_bar = QProgressBar()
@@ -109,6 +114,7 @@ class StatsWidget(QWidget):
 
         # Refresh Button
         self.refresh_btn = QPushButton("Refresh Statistics")
+        self.refresh_btn.setAccessibleName('Refresh gallery statistics')
         self.refresh_btn.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
         layout.addWidget(self.refresh_btn)
 

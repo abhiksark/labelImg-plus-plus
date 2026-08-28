@@ -5,10 +5,61 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 from libs.core.settings import Settings
+
+
+class TestSettingsPath(unittest.TestCase):
+    """Settings paths are explicit in tests and unchanged in production."""
+
+    def test_pytest_session_uses_an_isolated_settings_file(self):
+        """The suite must never construct Settings against the user file."""
+        path = os.environ.get('LABELIMGPP_SETTINGS_PATH')
+
+        self.assertIsNotNone(path)
+        self.assertNotEqual(
+            path, os.path.expanduser('~/.labelImgSettings.json'))
+        self.assertTrue(
+            os.path.basename(path).startswith('session-settings-'))
+
+    def test_constructor_uses_exact_environment_override(self):
+        """The supported override must select only the supplied test file."""
+        path = '/tmp/labelimgpp-explicit-test-settings.json'
+        with patch.dict(
+                os.environ, {'LABELIMGPP_SETTINGS_PATH': path}, clear=False):
+            settings = Settings()
+
+        self.assertEqual(settings.path, path)
+
+    def test_constructor_keeps_user_home_default_without_override(self):
+        """Normal application launches retain the existing settings path."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('LABELIMGPP_SETTINGS_PATH', None)
+            with patch('libs.core.settings.os.path.expanduser',
+                       return_value='/example-user'):
+                settings = Settings()
+
+        self.assertEqual(
+            settings.path, '/example-user/.labelImgSettings.json')
+
+    def test_override_persists_across_separate_settings_instances(self):
+        """A test session can intentionally share its isolated settings."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'session-settings.json')
+            with patch.dict(
+                    os.environ, {'LABELIMGPP_SETTINGS_PATH': path},
+                    clear=False):
+                first = Settings()
+                first['shared'] = 'session-only'
+                self.assertTrue(first.save())
+
+                second = Settings()
+                self.assertTrue(second.load())
+
+        self.assertEqual(second.get('shared'), 'session-only')
 
 
 class TestSettings(unittest.TestCase):

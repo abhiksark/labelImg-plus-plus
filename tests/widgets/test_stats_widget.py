@@ -36,6 +36,13 @@ class TestStatsWidgetInit(unittest.TestCase):
         self.assertIsNotNone(widget.verified_label)
         self.assertIsNotNone(widget.progress_bar)
 
+    def test_annotated_count_explains_reviewed_negative_samples(self):
+        widget = StatsWidget()
+        self.assertIn('zero objects', widget.annotated_label.toolTip())
+        self.assertEqual(
+            widget.annotated_label.accessibleDescription(),
+            widget.annotated_label.toolTip())
+
     def test_has_label_table(self):
         """Test that widget has label distribution table."""
         widget = StatsWidget()

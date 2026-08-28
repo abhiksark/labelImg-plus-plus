@@ -2,8 +2,9 @@
 
 from libs.core.workspace_settings import (
     DEFAULT_INSPECTOR_WIDTH, WorkspaceSettings, clamp_inspector_width,
-    load_workspace_settings,
+    load_prompt_policy, load_workspace_settings,
 )
+from libs.utils.constants import SETTING_PROMPT_POLICY, SETTING_SINGLE_CLASS
 
 
 def test_workspace_defaults_are_balanced_contract():
@@ -42,3 +43,25 @@ def test_workspace_loader_accepts_files_and_collapsed():
         'workspace/inspectorTab': 'files',
     })
     assert loaded == WorkspaceSettings(280, True, 'files')
+
+
+def test_legacy_single_class_migrates_to_reuse_active():
+    settings = {SETTING_SINGLE_CLASS: True}
+
+    assert load_prompt_policy(settings) == 'reuse_active'
+
+
+def test_prompt_policy_accepts_known_values_and_defaults_invalid_values():
+    assert load_prompt_policy({
+        SETTING_PROMPT_POLICY: 'confirm_each',
+    }) == 'confirm_each'
+    assert load_prompt_policy({
+        SETTING_PROMPT_POLICY: 'unexpected',
+    }) == 'reuse_active'
+
+
+def test_valid_prompt_policy_is_authoritative_over_legacy_single_class():
+    assert load_prompt_policy({
+        SETTING_SINGLE_CLASS: True,
+        SETTING_PROMPT_POLICY: 'confirm_each',
+    }) == 'confirm_each'
