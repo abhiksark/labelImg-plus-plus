@@ -114,6 +114,26 @@ The harness verifies all 64 PNGs are non-empty and match the dimensions in
 their filenames. The matching acceptance record is
 [`docs/testing/ux-remediation-2026-08-23.md`](../testing/ux-remediation-2026-08-23.md#continuous-image-workflow-acceptance--2026-08-24).
 
+## UX remediation 2026-08-23
+
+`ux-remediation-2026-08-23/` is the macOS release-review matrix for the
+annotation UX remediation. It contains four full-window states in light and
+dark themes at 1366x768 and 1440x900:
+
+- `canvas-unselected-polygon-*` shows a fitted image and a readable unselected
+  polygon edge.
+- `verified-image-*` shows the persistent Verified command and status chip.
+- `full-gallery-*` shows 150px thumbnails, the interaction hint, the status
+  legend, and dataset statistics.
+- `empty-after-close-*` shows the atomic close reset with no stale document,
+  gallery, tool rail, verification chip, or status message.
+
+The matching verification record is
+[`docs/testing/ux-remediation-2026-08-23.md`](../testing/ux-remediation-2026-08-23.md).
+The capture harness also exercised a four-point polygon and inline keyboard
+class confirmation at both target sizes; the saved Pascal VOC XML contained
+four points with no consecutive duplicates.
+
 ## Deterministic workspace matrix harness
 
 `tools/ux/capture_workspace_matrix.py` is the single 1x offscreen-Qt harness
