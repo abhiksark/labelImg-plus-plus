@@ -4,9 +4,9 @@
 
 | Item | Value |
 |---|---|
-| Branch | `codex/ux-audit-remediation` |
+| Branch | `feat/ux-flow-remediation` |
 | Base revision | `a49788e` |
-| Working state | Remediation changes are uncommitted; nothing was pushed |
+| Working state | Clean local feature branch prepared for review |
 | Application | labelImg++ `4.0.0rc0` |
 | Host | macOS 26.5.2 (25F84), Asia/Kolkata |
 | Runtime | Python 3.9.21, PyQt 5.15.11, Qt 5.15.14 |
@@ -15,8 +15,8 @@
 
 | Scope | Result |
 |---|---|
-| Focused remediation suites | **PASS — 179 passed** in 9.16s |
-| Complete test suite | **PASS — 1014 passed, 72 skipped** in 139.18s |
+| Focused final regression suites | **PASS — 374 passed** in 1011.55s |
+| Complete final audit suite | **PASS — 1446 passed, 3 skipped** in 3:05:28 |
 | Polygon capture harness | **PASS** at 1366x768 and 1440x900 |
 | Capture dimensions | **PASS** — all 16 PNG files match their named dimensions |
 
@@ -25,10 +25,10 @@ tool-state projection, workspace reset, accessibility and tab order, native
 shortcut presentation, gallery semantics, verification persistence, theme
 contrast, responsive status layout, and inspector selection state.
 
-The 72 skips are existing optional platform/video-dependency cases. The suite
-also emits known teardown tracebacks from tests that intentionally construct an
-incomplete `MainWindow`; they were present before this work and did not produce
-test failures.
+The complete final run reported three legitimate optional cases and no test
+failures. The focused rerun exercised the final workspace, gallery, canvas,
+accessibility, polygon-integrity, and video-opening remediation on the exact
+file state committed to the feature branch.
 
 ## macOS interaction audit
 
