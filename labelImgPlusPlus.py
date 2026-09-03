@@ -6858,9 +6858,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.scale = 0.01 * self.zoom_widget.value()
         self.canvas.overlay_color = self.light_widget.color()
         self.canvas.label_font_size = int(0.02 * max(self.image.width(), self.image.height()))
-        minimum_size = self.canvas.minimumSizeHint()
-        if self.canvas.minimumSize() != minimum_size:
-            self.canvas.setMinimumSize(minimum_size)
         self.canvas.adjustSize()
         self.canvas.update()
 

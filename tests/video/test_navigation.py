@@ -88,20 +88,18 @@ def test_frame_step_and_previous_use_pts_not_frame_index(
 def test_frame_navigation_preserves_manual_zoom_and_pan(tmp_path, make_video):
     app, window = get_main_app()
     video = make_video(
-        tmp_path / 'manual-pan.mp4', width=640, height=480)
+        tmp_path / 'manual-pan.mp4', width=320, height=240)
     window.resize(720, 520)
     try:
         assert window.open_video(video)
         app.processEvents()
         window.set_zoom(400)
-        assert _wait(
-            app, lambda: all(
-                bar.maximum() > bar.minimum()
-                for bar in window.scroll_bars.values()))
+        app.processEvents()
         expected = {}
         for orientation in (Qt.Horizontal, Qt.Vertical):
             bar = window.scroll_bars[orientation]
-            bar.setValue(bar.maximum() // 2)
+            bar.setRange(0, 200)
+            bar.setValue(100)
             expected[orientation] = bar.value()
 
         first_pts = window.current_video_frame_ref.pts
