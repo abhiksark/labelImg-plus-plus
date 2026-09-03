@@ -85,6 +85,8 @@ class CreateShapeCommand(Command):
         """
         self.main_window = main_window
         self.shape = shape
+        self.created_points = tuple(
+            (point.x(), point.y()) for point in shape.points)
         self.video_before = video_before
         self.video_after = video_after
 
@@ -100,6 +102,8 @@ class CreateShapeCommand(Command):
         if self.video_after is not None:
             self._restore_video(self.video_after)
             return
+        self.shape.points = [
+            QPointF(x, y) for x, y in self.created_points]
         self.main_window.canvas.shapes.append(self.shape)
         _rebuild_spatial(self.main_window.canvas)
         self.main_window.add_label(self.shape)

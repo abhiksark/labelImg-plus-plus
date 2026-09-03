@@ -128,6 +128,42 @@ def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
         window.dirty = False
         window.close()
         app.processEvents()
+
+
+def test_fixed_class_redo_restores_second_box_geometry(tmp_path):
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        first = _finalise_rectangle(window, 10, 10)
+        _enter_class(window, 'cat')
+        app.processEvents()
+
+        card = window.inspector_context_card
+        card.class_strategy_combo.setCurrentIndex(
+            card.class_strategy_combo.findData('fixed'))
+        card.fixed_class_combo.setCurrentIndex(
+            card.fixed_class_combo.findText('car'))
+        app.processEvents()
+        second = _finalise_rectangle(window, 70, 50)
+        app.processEvents()
+        second_points = [
+            (point.x(), point.y()) for point in second.points]
+        assert second_points != [
+            (point.x(), point.y()) for point in first.points]
+
+        window.undo_action()
+        window.redo_action()
+
+        assert [shape.label for shape in window.canvas.shapes] == ['cat', 'car']
+        assert [
+            (point.x(), point.y())
+            for point in window.canvas.shapes[1].points
+        ] == second_points
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
         app.processEvents()
 
 

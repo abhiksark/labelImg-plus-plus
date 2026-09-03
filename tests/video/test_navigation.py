@@ -4,6 +4,7 @@ import time
 from unittest.mock import patch
 
 from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtTest import QTest
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.shape import Shape, ShapeType
@@ -153,6 +154,27 @@ def test_playback_has_one_decode_request_in_flight_and_drops_debt(
         window.pause_video()
         assert not window._video_playback_timer.isActive()
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_ctrl_space_shortcut_toggles_playback(tmp_path, make_video):
+    app, window = get_main_app()
+    video = make_video(tmp_path / 'playback-shortcut.mp4', frames=30)
+    try:
+        assert window.open_video(video)
+        window.activateWindow()
+        app.processEvents()
+        window.canvas.setFocus()
+        QTest.keyClick(window.canvas, Qt.Key_Space, Qt.ControlModifier)
+        assert window._video_playback_timer.isActive()
+        assert window.video_timeline._playing
+
+        QTest.keyClick(window.canvas, Qt.Key_Space, Qt.ControlModifier)
+        assert not window._video_playback_timer.isActive()
+        assert not window.video_timeline._playing
+    finally:
+        window.pause_video()
         window.dirty = False
         window.close()
 

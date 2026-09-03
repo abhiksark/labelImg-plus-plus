@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+from xml.etree import ElementTree
 
 import pytest
 
@@ -103,7 +104,15 @@ def test_export_uses_existing_formats_and_writes_manifest(
     # The pending tracker suggestion is excluded; interpolation between the
     # two accepted manual anchors is exported on the middle frame instead.
     assert manifest['frames'][1]['track_ids'] == ['track-1']
-    if annotation_format == LabelFileFormat.COCO:
+    if annotation_format == LabelFileFormat.PASCAL_VOC:
+        xml_path = tmp_path / 'export' / 'clip__s0__p0.xml'
+        root = ElementTree.parse(str(xml_path)).getroot()
+        image_path = tmp_path / 'export' / 'clip__s0__p0.jpg'
+        assert root.findtext('folder') == 'export'
+        assert root.findtext('filename') == image_path.name
+        assert root.findtext('path') == str(image_path)
+        assert os.path.isfile(root.findtext('path'))
+    elif annotation_format == LabelFileFormat.COCO:
         document = json.loads((tmp_path / 'export' /
                                'annotations.json').read_text())
         assert len(document['images']) == 3

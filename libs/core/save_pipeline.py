@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 import shutil
 import tempfile
+from typing import Optional
 
 from libs.formats.labelFile import LabelFile, LabelFileFormat
 
@@ -17,6 +18,7 @@ class SaveRequest:
     class_list: tuple
     verified: bool
     revision: int
+    serialized_image_path: Optional[str] = None
 
 
 def extension_for_format(label_file_format):
@@ -60,7 +62,9 @@ def write_save_request(request, cancelled=None, begin_commit=None):
         class_list = list(request.class_list)
         if request.label_file_format == LabelFileFormat.PASCAL_VOC:
             label_file.save_pascal_voc_format(
-                temporary, shapes, request.image_path, None)
+                temporary, shapes, request.image_path, None,
+                local_img_path=(request.serialized_image_path
+                                or request.image_path))
         elif request.label_file_format == LabelFileFormat.YOLO:
             label_file.save_yolo_format(
                 temporary, shapes, request.image_path, None, class_list)
