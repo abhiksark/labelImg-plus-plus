@@ -395,6 +395,9 @@ jobs:
 
       - name: Verify direct and sdist-derived wheels outside checkout
         shell: bash
+        env:
+          LABELIMGPP_DISABLE_PLUGINS: '1'
+          QT_QPA_PLATFORM: offscreen
         run: |
           set -euo pipefail
           index=0
@@ -411,8 +414,7 @@ jobs:
               "$envdir/bin/labelimgpp" --verify-assets
               "$envdir/bin/labelimgplusplus" --verify-assets
               "$envdir/bin/labelImgPlusPlus" --verify-assets
-              QT_QPA_PLATFORM=offscreen \
-                "$envdir/bin/python" -c \
+              "$envdir/bin/python" -c \
                 "import sys, labelImgPlusPlus; assert 'PyQt6' in sys.modules; assert not {'PyQt4', 'PyQt5', 'av', 'cv2', 'numpy', 'onnxruntime', 'torch', 'torchvision', 'sam2'} & sys.modules.keys()"
             )
             python scripts/smoke_frozen_app.py \
