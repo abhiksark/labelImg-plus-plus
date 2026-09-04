@@ -4,11 +4,31 @@
 import argparse
 import os
 from pathlib import Path
+import signal
 import subprocess
 from typing import Mapping, Optional, Sequence
 
 
 _SHUTDOWN_TIMEOUT_SECONDS = 3.0
+
+
+def _terminate_process_tree(
+        process: subprocess.Popen, force: bool) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            timeout=_SHUTDOWN_TIMEOUT_SECONDS,
+        )
+        return
+
+    signum = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        pass
 
 
 def verify_process_stays_alive(
@@ -21,15 +41,18 @@ def verify_process_stays_alive(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=os.name != "nt",
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
     )
     try:
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
-        process.terminate()
+        _terminate_process_tree(process, force=False)
         try:
             process.communicate(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
-            process.kill()
+            _terminate_process_tree(process, force=True)
             process.communicate(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
         return
 

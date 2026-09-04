@@ -14,6 +14,20 @@ def test_process_surviving_deadline_is_terminated_and_reaped():
     )
 
 
+def test_surviving_process_tree_is_terminated_and_reaped():
+    parent = (
+        "import subprocess, sys, time; "
+        "subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(30)']); "
+        "time.sleep(30)"
+    )
+    verify_process_stays_alive(
+        [sys.executable, "-c", parent],
+        seconds=0.05,
+        env=os.environ,
+    )
+
+
 def test_early_exit_reports_status_and_captured_output():
     with pytest.raises(RuntimeError) as error:
         verify_process_stays_alive(
