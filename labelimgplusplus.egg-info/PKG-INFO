@@ -267,7 +267,7 @@ Workflow and Interface
 Installation
 ------------
 
-labelImg++ 5 requires Python 3.10 or newer and PyQt6 6.11.
+labelImg++ 4 requires Python 3.10 or newer and PyQt6 6.11.
 
 From PyPI (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~

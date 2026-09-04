@@ -266,7 +266,7 @@ reload, plugin dependency resolution, or native-crash containment.
 
 The PyQt5-to-PyQt6 host migration does not change API major 1 because every
 public descriptor and protocol remains standard-library-only. A plugin loaded
-into labelImg++ 5 must not import PyQt5 into the PyQt6 process.
+into labelImg++ 4 must not import PyQt5 into the PyQt6 process.
 
 Custom annotation tools belong to issue #27 and format/import/export adapters
 belong to issue #28. Until those APIs land, such changes remain source
