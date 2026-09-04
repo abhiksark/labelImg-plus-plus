@@ -8,7 +8,7 @@ from enum import Enum
 import os
 import traceback
 
-from PyQt5.QtCore import QObject
+from PyQt6.QtCore import QObject
 
 from labelimgplusplus.plugins import (
     PLUGIN_API_MAJOR,

@@ -1,6 +1,32 @@
 History
 =======
 
+4.0.0rc1 (Unreleased)
+---------------------
+
+PyQt6 and Platform Baseline
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Replace PyQt5 with ``PyQt6>=6.11,<6.12`` and use scoped Qt 6 enums and
+  current event, dialog, action, image-size, font-metric, and screen APIs.
+* Require Python 3.10 through 3.13. Stable Python 3.8 and 3.9 support remains
+  on 3.5.x; the historical 4.0.0rc0 prerelease also supported those versions.
+* Replace compiled RCC resources with ordinary UTF-8 package data under
+  ``libs/assets`` and one ``--verify-assets`` source, wheel, and frozen-app
+  diagnostic.
+
+Compatibility and Packaging
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Preserve 4.0.0rc0 settings tag encodings, annotation coordinates, video
+  sidecar schema/PTS/review/anchor values, shortcut IDs, save atomicity, and
+  undo behavior with checked-in compatibility fixtures.
+* Keep plugin API major 1 standard-library-only and cross-host compatible.
+  Plugins loaded into the PyQt6-based 4.0.0rc1 or later must use that public
+  API and must not load PyQt5 beside PyQt6.
+* Use one tracked PyInstaller spec for Linux, Windows, and macOS, with packaged
+  assets and an outside-checkout startup smoke before artifact publication.
+
 4.0.0rc0 (2026-08-12)
 ---------------------
 

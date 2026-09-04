@@ -1,7 +1,7 @@
 import os
 import json
 
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 
 from libs.core.dataset import DatasetSnapshot
 from libs.core.image_pipeline import FrameCache, load_image_result
@@ -9,7 +9,7 @@ from libs.formats.labelFile import LabelFileFormat
 
 
 def _image(path, width=32, height=24):
-    image = QImage(width, height, QImage.Format_RGB32)
+    image = QImage(width, height, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(path)
 

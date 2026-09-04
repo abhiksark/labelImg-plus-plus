@@ -1,18 +1,11 @@
 # libs/widgets/workspaceInspector.py
 """Fixed inspector and splitter shell for the Balanced workspace."""
 
-try:
-    from PyQt5.QtCore import Qt, pyqtSignal
-    from PyQt5.QtWidgets import (
-        QComboBox, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget,
-    )
-except ImportError:
-    from PyQt4.QtCore import Qt, pyqtSignal
-    from PyQt4.QtGui import (
-        QComboBox, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget,
-    )
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QComboBox, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter,
+    QTabWidget, QToolButton, QVBoxLayout, QWidget,
+)
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_workspace_inspector_style
@@ -37,7 +30,7 @@ class InspectorContextCard(QWidget):
     def __init__(self, parent=None):
         super(InspectorContextCard, self).__init__(parent)
         self.setObjectName('inspectorContextCard')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self.eyebrow = QLabel(self)
         self.eyebrow.setObjectName('inspectorContextEyebrow')
@@ -76,10 +69,10 @@ class InspectorContextCard(QWidget):
         for index in range(self.MAX_ACTIONS):
             button = QToolButton(self)
             button.setObjectName('inspectorContextAction')
-            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-            button.setFocusPolicy(Qt.StrongFocus)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             button.setSizePolicy(
-                QSizePolicy.Expanding, QSizePolicy.Preferred)
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             button.setProperty('primary', index == 0)
             button.hide()
             (primary_row if index == 0 else secondary_row).addWidget(button)
@@ -90,8 +83,8 @@ class InspectorContextCard(QWidget):
         self.more_button.setObjectName('inspectorContextMore')
         self.more_button.setText('More')
         self.more_button.setAccessibleName('More object actions')
-        self.more_button.setFocusPolicy(Qt.StrongFocus)
-        self.more_button.setPopupMode(QToolButton.InstantPopup)
+        self.more_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.more_button.setMenu(self.more_menu)
         self.more_button.hide()
         secondary_row.addStretch(1)
@@ -187,10 +180,10 @@ class WorkspaceInspector(QWidget):
     def __init__(self, objects_widget, files_widget, parent=None):
         super(WorkspaceInspector, self).__init__(parent)
         self.setObjectName('workspaceInspector')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumWidth(0)
         self.setMaximumWidth(scale_px(420))
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName('inspectorTabs')
@@ -203,10 +196,10 @@ class WorkspaceInspector(QWidget):
         self.collapse_button = QToolButton(self)
         self.collapse_button.setObjectName('collapseInspectorButton')
         self.collapse_button.setAccessibleName('Collapse inspector')
-        self.collapse_button.setFocusPolicy(Qt.StrongFocus)
+        self.collapse_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.collapse_button.setToolTip('Collapse inspector')
         self.collapse_button.clicked.connect(self.collapseRequested)
-        self.tabs.setCornerWidget(self.collapse_button, Qt.TopRightCorner)
+        self.tabs.setCornerWidget(self.collapse_button, Qt.Corner.TopRightCorner)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -267,7 +260,7 @@ class WorkspaceSplitterShell(QWidget):
         self.inspector = inspector
         self._inspector_width = int(inspector_width)
 
-        self.splitter = QSplitter(Qt.Horizontal, self)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self.splitter.setObjectName('workspaceSplitter')
         self.splitter.setChildrenCollapsible(True)
         self.splitter.addWidget(canvas_column)
@@ -279,7 +272,7 @@ class WorkspaceSplitterShell(QWidget):
         self.reopen_button = QToolButton(self)
         self.reopen_button.setObjectName('reopenInspectorButton')
         self.reopen_button.setAccessibleName('Open inspector')
-        self.reopen_button.setFocusPolicy(Qt.StrongFocus)
+        self.reopen_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.reopen_button.setToolTip('Open inspector')
         self.reopen_button.setIcon(themed_icon('prev', Theme.LIGHT))
         self.reopen_button.setFixedWidth(scale_px(32))

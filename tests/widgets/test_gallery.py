@@ -15,9 +15,9 @@ libs_path = os.path.join(dir_name, '..', '..', 'libs')
 sys.path.insert(0, libs_path)
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtCore import QSize
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QApplication
 
 from libs.widgets.galleryWidget import (
     OverlayShape,
@@ -629,9 +629,9 @@ class TestThumbnailCache(unittest.TestCase):
 
     def test_byte_limit_evicts_oldest_thumbnail(self):
         cache = ThumbnailCache(max_size=10, max_bytes=8 * 8 * 4)
-        first_image = QImage(8, 8, QImage.Format_RGB32)
+        first_image = QImage(8, 8, QImage.Format.Format_RGB32)
         first_image.fill(0xFFFF0000)
-        second_image = QImage(8, 8, QImage.Format_RGB32)
+        second_image = QImage(8, 8, QImage.Format.Format_RGB32)
         second_image.fill(0xFF00FF00)
         first = QPixmap.fromImage(first_image)
         second = QPixmap.fromImage(second_image)
@@ -666,7 +666,7 @@ class TestThumbnailImageListPropagation(unittest.TestCase):
             'libs.widgets.galleryWidget.find_annotation_file',
             return_value=(None, None, None),
         ) as find_annotation:
-            worker._draw_annotations(QImage(10, 10, QImage.Format_RGB32))
+            worker._draw_annotations(QImage(10, 10, QImage.Format.Format_RGB32))
 
         find_annotation.assert_called_once_with(
             image_list[0], '/labels', image_list)
@@ -695,7 +695,7 @@ class TestThumbnailRefresh(unittest.TestCase):
 
     @staticmethod
     def _solid_image(rgb):
-        image = QImage(8, 8, QImage.Format_RGB32)
+        image = QImage(8, 8, QImage.Format.Format_RGB32)
         image.fill(rgb)
         return image
 
@@ -758,7 +758,7 @@ class TestThumbnailOverlayDrawing(unittest.TestCase):
 
     def test_draws_polygon_outline_and_rectangle_corner_markers(self):
         worker = ThumbnailLoaderWorker('/images/target.jpg')
-        image = QImage(100, 100, QImage.Format_RGB32)
+        image = QImage(100, 100, QImage.Format.Format_RGB32)
         shapes = [
             OverlayShape(
                 'box', RECTANGLE,
@@ -799,7 +799,7 @@ class TestThumbnailOverlayDrawing(unittest.TestCase):
         temp_dir = tempfile.mkdtemp()
         try:
             image_path = os.path.join(temp_dir, 'source.png')
-            source = QImage(200, 100, QImage.Format_RGB32)
+            source = QImage(200, 100, QImage.Format.Format_RGB32)
             self.assertTrue(source.save(image_path))
             worker = ThumbnailLoaderWorker(image_path, size=50)
             worker._draw_annotations = MagicMock(
@@ -823,7 +823,7 @@ class TestThumbnailOverlayDrawing(unittest.TestCase):
             with open(json_path, 'w') as annotation_file:
                 annotation_file.write('[malformed')
             worker = ThumbnailLoaderWorker(image_path)
-            image = QImage(20, 20, QImage.Format_RGB32)
+            image = QImage(20, 20, QImage.Format.Format_RGB32)
 
             result = worker._draw_annotations(image, QSize(200, 100))
 

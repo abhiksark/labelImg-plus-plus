@@ -3,27 +3,17 @@ from math import hypot, sqrt
 from libs.utils.ustr import ustr
 import hashlib
 import re
-import sys
+from libs.utils.assets import icon_path
 
-try:
-    from PyQt5.QtGui import QIcon, QColor, QPainter, QPixmap
-    from PyQt5.QtCore import QRegExp, QSize
-    from PyQt5.QtWidgets import QPushButton, QAction, QMenu, QWidget
-    QT5 = True
-except ImportError:
-    from PyQt4.QtGui import QIcon, QColor, QPushButton, QAction, QMenu, QWidget, QRegExpValidator
-    from PyQt4.QtCore import QRegExp
-    QT5 = False
-
-# QRegExpValidator location differs between Qt versions
-if QT5:
-    from PyQt5.QtGui import QRegExpValidator
-else:
-    pass  # Already imported above for PyQt4
+from PyQt6.QtCore import QRegularExpression, QSize
+from PyQt6.QtGui import (
+    QAction, QColor, QIcon, QPainter, QPixmap, QRegularExpressionValidator,
+)
+from PyQt6.QtWidgets import QMenu, QPushButton, QWidget
 
 
 def new_icon(icon):
-    return QIcon(':/' + icon)
+    return QIcon(icon_path(icon))
 
 
 def themed_icon(icon_name, theme):
@@ -42,7 +32,7 @@ def themed_icon(icon_name, theme):
     from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
 
     base_icon = (icon_name if isinstance(icon_name, QIcon)
-                 else QIcon(':/' + icon_name))
+                 else QIcon(icon_path(icon_name)))
     if theme == Theme.LIGHT:
         return base_icon
 
@@ -55,7 +45,7 @@ def themed_icon(icon_name, theme):
         return base_icon
 
     painter = QPainter(pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(pixmap.rect(), text_color)
     painter.end()
 
@@ -111,7 +101,8 @@ def add_actions(widget, actions):
 
 
 def label_validator():
-    return QRegExpValidator(QRegExp(r'^[^ \t].+'), None)
+    return QRegularExpressionValidator(
+        QRegularExpression(r'^[^ \t].+'), None)
 
 
 class Struct(object):
@@ -142,13 +133,6 @@ def generate_color_by_text(text):
     return QColor(r, g, b, 100)
 
 
-def have_qstring():
-    """py3/qt5 have no QString wrapper; py3 has a native unicode str type."""
-    return False
-
-
-def util_qt_strlistclass():
-    return list
 
 
 def natural_sort(list, key=lambda s:s):
@@ -162,13 +146,8 @@ def natural_sort(list, key=lambda s:s):
     list.sort(key=sort_key)
 
 
-# QT4 has a trimmed method, in QT5 this is called strip
-if QT5:
-    def trimmed(text):
-        return text.strip()
-else:
-    def trimmed(text):
-        return text.trimmed()
+def trimmed(text):
+    return text.strip()
 
 
 def _perpendicular_distance(point, line_start, line_end):

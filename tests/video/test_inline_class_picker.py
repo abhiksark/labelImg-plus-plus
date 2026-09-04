@@ -1,7 +1,7 @@
 # tests/video/test_inline_class_picker.py
-from PyQt5.QtCore import QPointF, Qt
-from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QPushButton
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QPushButton
 
 from labelImgPlusPlus import get_main_app
 from libs.core.sam_types import SamResult
@@ -29,7 +29,7 @@ def test_video_confirmation_creates_manual_anchor_and_undo_removes_track(
         assert not window.video_model.dirty
 
         window.class_picker.edit.setText('car')
-        QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
+        QTest.keyClick(window.class_picker.edit, Qt.Key.Key_Return)
         app.processEvents()
         assert len(window.video_model.tracks) == 1
         observation = next(iter(window.video_model.observations.values()))
@@ -81,12 +81,12 @@ def test_video_sam_box_is_provisional_then_commits_as_manual_anchor(
 
         use_outline = window.class_picker.findChild(
             QPushButton, 'useOutlineButton')
-        QTest.keyClick(use_outline, Qt.Key_Return)
+        QTest.keyClick(use_outline, Qt.Key.Key_Return)
         app.processEvents()
         assert window.class_picker.prompt.text() == 'Choose a class'
 
         window.class_picker.edit.setText('vehicle')
-        QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
+        QTest.keyClick(window.class_picker.edit, Qt.Key.Key_Return)
         app.processEvents()
         track = next(iter(window.video_model.tracks.values()))
         observation = next(iter(window.video_model.observations.values()))
@@ -121,7 +121,7 @@ def test_video_smart_select_rejection_leaves_project_and_undo_unchanged(
         assert window.canvas.provisional_shape is not None
         assert window.class_picker.prompt.text() == 'Use this outline?'
 
-        QTest.keyClick(window.class_picker, Qt.Key_Escape)
+        QTest.keyClick(window.class_picker, Qt.Key.Key_Escape)
         app.processEvents()
         assert window.canvas.provisional_shape is None
         assert window.canvas.shapes == []

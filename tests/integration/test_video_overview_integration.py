@@ -16,8 +16,8 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtWidgets import QApplication
 
 from labelImgPlusPlus import MainWindow
 from libs.core.video_distinctness_worker import DistinctnessRefinementResult

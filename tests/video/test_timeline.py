@@ -2,10 +2,10 @@
 from dataclasses import replace
 
 import pytest
-from PyQt5.QtCore import QSize
-from PyQt5.QtGui import QImage
-from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtWidgets import QAction, QApplication
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QAction, QImage
+from PyQt6.QtTest import QSignalSpy
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.video_decoder import VideoDecoderSession
 from libs.widgets.videoTimelineWidget import (
@@ -20,7 +20,7 @@ _APP = QApplication.instance() or QApplication([])
 def _median_icon_lightness(icon):
     """Return the median lightness of visible icon pixels."""
     image = icon.pixmap(QSize(24, 24)).toImage().convertToFormat(
-        QImage.Format_ARGB32)
+        QImage.Format.Format_ARGB32)
     values = []
     for y in range(image.height()):
         for x in range(image.width()):

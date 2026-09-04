@@ -1,9 +1,9 @@
 # libs/widgets/keypointPanel.py
 """Inline keypoint checklist panel for the label sidebar."""
 
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QPushButton)
-from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt
 
 from libs.core.keypoint_config import get_keypoint_color, get_template
 from libs.utils.dpi import scale_px
@@ -29,7 +29,7 @@ class KeypointPanel(QWidget):
         self._layout.setContentsMargins(4, 4, 4, 4)
         self._layout.setSpacing(2)
         self._count_label = QLabel('0/0 placed')
-        self._count_label.setAlignment(Qt.AlignCenter)
+        self._count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._layout.addWidget(self._count_label)
         self.hide()
 
@@ -56,11 +56,11 @@ class KeypointPanel(QWidget):
 
             status_label = QLabel('\u25cb')
             status_label.setFixedWidth(scale_px(16))
-            status_label.setAlignment(Qt.AlignCenter)
+            status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             name_btn = QPushButton(name.replace('_', ' ').title())
             name_btn.setFlat(True)
-            name_btn.setCursor(Qt.PointingHandCursor)
+            name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             name_btn.clicked.connect(
                 lambda checked, idx=i: self.keypointClicked.emit(idx))
 

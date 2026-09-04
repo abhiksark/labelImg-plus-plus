@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QPointF, QThread, QTimer
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import QPointF, QThread, QTimer
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.image_pipeline import load_image_result
@@ -28,7 +28,7 @@ def _wait(app, predicate, timeout=3):
 
 
 def _image(path, color):
-    image = QImage(64, 48, QImage.Format_RGB32)
+    image = QImage(64, 48, QImage.Format.Format_RGB32)
     image.fill(color)
     assert image.save(path)
 
@@ -206,7 +206,7 @@ def test_cancelled_standalone_open_does_not_advance_generation(tmp_path):
     try:
         with patch.object(
                 window, 'discard_changes_dialog',
-                return_value=QMessageBox.Cancel):
+                return_value=QMessageBox.StandardButton.Cancel):
             assert window.request_open_file(second) is None
         assert window.file_path == first
         assert window._dataset_generation == old_generation
@@ -528,9 +528,9 @@ def test_ultralytics_export_runs_on_background_lane(tmp_path):
         def apply_theme(self, _theme):
             pass
 
-        def exec_(self):
-            from PyQt5.QtWidgets import QDialog
-            return QDialog.Accepted
+        def exec(self):
+            from PyQt6.QtWidgets import QDialog
+            return QDialog.DialogCode.Accepted
 
     try:
         with patch(

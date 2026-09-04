@@ -11,8 +11,8 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtGui import QColor, QImage
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.video_model import VideoModelState
 from libs.core.video_types import ObservationRecord, TrackRecord
@@ -292,7 +292,7 @@ class TestGridRendering(unittest.TestCase):
 
     def test_thumbnail_cache_is_bounded_and_pending_overlay_is_painted(self):
         self.view.set_media_context('clip', 0, 1, 10, 96, 64)
-        image = QImage(96, 64, QImage.Format_RGB32)
+        image = QImage(96, 64, QImage.Format.Format_RGB32)
         image.fill(QColor('#123456'))
         for pts in range(self.view.THUMBNAIL_CACHE_LIMIT + 1):
             self.view.set_thumbnail(pts, image)

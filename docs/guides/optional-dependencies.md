@@ -10,11 +10,12 @@ pip install "labelimgplusplus[video]"
 ```
 
 The extra installs the PyAV line supported by the active Python version,
-NumPy, and headless OpenCV. Python 3.8 uses PyAV 12, Python 3.9 uses PyAV 15,
-Python 3.10 uses PyAV 17, and Python 3.11 or newer uses PyAV 18. The accepted
-local-container matrix is MP4, MOV, MKV, and AVI. Other containers supported by
-the installed FFmpeg/PyAV build may work, but are not part of the compatibility
-contract.
+NumPy, and headless OpenCV. Python 3.10 uses PyAV 17; Python 3.11 through 3.13
+use PyAV 18. labelImg++ 4.0 requires Python 3.10 or newer; Python 3.8 and 3.9
+users must remain on stable 3.5.x. The accepted local-container matrix is MP4,
+MOV, MKV, and AVI. Other containers
+supported by the installed FFmpeg/PyAV build may work, but are not part of the
+compatibility contract.
 
 ## SAM and smart video together
 

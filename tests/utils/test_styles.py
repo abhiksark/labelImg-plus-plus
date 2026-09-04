@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import patch
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from libs.utils import dpi
 from libs.utils.styles import (

@@ -1,9 +1,9 @@
 # libs/widgets/videoTimelineWidget.py
 """PTS-based controls and marker strip for smart-video documents."""
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
     QStyle, QToolButton, QVBoxLayout, QWidget,
 )
@@ -41,7 +41,7 @@ class _MarkerSlider(QSlider):
     """A standard slider with a compact non-interactive marker overlay."""
 
     def __init__(self, parent=None):
-        super().__init__(Qt.Horizontal, parent)
+        super().__init__(Qt.Orientation.Horizontal, parent)
         self.spans = ()
         self.accepted = ()
         self.pending = ()
@@ -59,7 +59,7 @@ class _MarkerSlider(QSlider):
         width = max(1, self.width() - 12)
         left = 6
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         for start, end in self.spans:
             painter.fillRect(
                 left + int(start * width / TIMELINE_MAX), 1,
@@ -101,17 +101,17 @@ class VideoTimelineWidget(QWidget):
         style = self.style()
         self.play_button = QPushButton()
         self.play_button.setAccessibleName('Play or pause video')
-        self.play_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+        self.play_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.play_button.setToolTip('Play/Pause (Ctrl+Space)')
         self.previous_button = QPushButton()
         self.previous_button.setAccessibleName('Previous frame')
         self.previous_button.setIcon(
-            style.standardIcon(QStyle.SP_MediaSkipBackward))
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward))
         self.previous_button.setToolTip('Previous frame (A)')
         self.next_button = QPushButton()
         self.next_button.setAccessibleName('Next frame')
         self.next_button.setIcon(
-            style.standardIcon(QStyle.SP_MediaSkipForward))
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaSkipForward))
         self.next_button.setToolTip('Next frame (D)')
         self.time_edit = QLineEdit('00:00:00.000')
         self.time_edit.setAccessibleName('Presentation time')
@@ -150,7 +150,7 @@ class VideoTimelineWidget(QWidget):
         for button in (
                 self.propagate_all_button, self.propagate_selected_button,
                 self.cancel_propagation_button):
-            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.progress_label = QLabel()
         self.progress_label.setObjectName('videoPropagationProgress')
         self.progress_label.hide()
@@ -208,14 +208,14 @@ class VideoTimelineWidget(QWidget):
             width=scale_px(2), radius=scale_px(4),
             focus=colors['focus']))
         style = self.style()
-        play_icon = (QStyle.SP_MediaPause if self._playing
-                     else QStyle.SP_MediaPlay)
+        play_icon = (QStyle.StandardPixmap.SP_MediaPause if self._playing
+                     else QStyle.StandardPixmap.SP_MediaPlay)
         self.play_button.setIcon(themed_icon(
             style.standardIcon(play_icon), theme))
         self.previous_button.setIcon(themed_icon(
-            style.standardIcon(QStyle.SP_MediaSkipBackward), theme))
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward), theme))
         self.next_button.setIcon(themed_icon(
-            style.standardIcon(QStyle.SP_MediaSkipForward), theme))
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaSkipForward), theme))
 
     def set_propagation_actions(self, all_action, selected_action,
                                 cancel_action):
@@ -260,8 +260,8 @@ class VideoTimelineWidget(QWidget):
 
     def set_playing(self, playing):
         self._playing = bool(playing)
-        icon = (QStyle.SP_MediaPause if self._playing
-                else QStyle.SP_MediaPlay)
+        icon = (QStyle.StandardPixmap.SP_MediaPause if self._playing
+                else QStyle.StandardPixmap.SP_MediaPlay)
         self.play_button.setIcon(themed_icon(
             self.style().standardIcon(icon), self._theme))
 

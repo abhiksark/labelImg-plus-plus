@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QMimeData, QSize, QUrl
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication, QDockWidget, QPushButton, QToolButton
+from PyQt6.QtCore import QMimeData, QSize, QUrl
+from PyQt6.QtGui import QImage
+from PyQt6.QtWidgets import QApplication, QDockWidget, QPushButton, QToolButton
 
 from labelImgPlusPlus import MainWindow
 from libs.core.video_types import DocumentKind
@@ -98,7 +98,7 @@ def test_drop_routing_accepts_exactly_one_supported_local_path(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
     image_path = tmp_path / 'image.png'
-    image = QImage(20, 10, QImage.Format_RGB32)
+    image = QImage(20, 10, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(str(image_path))
     unsupported = tmp_path / 'notes.bin'

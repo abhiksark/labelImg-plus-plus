@@ -13,8 +13,8 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtGui import QImage
+from PyQt6.QtWidgets import QApplication
 
 from libs.formats.annotation_probe import probe
 from libs.formats.pascal_voc_io import PascalVocWriter
@@ -32,7 +32,7 @@ class TestAnnotationProbe(unittest.TestCase):
 
     def _image(self, name='img.png', w=100, h=80, where=None):
         path = os.path.join(where or self.d, name)
-        img = QImage(w, h, QImage.Format_RGB32)
+        img = QImage(w, h, QImage.Format.Format_RGB32)
         img.fill(0xFFFFFF)
         img.save(path)
         return path

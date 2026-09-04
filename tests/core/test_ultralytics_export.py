@@ -4,7 +4,7 @@ import json
 import os
 
 import pytest
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 
 from libs.core.dataset import DatasetSnapshot
 from libs.core.task_coordinator import JobCancelled
@@ -41,7 +41,7 @@ class _Handle:
 
 
 def _image(path, color=0xFFFFFFFF):
-    image = QImage(100, 50, QImage.Format_RGB32)
+    image = QImage(100, 50, QImage.Format.Format_RGB32)
     image.fill(color)
     assert image.save(str(path))
 

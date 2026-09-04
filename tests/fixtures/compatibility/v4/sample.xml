@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<annotation verified="yes">
+  <folder>dataset</folder>
+  <filename>sample.jpg</filename>
+  <path>/sanitized/dataset/sample.jpg</path>
+  <source><database>Unknown</database></source>
+  <size><width>100</width><height>80</height><depth>3</depth></size>
+  <segmented>0</segmented>
+  <object>
+    <name>car</name>
+    <pose>Unspecified</pose>
+    <truncated>0</truncated>
+    <difficult>0</difficult>
+    <bndbox><xmin>30</xmin><ymin>20</ymin><xmax>70</xmax><ymax>60</ymax></bndbox>
+    <polygon>
+      <pt><x>30</x><y>20</y></pt>
+      <pt><x>70</x><y>20</y></pt>
+      <pt><x>60</x><y>60</y></pt>
+      <pt><x>35</x><y>55</y></pt>
+    </polygon>
+  </object>
+</annotation>

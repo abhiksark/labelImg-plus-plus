@@ -4,12 +4,8 @@
 
 from enum import Enum
 
-try:
-    from PyQt5.QtGui import QColor, QPen, QPainterPath, QFont
-    from PyQt5.QtCore import QPointF, Qt
-except ImportError:
-    from PyQt4.QtGui import QColor, QPen, QPainterPath, QFont
-    from PyQt4.QtCore import QPointF, Qt
+from PyQt6.QtGui import QColor, QPen, QPainterPath, QFont
+from PyQt6.QtCore import QPointF, Qt
 
 from libs.utils import distance
 import sys
@@ -251,7 +247,7 @@ class Shape(object):
         pen = QPen(color)
         pen.setWidth(max(1, int(round(2.0 / self.scale))))
         if render_state in ('interpolation', 'pending'):
-            pen.setStyle(Qt.DashLine)
+            pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
 
         painter.drawPath(line_path)

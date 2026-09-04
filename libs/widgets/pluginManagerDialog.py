@@ -4,9 +4,9 @@ from functools import partial
 from html import escape
 from urllib.parse import urlparse
 
-from PyQt5.QtCore import QThread, Qt
-from PyQt5.QtWidgets import (
-    QAction,
+from PyQt6.QtCore import QThread, Qt
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QHBoxLayout,
@@ -225,15 +225,15 @@ class PluginManagerDialog(QDialog):
 
         self.table = QTableWidget(0, len(self._COLUMNS), self)
         self.table.setHorizontalHeaderLabels(self._COLUMNS)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeToContents)
+            0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeToContents)
+            1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.Stretch)
+            2, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
 
         self.restart_notice = QLabel("")
@@ -282,7 +282,7 @@ class PluginManagerDialog(QDialog):
             metadata = record.metadata
             display = metadata.display_name if metadata else record.id
             plugin_item = QTableWidgetItem(display)
-            plugin_item.setData(Qt.UserRole, record)
+            plugin_item.setData(Qt.ItemDataRole.UserRole, record)
             plugin_item.setToolTip(record.id)
             self.table.setItem(row, 0, plugin_item)
             provider = record.provider or "Unavailable"
@@ -300,10 +300,10 @@ class PluginManagerDialog(QDialog):
             self.table.setItem(row, 4, QTableWidgetItem(api))
             self.table.setItem(row, 5, QTableWidgetItem(capabilities))
             enabled = QTableWidgetItem("")
-            enabled.setData(Qt.UserRole, record)
+            enabled.setData(Qt.ItemDataRole.UserRole, record)
             enabled.setFlags(
-                enabled.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            enabled.setCheckState(Qt.Checked if record.enabled else Qt.Unchecked)
+                enabled.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            enabled.setCheckState(Qt.CheckState.Checked if record.enabled else Qt.CheckState.Unchecked)
             self.table.setItem(row, 6, enabled)
             self.table.setItem(
                 row, 7, QTableWidgetItem(
@@ -322,13 +322,13 @@ class PluginManagerDialog(QDialog):
     def _enabled_changed(self, item):
         if item.column() != 6:
             return
-        record = item.data(Qt.UserRole)
-        enabled = item.checkState() == Qt.Checked
+        record = item.data(Qt.ItemDataRole.UserRole)
+        enabled = item.checkState() == Qt.CheckState.Checked
         try:
             self.manager.set_enabled(record.id, enabled)
         except Exception as exc:
             self.table.blockSignals(True)
-            item.setCheckState(Qt.Checked if record.enabled else Qt.Unchecked)
+            item.setCheckState(Qt.CheckState.Checked if record.enabled else Qt.CheckState.Unchecked)
             self.table.blockSignals(False)
             QMessageBox.warning(self, "Plugin settings", str(exc))
             return
@@ -397,7 +397,7 @@ class PluginManagerDialog(QDialog):
         if row < 0 or row >= self.table.rowCount():
             return None
         item = self.table.item(row, 0)
-        return item.data(Qt.UserRole) if item is not None else None
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
 
 
 __all__ = ["PluginManagerDialog", "QtPluginCommandHost"]

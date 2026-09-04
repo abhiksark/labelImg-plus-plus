@@ -5,8 +5,8 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QByteArray
-from PyQt5.QtWidgets import QApplication, QDockWidget, QToolBar
+from PyQt6.QtCore import QByteArray
+from PyQt6.QtWidgets import QApplication, QDockWidget, QToolBar
 
 from labelImgPlusPlus import MainWindow
 from libs.core.settings import Settings

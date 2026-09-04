@@ -24,13 +24,13 @@ labelImg++ uses a properties file-based internationalization system with locale-
 |  +--------------------------------------------------+   |
 |  |  Fallback Chain (most to least specific)          |   |
 |  |                                                    |   |
-|  |  :/strings-zh-CN  (locale specific)               |   |
+|  |  strings-zh-CN.properties (locale specific)         |   |
 |  |       |                                            |   |
 |  |       v                                            |   |
-|  |  :/strings-zh     (language only)                 |   |
+|  |  strings-zh.properties    (language only)           |   |
 |  |       |                                            |   |
 |  |       v                                            |   |
-|  |  :/strings        (base/English)                  |   |
+|  |  strings.properties       (base/English)            |   |
 |  +--------------------------------------------------+   |
 |                                                          |
 +----------------------------------------------------------+
@@ -39,14 +39,15 @@ labelImg++ uses a properties file-based internationalization system with locale-
 ## File Structure
 
 ```
-resources/
-├── strings/
-│   ├── strings.properties        # Base (English)
-│   ├── strings-zh-CN.properties  # Simplified Chinese
-│   ├── strings-zh-TW.properties  # Traditional Chinese
-│   └── strings-ja-JP.properties  # Japanese
-└── resources.qrc                 # Qt resource file
+libs/assets/strings/
+├── strings.properties        # Base (English)
+├── strings-zh-CN.properties  # Simplified Chinese
+├── strings-zh-TW.properties  # Traditional Chinese
+└── strings-ja-JP.properties  # Japanese
 ```
+
+The files are UTF-8 package data listed explicitly in `STRING_FILES` in
+`libs/utils/assets.py`.
 
 ## String File Format
 
@@ -75,7 +76,7 @@ quitApp=Quit application
 
 ### Step 1: Create Properties File
 
-Create `resources/strings/strings-XX-YY.properties` where:
+Create `libs/assets/strings/strings-XX-YY.properties` where:
 - `XX` = language code (e.g., `fr`, `de`, `es`)
 - `YY` = country code (optional, e.g., `FR`, `DE`, `ES`)
 
@@ -86,7 +87,7 @@ Example for French: `strings-fr-FR.properties`
 Start with the base English file:
 
 ```bash
-cp resources/strings/strings.properties resources/strings/strings-fr-FR.properties
+cp libs/assets/strings/strings.properties libs/assets/strings/strings-fr-FR.properties
 ```
 
 Translate each value:
@@ -105,34 +106,23 @@ crtBox=Créer un rectangle
 delBox=Supprimer le rectangle
 ```
 
-### Step 3: Update resources.qrc
+### Step 3: Add the Bundle to the Catalog
 
-Add your file to `resources.qrc`:
+Add the semantic bundle name and relative filename to `STRING_FILES` in
+`libs/utils/assets.py`. Locale lookup loads `strings` first, then an available
+language bundle, then the available language-territory bundle. Later files
+override the same key from earlier files.
 
-```xml
-<RCC>
-    <qresource prefix="/">
-        <!-- ... other resources ... -->
-    </qresource>
-    <qresource prefix="/strings">
-        <file alias="">strings/strings.properties</file>
-        <file alias="-zh-CN">strings/strings-zh-CN.properties</file>
-        <file alias="-zh-TW">strings/strings-zh-TW.properties</file>
-        <file alias="-ja-JP">strings/strings-ja-JP.properties</file>
-        <file alias="-fr-FR">strings/strings-fr-FR.properties</file>  <!-- Add -->
-    </qresource>
-</RCC>
-```
-
-### Step 4: Rebuild Resources
+### Step 4: Verify Packaged Assets
 
 ```bash
-make qt5py3
-# Or manually:
-pyrcc5 -o libs/resources.py resources.qrc
+python3 labelImgPlusPlus.py --verify-assets
 ```
 
-### Step 5: Test
+There is no RCC compilation step. Source checkouts, wheels, and frozen
+applications all read the same UTF-8 files.
+
+### Step 5: Test the Locale
 
 ```bash
 # Set locale and run
@@ -142,79 +132,46 @@ labelimgpp  # or: python labelImgPlusPlus.py from source
 
 ## StringBundle Implementation
 
-**File:** `libs/stringBundle.py` (lines 23-78)
+**File:** `libs/utils/stringBundle.py`
+
+`StringBundle.get_bundle()` reads package data through
+`libs.utils.assets.read_string_bundle()`. It always requires the base
+`strings.properties` file and treats missing locale-specific bundles as a
+normal fallback:
 
 ```python
 class StringBundle:
-    """Loads and provides localized strings."""
-
-    __create_key = object()  # Private key for factory pattern
-
-    def __init__(self, create_key, locale_str):
-        assert(create_key == StringBundle.__create_key)
-        self.id_to_message = {}
-        paths = self.__create_lookup_fallback_list(locale_str)
-        for path in paths:
-            self.__load_bundle(path)
-
     @classmethod
     def get_bundle(cls, locale_str=None):
-        """Get StringBundle for current or specified locale.
-
-        Args:
-            locale_str: Override locale (e.g., 'zh_CN', 'ja_JP')
-
-        Returns:
-            StringBundle instance with loaded strings
-        """
         if locale_str is None:
-            try:
-                locale_str = locale.getdefaultlocale()[0]
-            except:
-                locale_str = 'en'
-        return StringBundle(cls.__create_key, locale_str)
+            locale_str = locale.getlocale()[0] or os.getenv('LANG')
+        return cls(cls.__create_key, locale_str)
 
-    def get_string(self, string_id):
-        """Get localized string by ID.
+    def __create_lookup_fallback_list(self, locale_str):
+        bundle_names = ['strings']
+        # zh_CN -> strings, strings-zh, strings-zh-CN
+        tags = [
+            tag for tag in re.split('[^a-zA-Z]', locale_str or '') if tag
+        ][:2]
+        if tags:
+            bundle_names.append('strings-' + tags[0])
+        if len(tags) > 1:
+            bundle_names.append('strings-' + tags[0] + '-' + tags[1])
+        return bundle_names
 
-        Args:
-            string_id: Key from properties file
-
-        Returns:
-            Localized string value
-
-        Raises:
-            AssertionError: If string_id not found
-        """
-        assert(string_id in self.id_to_message), \
-            "Missing string id: " + string_id
-        return self.id_to_message[string_id]
+    def __load_bundle(self, bundle_name, required=False):
+        contents = read_string_bundle(bundle_name, required=required)
+        if contents is None:
+            return
+        for line in contents.splitlines():
+            key_value = line.split('=', 1)
+            key = key_value[0].strip()
+            value = (key_value[1] if len(key_value) > 1 else '').strip()
+            self.id_to_message[key] = value.strip('\"')
 ```
 
-### Fallback Chain Creation
-
-```python
-def __create_lookup_fallback_list(self, locale_str):
-    """Create list of paths to search, most to least specific.
-
-    Example for 'zh_CN':
-        [':/strings', ':/strings-zh', ':/strings-zh-CN']
-
-    Strings are loaded in order, so more specific overrides less.
-    """
-    result_paths = []
-    base_path = ":/strings"
-    result_paths.append(base_path)
-
-    if locale_str is not None:
-        # Split locale into tags (zh_CN -> ['zh', 'CN'])
-        tags = re.split('[^a-zA-Z]', locale_str)
-        for tag in tags:
-            last_path = result_paths[-1]
-            result_paths.append(last_path + '-' + tag)
-
-    return result_paths
-```
+Splitting only at the first `=` preserves values containing `=`. Decoding is
+always UTF-8.
 
 ## Using Strings in Code
 
@@ -222,7 +179,7 @@ def __create_lookup_fallback_list(self, locale_str):
 
 ```python
 # Get the string helper function
-from libs.stringBundle import StringBundle
+from libs.utils.stringBundle import StringBundle
 
 string_bundle = StringBundle.get_bundle()
 get_str = string_bundle.get_string
@@ -240,7 +197,7 @@ my_action = action(
 ### In Other Files
 
 ```python
-from libs.stringBundle import StringBundle
+from libs.utils.stringBundle import StringBundle
 
 def my_function():
     bundle = StringBundle.get_bundle()
@@ -290,7 +247,7 @@ Current strings in `strings.properties`:
 
 ### Step 1: Add to Base File
 
-Edit `resources/strings/strings.properties`:
+Edit `libs/assets/strings/strings.properties`:
 
 ```properties
 # Add new strings at the end or in appropriate section
@@ -312,11 +269,11 @@ myNewFeature=新機能
 myNewFeatureDetail=新機能の説明
 ```
 
-### Step 3: Rebuild and Test
+### Step 3: Verify and Test
 
 ```bash
-make qt5py3
-labelimgpp  # or: python labelImgPlusPlus.py from source
+python3 labelImgPlusPlus.py --verify-assets
+labelimgpp
 ```
 
 ## Testing Translations
@@ -330,7 +287,7 @@ python labelImgPlusPlus.py
 
 # Or programmatically override
 python -c "
-from libs.stringBundle import StringBundle
+from libs.utils.stringBundle import StringBundle
 bundle = StringBundle.get_bundle('zh_CN')
 print(bundle.get_string('openFile'))  # Should print Chinese
 "
@@ -353,13 +310,13 @@ def load_properties(path):
     return props
 
 # Load base
-base = load_properties('resources/strings/strings.properties')
+base = load_properties('libs/assets/strings/strings.properties')
 print(f"Base has {len(base)} keys")
 
 # Check translations
-for filename in os.listdir('resources/strings'):
+for filename in os.listdir('libs/assets/strings'):
     if filename.startswith('strings-') and filename.endswith('.properties'):
-        path = f'resources/strings/{filename}'
+        path = f'libs/assets/strings/{filename}'
         trans = load_properties(path)
 
         missing = set(base.keys()) - set(trans.keys())
@@ -385,16 +342,16 @@ for filename in os.listdir('resources/strings'):
    ```bash
    export LANG=zh_CN.UTF-8
    ```
-3. Rebuild resources:
+3. Validate the asset catalog and relaunch:
    ```bash
-   make qt5py3
+   python3 labelImgPlusPlus.py --verify-assets
    ```
 
 ### String Not Found Error
 
 **Cause:** Key missing from properties file.
 
-**Solution:** Add key to `strings.properties` and rebuild.
+**Solution:** Add the key to `strings.properties`; no compilation is required.
 
 ### Translation Not Applied
 
@@ -402,7 +359,7 @@ for filename in os.listdir('resources/strings'):
 
 **Debug:**
 ```python
-from libs.stringBundle import StringBundle
+from libs.utils.stringBundle import StringBundle
 import locale
 print(f"System locale: {locale.getdefaultlocale()}")
 
@@ -414,8 +371,8 @@ print(f"Loaded strings: {len(bundle.id_to_message)}")
 
 - [ ] Created `strings-XX-YY.properties` file
 - [ ] Translated all keys from base file
-- [ ] Updated `resources.qrc` with correct alias
-- [ ] Rebuilt resources with `make qt5py3`
+- [ ] Added the bundle to `STRING_FILES`
+- [ ] Passed `python3 labelImgPlusPlus.py --verify-assets`
 - [ ] Tested with target locale
 - [ ] Verified no missing keys
 - [ ] Checked character display

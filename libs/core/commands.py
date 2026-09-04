@@ -6,10 +6,7 @@ This module provides undoable command classes for annotation actions.
 
 from abc import ABC, abstractmethod
 
-try:
-    from PyQt5.QtCore import QPointF
-except ImportError:
-    from PyQt4.QtCore import QPointF
+from PyQt6.QtCore import QPointF
 
 
 def _rebuild_spatial(canvas):

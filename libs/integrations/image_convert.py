@@ -6,12 +6,12 @@ a 4-byte boundary, a classic source of corrupted-image bugs.
 """
 
 import numpy as np
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 
 
 def qimage_to_rgb(qimage: QImage) -> np.ndarray:
     """Return an (H, W, 3) uint8 array in RGB channel order."""
-    img = qimage.convertToFormat(QImage.Format_RGB888)
+    img = qimage.convertToFormat(QImage.Format.Format_RGB888)
     width, height = img.width(), img.height()
     bytes_per_line = img.bytesPerLine()
     ptr = img.bits()

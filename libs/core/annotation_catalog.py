@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import os
 import time
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from libs.core.profiling import recorder as trace_recorder
 from libs.core.task_coordinator import JobPriority

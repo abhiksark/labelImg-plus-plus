@@ -1,8 +1,8 @@
 import threading
 import time
 
-from PyQt5.QtCore import QCoreApplication
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.task_coordinator import JobPriority, TaskCoordinator
 

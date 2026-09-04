@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtGui import QImage
+from PyQt6.QtWidgets import QApplication
 app = QApplication.instance() or QApplication(sys.argv)
 
 from libs.formats.yolo_seg_io import YOLOSegWriter, YOLOSegReader
@@ -80,7 +80,7 @@ class TestYOLOSegWriter(unittest.TestCase):
             indices = [int(line.split()[0]) for line in f]
         self.assertEqual(indices, [2, 0, 2, 3])
 
-        image = QImage(100, 100, QImage.Format_RGB32)
+        image = QImage(100, 100, QImage.Format.Format_RGB32)
         old_reader = YOLOSegReader(old_txt_path, image, classes_path)
         new_reader = YOLOSegReader(self.out_path, image, classes_path)
         self.assertEqual([shape[0] for shape in old_reader.get_shapes()],
@@ -93,7 +93,7 @@ class TestYOLOSegReader(unittest.TestCase):
 
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
-        self.image = QImage(200, 100, QImage.Format_RGB32)
+        self.image = QImage(200, 100, QImage.Format.Format_RGB32)
 
     def test_read_axis_aligned_rectangle(self):
         """4-point axis-aligned shapes should be detected as rectangles."""

@@ -1,11 +1,11 @@
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 
 from libs.core.save_pipeline import SaveRequest, write_save_request
 from libs.formats.labelFile import LabelFileFormat
 
 
 def _image(path):
-    image = QImage(20, 10, QImage.Format_RGB32)
+    image = QImage(20, 10, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(path)
 

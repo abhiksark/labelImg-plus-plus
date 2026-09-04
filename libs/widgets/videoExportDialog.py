@@ -1,6 +1,6 @@
 """Export selection dialog for smart-video projects."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox,
     QVBoxLayout, QWidget,
@@ -73,7 +73,7 @@ class VideoExportDialog(QDialog):
         form.addRow('JPEG quality', self.jpeg_quality)
         form.addRow('Annotations', self.annotation_format)
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)

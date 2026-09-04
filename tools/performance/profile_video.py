@@ -24,8 +24,8 @@ if REPOSITORY_ROOT not in sys.path:
 if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QEventLoop, QPointF, QTimer  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import QEventLoop, QPointF, QTimer  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from libs.core.image_pipeline import (  # noqa: E402
     FrameCache, load_image_result,
@@ -109,7 +109,7 @@ def _metadata(workload):
 def _wait_for(application, predicate, timeout=60.0):
     deadline = time.monotonic() + timeout
     while not predicate():
-        application.processEvents(QEventLoop.AllEvents, 10)
+        application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
         if time.monotonic() >= deadline:
             raise RuntimeError('timed out waiting for video worker')
 

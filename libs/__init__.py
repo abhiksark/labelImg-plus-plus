@@ -3,7 +3,7 @@
 
 import importlib
 
-__version__ = '4.0.0rc0'
+__version__ = '4.0.0rc1'
 __version_info__ = tuple(__version__.split('.'))
 
 __all__ = ['core', 'formats', 'utils', 'widgets']

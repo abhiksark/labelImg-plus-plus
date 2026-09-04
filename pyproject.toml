@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "labelimgplusplus"
-version = "4.0.0rc0"
+version = "4.0.0rc1"
 description = "labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images"
 readme = "README.rst"
 license = {file = "LICENSE"}
 authors = [
     {name = "Abhik Sarkar", email = "abhiksark@gmail.com"}
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 keywords = ["labelImg", "labelimgpp", "labelimgplusplus", "annotation", "deeplearning", "image-annotation", "bounding-box", "gallery"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -19,8 +19,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -29,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 dependencies = [
-    "pyqt5",
+    "PyQt6>=6.11,<6.12",
     "lxml",
 ]
 
@@ -40,8 +38,6 @@ sam = [
     "opencv-python-headless>=4.8,<6",
 ]
 video = [
-    "av>=12.3,<13; python_version == '3.8'",
-    "av>=15.1,<16; python_version == '3.9'",
     "av>=17.1,<18; python_version == '3.10'",
     "av>=18,<19; python_version >= '3.11'",
     "numpy",
@@ -68,6 +64,15 @@ py-modules = ["labelImgPlusPlus"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["libs*", "labelimgplusplus*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-"*" = ["data/*.txt", "resources/**/*"]
+libs = [
+    "data/*.txt",
+    "assets/icons/*.icns",
+    "assets/icons/*.png",
+    "assets/icons/*.svg",
+    "assets/icons/feather/*.svg",
+    "assets/strings/*.properties",
+    "assets/licenses/*.txt",
+]

@@ -4,8 +4,8 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QAction
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QAction
 
 from labelImgPlusPlus import get_main_app
 
@@ -75,7 +75,7 @@ def test_menus_and_shortcuts_survive_one_event_loop_turn():
     app, window = get_main_app([])
     try:
         QTimer.singleShot(0, app.quit)
-        app.exec_()
+        app.exec()
 
         entries = window.command_bar.application_menu.actions()
         assert len(entries) == 6
@@ -86,7 +86,7 @@ def test_menus_and_shortcuts_survive_one_event_loop_turn():
 
         for name in ('undo', 'redo', 'galleryMode', 'deleteImg'):
             action = getattr(window.actions, name)
-            assert action.associatedWidgets(), \
+            assert action.associatedObjects(), \
                 '%s lost every associated widget, so its shortcut is dead' % name
     finally:
         window.dirty = False
@@ -126,7 +126,7 @@ def test_command_bar_syncs_document_position_dirty_state_and_actions():
         assert window.command_bar.primary_button.isVisible()
         assert window.command_bar.overflow_button.geometry().right() < \
             window.command_bar.width()
-        assert window.command_bar.save_button.focusPolicy() == Qt.StrongFocus
+        assert window.command_bar.save_button.focusPolicy() == Qt.FocusPolicy.StrongFocus
     finally:
         window.dirty = False
         window.close()

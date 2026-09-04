@@ -3,8 +3,8 @@ import threading
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import QPointF, Qt
-from PyQt5.QtTest import QTest
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtTest import QTest
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.shape import Shape, ShapeType
@@ -96,11 +96,11 @@ def test_frame_navigation_preserves_manual_zoom_and_pan(tmp_path, make_video):
         window.set_zoom(400)
         app.processEvents()
         expected = {}
-        for orientation in (Qt.Horizontal, Qt.Vertical):
-            bar = window.scroll_bars[orientation]
+        for orientation in (Qt.Orientation.Horizontal, Qt.Orientation.Vertical):
+            bar = window.scroll_bars[orientation.value]
             bar.setRange(0, 200)
             bar.setValue(100)
-            expected[orientation] = bar.value()
+            expected[orientation.value] = bar.value()
 
         first_pts = window.current_video_frame_ref.pts
         window.request_next_video_frame()
@@ -166,11 +166,11 @@ def test_ctrl_space_shortcut_toggles_playback(tmp_path, make_video):
         window.activateWindow()
         app.processEvents()
         window.canvas.setFocus()
-        QTest.keyClick(window.canvas, Qt.Key_Space, Qt.ControlModifier)
+        QTest.keyClick(window.canvas, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
         assert window._video_playback_timer.isActive()
         assert window.video_timeline._playing
 
-        QTest.keyClick(window.canvas, Qt.Key_Space, Qt.ControlModifier)
+        QTest.keyClick(window.canvas, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
         assert not window._video_playback_timer.isActive()
         assert not window.video_timeline._playing
     finally:
@@ -183,9 +183,9 @@ def test_image_video_mode_transitions_reconfigure_timeline_and_cache(
         tmp_path, make_video):
     app, window = get_main_app()
     video = make_video(tmp_path / 'clip.mp4')
-    from PyQt5.QtGui import QImage
+    from PyQt6.QtGui import QImage
     image_path = str(tmp_path / 'image.png')
-    image = QImage(32, 24, QImage.Format_RGB32)
+    image = QImage(32, 24, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(image_path)
     try:

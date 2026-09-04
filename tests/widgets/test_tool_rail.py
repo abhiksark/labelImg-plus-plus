@@ -5,8 +5,9 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtWidgets import QAction, QApplication, QWidget
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from libs.widgets.toolRail import AnnotationToolRail
 from libs.widgets.workspaceInspector import (
@@ -41,7 +42,7 @@ def test_rail_has_fixed_logical_geometry_and_exclusive_actions():
         assert button.minimumSize() == QSize(scale_px(40), scale_px(40))
         assert button.maximumSize() == QSize(scale_px(40), scale_px(40))
         assert button.iconSize() == QSize(scale_px(20), scale_px(20))
-        assert button.focusPolicy() == Qt.StrongFocus
+        assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
     assert 'QToolButton:focus' in rail.styleSheet()
 
 
@@ -83,8 +84,8 @@ def test_inspector_actions_have_names_and_keyboard_focus_treatment():
     inspector = WorkspaceInspector(QWidget(), QWidget())
     try:
         assert button.accessibleName() == 'Accept Next'
-        assert button.focusPolicy() == Qt.StrongFocus
-        assert inspector.collapse_button.focusPolicy() == Qt.StrongFocus
+        assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        assert inspector.collapse_button.focusPolicy() == Qt.FocusPolicy.StrongFocus
         assert inspector.collapse_button.accessibleName() == \
             'Collapse inspector'
         assert 'QToolButton:focus' in inspector.styleSheet()

@@ -19,9 +19,9 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
-from PyQt5.QtCore import QSize
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QImage
+from PyQt6.QtWidgets import QApplication
 app = QApplication.instance() or QApplication(sys.argv)
 
 from libs.formats import annotation_loader
@@ -81,7 +81,7 @@ class TestLoadYolo(unittest.TestCase):
     def test_uses_original_image_size_over_display_image(self):
         """Normalized coords must convert against original_image_size, not the
         (possibly downscaled) display image — the dedup'd MockImage behavior."""
-        tiny_display = QImage(10, 10, QImage.Format_RGB32)
+        tiny_display = QImage(10, 10, QImage.Format.Format_RGB32)
         loaded = annotation_loader.load_yolo(
             self.txt_path, tiny_display,
             original_image_size=QSize(400, 200))  # width=400, height=200
@@ -95,7 +95,7 @@ class TestLoadYolo(unittest.TestCase):
         self.assertEqual(points[2], (300, 150))
 
     def test_falls_back_to_display_image_when_no_original_size(self):
-        img = QImage(200, 100, QImage.Format_RGB32)  # width=200, height=100
+        img = QImage(200, 100, QImage.Format.Format_RGB32)  # width=200, height=100
         loaded = annotation_loader.load_yolo(self.txt_path, img,
                                              original_image_size=None)
         points = loaded.shapes[0][1]
@@ -116,7 +116,7 @@ class TestLoadYoloSeg(unittest.TestCase):
             f.write('0 0.25 0.25 0.75 0.25 0.75 0.75 0.25 0.75\n')
 
     def test_uses_original_image_size(self):
-        tiny_display = QImage(10, 10, QImage.Format_RGB32)
+        tiny_display = QImage(10, 10, QImage.Format.Format_RGB32)
         loaded = annotation_loader.load_yolo_seg(
             self.txt_path, tiny_display,
             original_image_size=QSize(400, 200))

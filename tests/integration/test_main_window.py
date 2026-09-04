@@ -21,10 +21,10 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtCore import QPointF, Qt, QEvent  # noqa: E402
-from PyQt5.QtGui import QImage, QMouseEvent  # noqa: E402
-from PyQt5.QtTest import QTest  # noqa: E402
-from PyQt5.QtWidgets import QMessageBox, QToolButton  # noqa: E402
+from PyQt6.QtCore import QPointF, Qt, QEvent  # noqa: E402
+from PyQt6.QtGui import QImage, QMouseEvent  # noqa: E402
+from PyQt6.QtTest import QTest  # noqa: E402
+from PyQt6.QtWidgets import QMessageBox, QToolButton  # noqa: E402
 
 from labelImgPlusPlus import get_main_app  # noqa: E402
 from libs.core.shape import Shape  # noqa: E402
@@ -41,7 +41,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
         cls.temp_dir = tempfile.mkdtemp()
         # Create test images
         cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
-        img = QImage(100, 100, QImage.Format_RGB32)
+        img = QImage(100, 100, QImage.Format.Format_RGB32)
         img.fill(0xFFFFFF)
         img.save(cls.test_image_path)
 
@@ -57,7 +57,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
     def _create_test_image(self, filename):
         path = os.path.join(self.temp_dir, filename)
-        image = QImage(100, 100, QImage.Format_RGB32)
+        image = QImage(100, 100, QImage.Format.Format_RGB32)
         image.fill(0xFFFFFF)
         self.assertTrue(image.save(path))
         return path
@@ -158,7 +158,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
             self.win.check_label_consistency()
 
         dialog.fix_requested.connect.assert_not_called()
-        dialog.exec_.assert_called_once_with()
+        dialog.exec.assert_called_once_with()
 
     def test_reset_all_relaunches_with_python_interpreter(self):
         """reset_all must relaunch through sys.executable, not exec the .py.
@@ -171,7 +171,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
                 patch.object(self.win, 'close', return_value=True), \
                 patch.object(self.win.settings, 'reset'), \
                 patch('labelImgPlusPlus.QMessageBox.warning',
-                      return_value=QMessageBox.Yes), \
+                      return_value=QMessageBox.StandardButton.Yes), \
                 patch('labelImgPlusPlus.QProcess') as mock_proc:
             instance = mock_proc.return_value
             self.assertTrue(self.win.reset_all())
@@ -186,7 +186,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         with patch.object(self.win, 'may_continue', return_value=True), \
                 patch('labelImgPlusPlus.QMessageBox.warning',
-                      return_value=QMessageBox.Cancel) as confirm, \
+                      return_value=QMessageBox.StandardButton.Cancel) as confirm, \
                 patch.object(self.win.settings, 'reset') as reset, \
                 patch.object(self.win, 'close') as close, \
                 patch('labelImgPlusPlus.QProcess') as process:
@@ -194,7 +194,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         confirm.assert_called_once()
         # Cancel must be the default button, so Enter cannot wipe settings.
-        self.assertEqual(confirm.call_args.args[-1], QMessageBox.Cancel)
+        self.assertEqual(confirm.call_args.args[-1], QMessageBox.StandardButton.Cancel)
         reset.assert_not_called()
         close.assert_not_called()
         process.assert_not_called()
@@ -253,7 +253,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
                     patch.object(self.win, 'close', side_effect=close_window) \
                     as close, \
                     patch('labelImgPlusPlus.QMessageBox.warning',
-                          return_value=QMessageBox.Yes), \
+                          return_value=QMessageBox.StandardButton.Yes), \
                     patch('labelImgPlusPlus.QProcess') as process:
                 self.assertTrue(self.win.reset_all())
 
@@ -290,7 +290,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
         work_dir = tempfile.mkdtemp()
         try:
             img_path = os.path.join(work_dir, 'pic.png')
-            img = QImage(80, 60, QImage.Format_RGB32)
+            img = QImage(80, 60, QImage.Format.Format_RGB32)
             img.fill(0xFFFFFF)
             img.save(img_path)
 
@@ -323,11 +323,11 @@ class TestMainWindowFileOperations(unittest.TestCase):
     def test_delete_image_decline_keeps_current_image(self):
         """Declining the safe-default confirmation changes no state."""
         from unittest.mock import patch
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
 
         self.win.load_file(self.test_image_path)
         with patch('labelImgPlusPlus.QMessageBox.warning',
-                   return_value=QMessageBox.No) as confirm, \
+                   return_value=QMessageBox.StandardButton.No) as confirm, \
                 patch.object(self.win, 'may_continue') as may_continue, \
                 patch('labelImgPlusPlus.os.remove') as remove, \
                 patch.object(self.win, 'import_dir_images') as reload_images:
@@ -335,7 +335,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
 
         self.assertTrue(os.path.exists(self.test_image_path))
         self.assertEqual(self.win.file_path, self.test_image_path)
-        self.assertEqual(confirm.call_args.args[-1], QMessageBox.No)
+        self.assertEqual(confirm.call_args.args[-1], QMessageBox.StandardButton.No)
         may_continue.assert_not_called()
         remove.assert_not_called()
         reload_images.assert_not_called()
@@ -343,12 +343,12 @@ class TestMainWindowFileOperations(unittest.TestCase):
     def test_delete_image_dirty_cancel_keeps_current_image(self):
         """Cancelling dirty-state handling prevents removal and reload."""
         from unittest.mock import patch
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
 
         self.win.load_file(self.test_image_path)
         self.win.set_dirty()
         with patch('labelImgPlusPlus.QMessageBox.warning',
-                   return_value=QMessageBox.Yes), \
+                   return_value=QMessageBox.StandardButton.Yes), \
                 patch.object(self.win, 'may_continue',
                              return_value=False) as may_continue, \
                 patch('labelImgPlusPlus.os.remove') as remove, \
@@ -365,7 +365,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
     def test_delete_image_success_clears_discarded_dirty_state(self):
         """A deleted dirty image cannot prompt again while reloading."""
         from unittest.mock import patch
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
 
         delete_path = self._create_test_image('delete_success.png')
         self.win.set_clean()
@@ -377,7 +377,7 @@ class TestMainWindowFileOperations(unittest.TestCase):
         # Confirm deletion, then choose No in the unsaved-changes dialog to
         # discard edits. No third warning should appear during directory reload.
         with patch('labelImgPlusPlus.QMessageBox.warning',
-                   side_effect=[QMessageBox.Yes, QMessageBox.No]) as warning:
+                   side_effect=[QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No]) as warning:
             self.assertTrue(self.win.delete_image())
 
         self.assertFalse(os.path.exists(delete_path))
@@ -388,12 +388,12 @@ class TestMainWindowFileOperations(unittest.TestCase):
     def test_delete_image_remove_failure_preserves_state(self):
         """Filesystem removal errors are reported without reloading state."""
         from unittest.mock import patch
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
 
         self.win.load_file(self.test_image_path)
         self.win.set_dirty()
         with patch('labelImgPlusPlus.QMessageBox.warning',
-                   return_value=QMessageBox.Yes), \
+                   return_value=QMessageBox.StandardButton.Yes), \
                 patch.object(self.win, 'may_continue', return_value=True), \
                 patch('labelImgPlusPlus.os.remove',
                       side_effect=OSError('permission denied')) as remove, \
@@ -411,11 +411,11 @@ class TestMainWindowFileOperations(unittest.TestCase):
     def test_may_continue_proceeds_after_successful_save(self):
         """Choosing Save permits navigation only when the save succeeds."""
         from unittest.mock import patch
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
 
         self.win.set_dirty()
         with patch.object(self.win, 'discard_changes_dialog',
-                          return_value=QMessageBox.Yes), \
+                          return_value=QMessageBox.StandardButton.Yes), \
                 patch.object(self.win, 'save_file', return_value=True) as save:
             self.assertTrue(self.win.may_continue())
 
@@ -424,11 +424,11 @@ class TestMainWindowFileOperations(unittest.TestCase):
     def test_may_continue_stays_when_save_fails(self):
         """Choosing Save must not discard edits when the save fails."""
         from unittest.mock import patch
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
 
         self.win.set_dirty()
         with patch.object(self.win, 'discard_changes_dialog',
-                          return_value=QMessageBox.Yes), \
+                          return_value=QMessageBox.StandardButton.Yes), \
                 patch.object(self.win, 'save_file', return_value=False) as save:
             self.assertFalse(self.win.may_continue())
 
@@ -573,7 +573,7 @@ class TestRecursiveCentralAnnotationPaths(unittest.TestCase):
             image_dir = os.path.join(self.root, directory)
             os.makedirs(image_dir)
             image_path = os.path.join(image_dir, 'frame.png')
-            image = QImage(100, 100, QImage.Format_RGB32)
+            image = QImage(100, 100, QImage.Format.Format_RGB32)
             image.fill(0xFFFFFF)
             self.assertTrue(image.save(image_path))
             self.images.append(image_path)
@@ -760,7 +760,7 @@ class TestMainWindowNavigation(unittest.TestCase):
         cls.image_paths = []
         for i in range(3):
             path = os.path.join(cls.temp_dir, f'image_{i}.png')
-            img = QImage(100, 100, QImage.Format_RGB32)
+            img = QImage(100, 100, QImage.Format.Format_RGB32)
             img.fill(0xFFFFFF)
             img.save(path)
             cls.image_paths.append(path)
@@ -821,7 +821,7 @@ class TestMainWindowAnnotations(unittest.TestCase):
         cls.app, cls.win = get_main_app()
         cls.temp_dir = tempfile.mkdtemp()
         cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
-        img = QImage(100, 100, QImage.Format_RGB32)
+        img = QImage(100, 100, QImage.Format.Format_RGB32)
         img.fill(0xFFFFFF)
         img.save(cls.test_image_path)
 
@@ -890,7 +890,7 @@ class TestMainWindowModes(unittest.TestCase):
         cls.temp_dir = tempfile.mkdtemp()
         # Create test image for zoom tests
         cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
-        img = QImage(100, 100, QImage.Format_RGB32)
+        img = QImage(100, 100, QImage.Format.Format_RGB32)
         img.fill(0xFFFFFF)
         img.save(cls.test_image_path)
 
@@ -943,7 +943,7 @@ class TestMainWindowLoaderFormatPreservation(unittest.TestCase):
         cls.app, cls.win = get_main_app()
         cls.temp_dir = tempfile.mkdtemp()
         cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
-        img = QImage(100, 100, QImage.Format_RGB32)
+        img = QImage(100, 100, QImage.Format.Format_RGB32)
         img.fill(0xFFFFFF)
         img.save(cls.test_image_path)
 
@@ -1058,7 +1058,7 @@ class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
         cls.app, cls.win = get_main_app()
         cls.temp_dir = tempfile.mkdtemp()
         cls.test_image_path = os.path.join(cls.temp_dir, 'test_image.png')
-        img = QImage(100, 100, QImage.Format_RGB32)
+        img = QImage(100, 100, QImage.Format.Format_RGB32)
         img.fill(0xFFFFFF)
         img.save(cls.test_image_path)
 
@@ -1185,21 +1185,21 @@ class TestMainWindowPolygonKeypointUndo(unittest.TestCase):
             off = canvas.offset_to_center()
             wp = QPointF((x + off.x()) * canvas.scale,
                          (y + off.y()) * canvas.scale)
-            return QMouseEvent(etype, wp, button, buttons, Qt.NoModifier)
+            return QMouseEvent(etype, wp, button, buttons, Qt.KeyboardModifier.NoModifier)
 
         # 1. Press the midpoint of the top edge (10,10)-(50,10) -> insert vertex.
         canvas.mousePressEvent(
-            evt(QEvent.MouseButtonPress, 30, 10,
-                Qt.LeftButton, Qt.LeftButton))
+            evt(QEvent.Type.MouseButtonPress, 30, 10,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton))
         self.assertEqual(len(shape.points), 5,
                          'pressing an edge midpoint should insert a vertex')
 
         # 2. Drag the freshly inserted vertex down and release -> move.
         canvas.mouseMoveEvent(
-            evt(QEvent.MouseMove, 30, 40, Qt.NoButton, Qt.LeftButton))
+            evt(QEvent.Type.MouseMove, 30, 40, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton))
         canvas.mouseReleaseEvent(
-            evt(QEvent.MouseButtonRelease, 30, 40,
-                Qt.LeftButton, Qt.NoButton))
+            evt(QEvent.Type.MouseButtonRelease, 30, 40,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton))
 
         # Both the insert and the drag-move must have pushed undo commands.
         self.assertEqual(len(self.win.undo_stack._undo_stack), 2,
@@ -1219,7 +1219,7 @@ class TestUndoStateConsistency(unittest.TestCase):
         cls.app, cls.win = get_main_app()
         cls.temp_dir = tempfile.mkdtemp()
         cls.img = os.path.join(cls.temp_dir, 'i.png')
-        im = QImage(100, 100, QImage.Format_RGB32)
+        im = QImage(100, 100, QImage.Format.Format_RGB32)
         im.fill(0xFFFFFF)
         im.save(cls.img)
 
@@ -1295,7 +1295,7 @@ class TestBatchVerify(unittest.TestCase):
         imgs = []
         for name in ('a', 'b'):
             img = os.path.join(self.d, name + '.png')
-            im = QImage(50, 50, QImage.Format_RGB32)
+            im = QImage(50, 50, QImage.Format.Format_RGB32)
             im.fill(0xFFFFFF)
             im.save(img)
             w = PascalVocWriter('f', name + '.png', (50, 50, 3))
@@ -1304,7 +1304,7 @@ class TestBatchVerify(unittest.TestCase):
             imgs.append(img)
         # An annotated image whose XML is corrupt -> must surface as a failure.
         cimg = os.path.join(self.d, 'c.png')
-        im = QImage(50, 50, QImage.Format_RGB32)
+        im = QImage(50, 50, QImage.Format.Format_RGB32)
         im.fill(0xFFFFFF)
         im.save(cimg)
         with open(os.path.join(self.d, 'c.xml'), 'w') as f:
@@ -1352,7 +1352,7 @@ class TestBatchVerify(unittest.TestCase):
             image_dir = os.path.join(self.d, directory)
             os.makedirs(image_dir)
             image_path = os.path.join(image_dir, 'frame.png')
-            image = QImage(50, 50, QImage.Format_RGB32)
+            image = QImage(50, 50, QImage.Format.Format_RGB32)
             image.fill(0xFFFFFF)
             self.assertTrue(image.save(image_path))
             image_paths.append(image_path)
@@ -1430,7 +1430,7 @@ class TestCanvasKeepsFocusForToolShortcuts(unittest.TestCase):
         cls.paths = []
         for index in range(2):
             path = os.path.join(cls.temp_dir, 'frame-%d.png' % index)
-            image = QImage(80, 60, QImage.Format_RGB32)
+            image = QImage(80, 60, QImage.Format.Format_RGB32)
             image.fill(0xFFFFFF)
             image.save(path)
             cls.paths.append(path)
@@ -1557,7 +1557,7 @@ class TestCanvasKeepsFocusForToolShortcuts(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(self.win.label_list.hasFocus())
 
-        QTest.keyClick(self.win.label_list, Qt.Key_Down)
+        QTest.keyClick(self.win.label_list, Qt.Key.Key_Down)
         self.app.processEvents()
         self.assertTrue(
             self.win.label_list.hasFocus(),

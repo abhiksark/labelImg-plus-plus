@@ -35,7 +35,7 @@ build-backend = "setuptools.build_meta"
 name = "labelimgpp-review-plugin"
 version = "0.1.0"
 requires-python = ">=3.8"
-dependencies = ["labelimgplusplus>=3.0"]
+dependencies = ["labelimgplusplus>=4,<6"]
 
 [project.entry-points."labelimgplusplus.plugins"]
 "com.example.review" = "labelimgpp_review:create_plugin"
@@ -43,6 +43,13 @@ dependencies = ["labelimgplusplus>=3.0"]
 [tool.setuptools.packages.find]
 where = ["src"]
 ```
+
+A plugin that uses only `labelimgplusplus.plugins` may keep a Python 3.8 floor
+and run on both the PyQt5-based 4.0.0rc0 host and PyQt6-based 4.0.0rc1 or later
+hosts. Stable labelImg++ 4 requires Python 3.10. Cross-host plugins must not
+import PyQt5, PyQt6, or internal `libs.*` modules. If a plugin intentionally
+uses Qt UI internals, it is not covered by API major 1 and cannot be
+cross-host compatible.
 
 The entry-point name is the canonical plugin ID. It must exactly match
 `PluginMetadata.id`, be globally unique, and contain only lowercase letters,
@@ -256,6 +263,10 @@ API major 1 initially supports commands, JSON settings, restricted background
 tasks, read-only document descriptors, and diagnostics. It does not provide a
 marketplace, automatic installation, signing, permissions, sandboxing, hot
 reload, plugin dependency resolution, or native-crash containment.
+
+The PyQt5-to-PyQt6 host migration does not change API major 1 because every
+public descriptor and protocol remains standard-library-only. A plugin loaded
+into labelImg++ 5 must not import PyQt5 into the PyQt6 process.
 
 Custom annotation tools belong to issue #27 and format/import/export adapters
 belong to issue #28. Until those APIs land, such changes remain source

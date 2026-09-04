@@ -2,11 +2,11 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from libs import resources
 from libs.utils.stringBundle import StringBundle
 
 
@@ -22,6 +22,26 @@ class TestStringBundle(unittest.TestCase):
         """Test loading Traditional Chinese bundle with fallback."""
         str_bundle = StringBundle.get_bundle('zh-TW')
         self.assertEqual(str_bundle.get_string("openDir"), u'\u958B\u555F\u76EE\u9304')
+
+    def test_load_simplified_chinese_bundle(self):
+        str_bundle = StringBundle.get_bundle('zh-CN')
+        self.assertEqual(str_bundle.get_string("openDir"), u'打开目录')
+
+    def test_load_japanese_bundle(self):
+        str_bundle = StringBundle.get_bundle('ja-JP')
+        self.assertEqual(
+            str_bundle.get_string("openDir"), u'ディレクトリを開く')
+
+    def test_values_can_contain_equals_signs(self):
+        def contents(bundle_name, required=False):
+            del required
+            return 'formula=\"left=right\"' if bundle_name == 'strings' else None
+
+        with patch(
+                'libs.utils.stringBundle.read_string_bundle',
+                side_effect=contents):
+            str_bundle = StringBundle.get_bundle('en')
+        self.assertEqual(str_bundle.get_string('formula'), 'left=right')
 
     def test_invalid_locale_falls_back_to_english(self):
         """Test that invalid locale falls back to English."""

@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImage
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
 
 from labelImgPlusPlus import get_main_app
 
@@ -21,7 +21,7 @@ def _wait(app, predicate, timeout=3):
 
 
 def _image(path, width=1600, height=1200, color=0xFFFFFFFF):
-    image = QImage(width, height, QImage.Format_RGB32)
+    image = QImage(width, height, QImage.Format.Format_RGB32)
     image.fill(color)
     assert image.save(path)
 
@@ -66,8 +66,8 @@ def test_loaded_images_enter_fit_mode_with_zero_scroll_ranges(tmp_path):
         assert window.load_file(image_path)
         assert _wait(app, lambda: window.actions.fitWindow.isChecked())
         assert window.zoom_mode == window.FIT_WINDOW
-        for orientation in (Qt.Horizontal, Qt.Vertical):
-            bar = window.scroll_bars[orientation]
+        for orientation in (Qt.Orientation.Horizontal, Qt.Orientation.Vertical):
+            bar = window.scroll_bars[orientation.value]
             assert bar.minimum() == 0
             assert bar.maximum() == 0
             assert bar.value() == bar.minimum()
@@ -92,8 +92,8 @@ def test_fit_width_resets_pan_and_eliminates_horizontal_scroll(tmp_path):
         window.set_fit_width(True)
         app.processEvents()
 
-        horizontal = window.scroll_bars[Qt.Horizontal]
-        vertical = window.scroll_bars[Qt.Vertical]
+        horizontal = window.scroll_bars[Qt.Orientation.Horizontal.value]
+        vertical = window.scroll_bars[Qt.Orientation.Vertical.value]
         assert window.zoom_mode == window.FIT_WIDTH
         assert window.actions.fitWidth.isChecked()
         assert horizontal.maximum() == horizontal.minimum()

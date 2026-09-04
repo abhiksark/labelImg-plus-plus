@@ -76,34 +76,28 @@ labelImg++/
 ## Development Setup
 
 ### Prerequisites
-- Python 3.8+
-- PyQt5
+- Python 3.10+
+- PyQt6 6.11
 - lxml
 
 ### Installation
 
 ```bash
-# Install dependencies
-pip3 install -r requirements/requirements-linux-python3.txt
+# Install the project and its declared runtime dependencies
+python3 -m pip install -e .
 
-# Build Qt resources (required before first run)
-make qt5py3
-
-# Run the application
+# Icons, translations, and licenses are packaged data; no RCC build is needed.
 python3 labelImgPlusPlus.py
 ```
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run the complete suite
 make test
 
-# Run specific test file
-python3 -m unittest tests.test_io
-
-# Run with verbose output
-python3 -m unittest discover tests -v
+# Run a specific test file
+QT_QPA_PLATFORM=offscreen python3 -m pytest tests/core/test_settings.py -v
 ```
 
 ## Key Concepts

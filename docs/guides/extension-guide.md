@@ -11,8 +11,8 @@ document state, and diagnostics. Plugins use the stable
 
 The patterns below are for source contributions built and reviewed with
 labelImg++ itself. Direct imports from `libs.*` and edits to MainWindow, Canvas,
-Shape, format dispatch, resources, or string bundles are not external plugin
-APIs. Custom annotation-tool APIs are tracked by issue #27 and external format
+Shape, format dispatch, packaged assets, or string bundles are not external
+plugin APIs. Custom annotation-tool APIs are tracked by issue #27 and external
 adapters by issue #28; until those land, such work must remain a source
 contribution.
 
@@ -53,16 +53,21 @@ contribution.
 | Extension Type | Files to Modify | Guide |
 |----------------|-----------------|-------|
 | External command plugin | Separate installed distribution | [Plugin Authoring](plugin-authoring.md) |
-| New annotation format | `libs/*_io.py`, `libs/labelFile.py`, `labelImgPlusPlus.py` | [Adding Formats](adding-formats.md) |
-| New action/feature | `labelImgPlusPlus.py`, `resources/strings/` | [Adding Features](adding-features.md) |
-| New language | `resources/strings/strings-XX.properties` | [i18n Guide](i18n-guide.md) |
-| Custom shape types | `libs/shape.py`, `libs/canvas.py` | See below |
+| New annotation format | `libs/formats/`, `libs/formats/labelFile.py`, `labelImgPlusPlus.py` | [Adding Formats](adding-formats.md) |
+| New action/feature | `labelImgPlusPlus.py`, `libs/assets/strings/` | [Adding Features](adding-features.md) |
+| New language | `libs/assets/strings/strings-XX.properties` | [i18n Guide](i18n-guide.md) |
+| Custom shape types | `libs/core/shape.py`, `libs/widgets/canvas.py` | See below |
 
 ## Architecture Patterns
 
 ### Signal-Slot Pattern
 
-labelImg++ uses PyQt5's signal-slot mechanism for component communication:
+labelImg++ uses PyQt6's signal-slot mechanism for component communication:
+
+Qt-facing source imports directly from `PyQt6`. Use scoped enum members such as
+`Qt.MouseButton.LeftButton`, `Qt.KeyboardModifier.ControlModifier`, and
+`QDialog.DialogCode.Accepted`; do not add compatibility imports for an older
+binding.
 
 ```python
 # Canvas emits signals

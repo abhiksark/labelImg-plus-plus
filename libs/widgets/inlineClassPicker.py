@@ -1,18 +1,11 @@
 # libs/widgets/inlineClassPicker.py
 """Non-modal class confirmation for newly drawn provisional geometry."""
 
-try:
-    from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, QTimer, pyqtSignal
-    from PyQt5.QtWidgets import (
-        QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-        QPushButton, QVBoxLayout, QWidget,
-    )
-except ImportError:
-    from PyQt4.QtCore import QEvent, QPoint, QRect, Qt, QTimer, pyqtSignal
-    from PyQt4.QtGui import (
-        QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-        QPushButton, QVBoxLayout, QWidget,
-    )
+from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import (
+    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QPushButton, QVBoxLayout, QWidget,
+)
 
 from libs.utils.styles import Theme, get_theme_colors
 from libs.utils.utils import label_validator, trimmed
@@ -28,7 +21,7 @@ class InlineClassPicker(QFrame):
     def __init__(self, parent=None):
         super(InlineClassPicker, self).__init__(parent)
         if parent is None:
-            self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
+            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setObjectName('inlineClassPicker')
         self.setWindowTitle('Choose class')
         self.setMinimumWidth(280)
@@ -136,7 +129,7 @@ class InlineClassPicker(QFrame):
         self.edit.selectAll()
         self._filter(self.edit.text())
         self._show_at(anchor_global)
-        self.edit.setFocus(Qt.PopupFocusReason)
+        self.edit.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def open_review_at(self, anchor_global, approval_label=''):
         """Show the Smart Select geometry decision beside its outline."""
@@ -151,7 +144,7 @@ class InlineClassPicker(QFrame):
         self.class_discard_hint.hide()
         self.review_actions.show()
         self._show_at(anchor_global)
-        self.use_outline_button.setFocus(Qt.PopupFocusReason)
+        self.use_outline_button.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def _show_at(self, anchor_global):
         """Position the current picker stage within the active screen."""
@@ -159,10 +152,11 @@ class InlineClassPicker(QFrame):
 
         anchor = QPoint(anchor_global)
         screen = QApplication.screenAt(anchor)
-        if screen is not None:
-            available = screen.availableGeometry()
-        else:
-            available = QApplication.desktop().availableGeometry(anchor)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        available = (
+            screen.availableGeometry()
+            if screen is not None else QRect(anchor, self.sizeHint()))
         parent = self.parentWidget()
         if parent is not None and not self.isWindow():
             parent_rect = QRect(
@@ -182,19 +176,19 @@ class InlineClassPicker(QFrame):
         self.raise_()
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.KeyPress:
+        if event.type() == QEvent.Type.KeyPress:
             key = event.key()
-            if key == Qt.Key_Escape:
+            if key == Qt.Key.Key_Escape:
                 self.cancel()
                 return True
-            if key in (Qt.Key_Return, Qt.Key_Enter):
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 if self.review_actions.isVisible():
                     self._accept_review()
                     return True
                 self._accept()
                 return True
-            if watched is self.edit and key in (Qt.Key_Down, Qt.Key_Up):
-                self._move_selection(1 if key == Qt.Key_Down else -1)
+            if watched is self.edit and key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                self._move_selection(1 if key == Qt.Key.Key_Down else -1)
                 return True
         return super(InlineClassPicker, self).eventFilter(watched, event)
 

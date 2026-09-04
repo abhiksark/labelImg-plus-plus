@@ -16,9 +16,9 @@ def _stage_base_project(root, destination):
     destination.mkdir()
     for name in (
             "pyproject.toml", "setup.cfg", "MANIFEST.in", "README.rst",
-            "LICENSE", "labelImgPlusPlus.py", "resources.qrc"):
+            "LICENSE", "labelImgPlusPlus.py"):
         shutil.copy2(root / name, destination / name)
-    for name in ("libs", "labelimgplusplus", "resources", "data"):
+    for name in ("libs", "labelimgplusplus", "data"):
         shutil.copytree(
             root / name, destination / name,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
@@ -58,7 +58,7 @@ def test_packaged_plugin_lifecycle_and_removal(tmp_path):
     lifecycle.write_text(textwrap.dedent("""
         import os
         import sys
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         import labelImgPlusPlus
         from libs.core.plugin_discovery import discover_plugins
         from libs.core.plugin_manager import PluginManager, PluginState
@@ -91,6 +91,7 @@ def test_packaged_plugin_lifecycle_and_removal(tmp_path):
             'plugin.org.labelimgpp.fixture.execute')
         import labelimgpp_fixture_plugin as fixture
         assert fixture.EXECUTIONS == 1
+        assert 'PyQt5' not in sys.modules
         assert settings.get('plugins')['config'][record.id]['activated'] is True
         manager.set_enabled(record.id, False)
         assert record.state == PluginState.ACTIVE
@@ -114,7 +115,7 @@ def test_packaged_plugin_lifecycle_and_removal(tmp_path):
     removed = tmp_path / "removed.py"
     removed.write_text(textwrap.dedent("""
         import os
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         from libs.core.plugin_discovery import discover_plugins
         from libs.core.plugin_manager import PluginManager, PluginState
         from libs.core.settings import Settings

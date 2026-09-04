@@ -11,9 +11,10 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QAction, QApplication
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QAction
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.video_distinctness import geometry_distinct_pts
 from libs.core.video_model import VideoModelState
@@ -226,7 +227,7 @@ class TestVideoOverview(unittest.TestCase):
         self.overview.lanes.trackSelected.connect(received.append)
         lane_height = dpi.scale_px(VideoLanesView.LANE_HEIGHT)
         QTest.mouseClick(
-            self.overview.lanes, Qt.LeftButton, Qt.NoModifier,
+            self.overview.lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
             QPoint(10, 29 * lane_height + lane_height // 2))
         self.assertEqual(received, ['t29'])
         self.overview.hide()

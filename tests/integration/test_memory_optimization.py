@@ -10,12 +10,8 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
-try:
-    from PyQt5.QtCore import QSize, Qt
-    from PyQt5.QtGui import QImageReader
-except ImportError:
-    from PyQt4.QtCore import QSize, Qt
-    from PyQt4.QtGui import QImageReader
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QImageReader
 
 
 class TestImageScaling(unittest.TestCase):
@@ -30,7 +26,7 @@ class TestImageScaling(unittest.TestCase):
 
         original_size = QSize(original_width, original_height)
         if original_size.width() > max_display_dim or original_size.height() > max_display_dim:
-            scaled_size = original_size.scaled(max_display_dim, max_display_dim, Qt.KeepAspectRatio)
+            scaled_size = original_size.scaled(max_display_dim, max_display_dim, Qt.AspectRatioMode.KeepAspectRatio)
             scale_factor = scaled_size.width() / original_size.width()
         else:
             scale_factor = 1.0
@@ -51,7 +47,7 @@ class TestImageScaling(unittest.TestCase):
 
         original_size = QSize(original_width, original_height)
         if original_size.width() > max_display_dim or original_size.height() > max_display_dim:
-            scaled_size = original_size.scaled(max_display_dim, max_display_dim, Qt.KeepAspectRatio)
+            scaled_size = original_size.scaled(max_display_dim, max_display_dim, Qt.AspectRatioMode.KeepAspectRatio)
             scale_factor = scaled_size.width() / original_size.width()
         else:
             scale_factor = 1.0
@@ -70,7 +66,7 @@ class TestImageScaling(unittest.TestCase):
         max_display_dim = 2048
 
         original_size = QSize(original_width, original_height)
-        scaled_size = original_size.scaled(max_display_dim, max_display_dim, Qt.KeepAspectRatio)
+        scaled_size = original_size.scaled(max_display_dim, max_display_dim, Qt.AspectRatioMode.KeepAspectRatio)
         scale_factor = scaled_size.width() / original_size.width()
 
         # Scale factor should be 2048/7680 = 0.267...
@@ -248,7 +244,7 @@ class TestQImageReaderScaling(unittest.TestCase):
         """Test that QSize.scaled() preserves aspect ratio."""
         # 16:9 aspect ratio
         original = QSize(1920, 1080)
-        scaled = original.scaled(1280, 1280, Qt.KeepAspectRatio)
+        scaled = original.scaled(1280, 1280, Qt.AspectRatioMode.KeepAspectRatio)
 
         # Width should be 1280 (the limiting dimension)
         self.assertEqual(scaled.width(), 1280)
@@ -259,7 +255,7 @@ class TestQImageReaderScaling(unittest.TestCase):
         """Test scaling with square constraint."""
         # Wide image
         original = QSize(4000, 1000)
-        scaled = original.scaled(2048, 2048, Qt.KeepAspectRatio)
+        scaled = original.scaled(2048, 2048, Qt.AspectRatioMode.KeepAspectRatio)
 
         # Width limited to 2048
         self.assertEqual(scaled.width(), 2048)
@@ -270,7 +266,7 @@ class TestQImageReaderScaling(unittest.TestCase):
         """Test scaling tall image."""
         # Tall image (portrait)
         original = QSize(1000, 4000)
-        scaled = original.scaled(2048, 2048, Qt.KeepAspectRatio)
+        scaled = original.scaled(2048, 2048, Qt.AspectRatioMode.KeepAspectRatio)
 
         # Height limited to 2048
         self.assertEqual(scaled.height(), 2048)

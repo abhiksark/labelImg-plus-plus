@@ -6,10 +6,7 @@ stylesheets, and icons all scale by the same amount. Widget modules and the
 theme system import from here rather than computing DPI themselves.
 """
 
-try:
-    from PyQt5.QtWidgets import QApplication
-except ImportError:
-    from PyQt4.QtGui import QApplication
+from PyQt6.QtWidgets import QApplication
 
 
 def get_dpi_scale_factor():

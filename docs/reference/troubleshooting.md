@@ -13,9 +13,9 @@ Common issues and solutions when using labelImg++.
 
 **Solutions:**
 
-1. **Check PyQt5 Installation**
+1. **Check Python and PyQt6**
    ```bash
-   python3 -c "from PyQt5.QtWidgets import QApplication; print('PyQt5 OK')"
+   python3 -c "import sys; from PyQt6.QtCore import QT_VERSION_STR; print(sys.version, QT_VERSION_STR)"
    ```
 
 2. **Check lxml Installation**
@@ -33,21 +33,18 @@ Common issues and solutions when using labelImg++.
    rm ~/.labelImgSettings.json
    ```
 
-5. **Rebuild Resources**
+5. **Verify packaged assets**
    ```bash
-   make qt5py3
-   # Or manually:
-   pyrcc5 -o libs/resources.py resources.qrc
+   labelimgpp --verify-assets
+   # From a source checkout:
+   python3 labelImgPlusPlus.py --verify-assets
    ```
 
-### ImportError: No module named 'libs.resources'
+### Missing Icons or Translations
 
-**Cause:** Qt resources not compiled.
-
-**Solution:**
-```bash
-make qt5py3
-```
+Run `labelimgpp --verify-assets`. It reports the exact missing or unreadable
+package-data file and exits nonzero. Reinstall the wheel or source checkout;
+there is no RCC compiler or generated `libs.resources` module to rebuild.
 
 ### Window Opens Off-Screen
 
@@ -67,6 +64,11 @@ Run labelImg++ without discovering or loading any plugin:
 ```bash
 LABELIMGPP_DISABLE_PLUGINS=1 labelimgpp
 ```
+
+labelImg++ 4.0.0rc1 and later run on PyQt6. A plugin loaded into that process
+must not import PyQt5. API-major-1 plugins that use only
+`labelimgplusplus.plugins` remain compatible with the PyQt5-based 4.0.0rc0 host
+and PyQt6-based 4.0.0rc1 or later hosts.
 
 In Windows PowerShell:
 
@@ -291,9 +293,9 @@ does not remove an existing non-empty destination.
    export LANG=zh_CN.UTF-8  # or ja_JP.UTF-8
    ```
 
-3. **Rebuild Resources**
+3. **Verify the UTF-8 locale files**
    ```bash
-   make qt5py3
+   labelimgpp --verify-assets
    ```
 
 ## Performance Issues
@@ -379,7 +381,7 @@ logging.basicConfig(level=logging.DEBUG)
    Include:
    - Operating system
    - Python version
-   - PyQt5 version
+   - PyQt6 and Qt versions
    - Error message/traceback
    - Steps to reproduce
 
@@ -388,7 +390,7 @@ logging.basicConfig(level=logging.DEBUG)
 | Problem | Quick Fix |
 |---------|-----------|
 | Won't start | Try `LABELIMGPP_DISABLE_PLUGINS=1`, then inspect `~/.labelImgSettings.json` |
-| No resources | `make qt5py3` |
+| Missing icons/translations | Run `labelimgpp --verify-assets`, then reinstall |
 | No save | Check File > Change Save Dir |
 | No load | Check annotation filename matches |
 | Wrong YOLO classes | Use predefined_classes.txt |

@@ -9,8 +9,8 @@ import unittest
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QPointF
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF
 
 from libs.core.commands import (
     UndoStack,
