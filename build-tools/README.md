@@ -62,6 +62,9 @@ python -m pip install -e . pyinstaller
 sh build-tools/build-ubuntu-binary.sh
 ```
 
+The CI release artifact pins ``ubuntu-22.04`` so a newer
+``ubuntu-latest`` image cannot silently raise its glibc requirement.
+
 ## Build for Windows
 
 ```bash
