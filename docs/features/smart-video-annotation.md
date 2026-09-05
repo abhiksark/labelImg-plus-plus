@@ -7,10 +7,20 @@ audio.
 
 ## Install and open
 
+Use Python 3.10 or newer (tested through 3.13). Once the **4.0.0rc1**
+candidate is published on PyPI, install its pinned extra:
+
 ```bash
-pip install "labelimgplusplus[video]"
+python -m pip install "labelimgplusplus[video]==4.0.0rc1"
 labelimgpp /path/to/clip.mp4
 ```
+
+Before publication, or when using candidate source, install from its repository
+root in the same virtual environment with
+`python -m pip install -e ".[video]"`. An unpinned stable-package install does
+not select this prerelease. See
+[Optional dependencies](../guides/optional-dependencies.md) for version markers
+and combined SAM/video installation.
 
 You can also use **File → Open Video…**, `Ctrl+Alt+V`, or pass an existing
 `.labelimgpp.sqlite` project as the normal first positional argument.
@@ -42,6 +52,11 @@ variable-frame-rate media has no reliable integer frame index.
 Blue spans show track coverage, green markers show accepted manual anchors,
 amber markers show pending tracker suggestions, red spans show propagation
 gaps, and purple markers show verified frames.
+
+![Video timeline and suggestion review](../screenshots/readme/video-review.png)
+
+Demo footage: Samplelib's 10-second MP4 sample, offered without license
+restrictions. See [media sources and licenses](../screenshots/readme/LICENSE.txt).
 
 ## Browse the video overview
 
@@ -81,28 +96,38 @@ frame. Renaming a
 tracked shape renames the track across the video.
 
 Select a track and press `Shift+K` to make the current materialized occurrence
-an editable manual keyframe. Rectangle geometry and compatible keypoints are
-interpolated by presentation time between accepted manual anchors. Polygon
-vertices are never interpolated. Blue dashed shapes are computed interpolation;
-amber dashed shapes are pending tracker suggestions.
+an editable manual keyframe. Rectangle geometry is interpolated by
+presentation time between accepted manual anchors. Associated keypoints can
+interpolate only when both anchors have equal-length, compatible layouts:
+use the same landmark ordering at each anchor. Missing points and visibility
+use the nearer anchor's values. Polygon vertices are never interpolated.
+Blue dashed shapes are computed interpolation; amber dashed shapes are pending
+tracker suggestions.
 
 Deleting an exact occurrence removes that observation. Deleting an interpolated
 occurrence writes an explicit absence anchor, which ends interpolation until a
 later present anchor. **Tools → Delete Track…** removes all observations after
 confirmation. Video mutations use the same undo stack as image annotations.
 
-SAM can create a manual polygon observation on a paused video frame when both
-the `sam` and `video` extras are installed. It is not an automatic video-mask
-tracker.
+[MobileSAM Smart Select](sam-assisted-polygon.md) can create a manual box or
+polygon observation on a paused video frame when both the `sam` and `video`
+extras are installed. Outline approval still comes before class confirmation;
+fixed/repeat class strategies skip only class entry. This single-frame helper
+is separate from SAM 2 temporal propagation.
 
 ## Whole-video propagation
 
 Select an exact accepted manual anchor and use **Propagate…** in its contextual
 Objects card. **More → Propagate across video** includes every qualifying
-anchor on the current frame. Directional tracking actions remain compatibility
-aliases that use the same accepted-result pipeline. The timeline keeps the
+anchor on the current frame. Both actions propagate backward and forward,
+subject to the confirmed run scope. The timeline keeps the
 Anchor → Propagate → Review → Export stage and active progress visible without
 duplicating the selected-track commands.
+
+The directional **Track Forward…** (`T`) and **Track Backward…** (`Shift+T`)
+actions use this same propagation pipeline and configured backend, not a
+separate legacy optical-flow UI. Their endpoint dialog defaults to the next
+manual anchor in that direction, or five seconds when none exists.
 
 The portable OpenCV backend decodes each direction once, updates active
 rectangles, polygons, and associated keypoints together, and uses bounded
@@ -129,15 +154,19 @@ previous generated data.
 ## Optional SAM 2 backend
 
 Open **Tools → SAM Settings…** and choose **Auto**, **OpenCV**, or **SAM 2**.
-SAM 2 requires Linux, Python 3.10 or newer, compatible CUDA-enabled PyTorch and
-torchvision, an official SAM 2 source installation, and local matching
-checkpoint and config files. The config must be selected from the installed
-``sam2`` package's ``configs`` directory.
+SAM 2 requires Linux, Python 3.10 or newer, compatible CUDA-enabled PyTorch
+2.5.1 or newer and torchvision 0.20.1 or newer, an official SAM 2 source
+installation, and a local checkpoint paired with its matching config. Select
+the config from the installed `sam2` package (normally its `configs`
+directory). Copying a YAML file elsewhere is not supported: the application
+requires it to reside under that package so it can resolve the package-relative
+config name. Matching the checkpoint architecture/version remains necessary.
 
 Follow [Meta's official source-install and checkpoint instructions](https://github.com/facebookresearch/sam2#installation),
 then select the two files in labelImg++. The application never downloads or
-bundles Torch, SAM 2, model checkpoints, or configs, and these packages are
-intentionally not part of the base, ``sam``, ``video``, or combined extras.
+bundles Torch, SAM 2, their model checkpoints, or their configs, and these
+packages are intentionally not part of the base, `sam`, `video`, or combined
+extras. This is separate from Smart Select's default MobileSAM ONNX download.
 
 **Auto** evaluates those requirements only when propagation starts and uses
 SAM 2 when all are satisfied; otherwise it uses portable OpenCV. Explicit
@@ -147,14 +176,7 @@ track type and records no-object results as normal propagation gaps. The same
 preview, atomic commit, manual-anchor, cancellation, revision, and undo rules
 apply to both backends.
 
-## Legacy optical-flow suggestions and review
-
-Tracking starts from an accepted exact rectangle. Select it, then press `T` or
-`Shift+T`. The endpoint dialog defaults to the next manual anchor in that
-direction, or five seconds when none exists. The worker decodes independently,
-uses bounded-resolution pyramidal Lucas–Kanade flow with forward/backward
-validation and RANSAC, and stops on weak geometry, excessive error, bounds
-loss, or a scene cut.
+## Review suggestions
 
 Suggestions remain pending until reviewed. **Review queue** starts or resumes
 the ordered live queue on the canvas, holding the affected track selected:
@@ -165,10 +187,13 @@ the ordered live queue on the canvas, holding the affected track selected:
 - The **Tools** menu can accept or reject the visible range or the full latest
   propagation run.
 
-Accepted tracker observations become exact states but do not become
-interpolation anchors until promoted with `Shift+K`. Rejected suggestions stay
-recorded so they do not immediately reappear. Rerunning a range may replace
-pending or rejected suggestions, but never accepted or manual observations.
+Accepted tracker observations become exact states but remain tracker-generated,
+non-anchor observations: acceptance alone does not create manual anchors for
+interpolation or seeding another propagation run. Use `Shift+K` to promote an
+occurrence, or edit its geometry to make a manual correction. Rejected
+suggestions stay recorded so they do not immediately reappear. Rerunning a
+range may replace pending or rejected suggestions, but never accepted or
+manual observations.
 
 ## Save and recover
 
@@ -178,16 +203,28 @@ failure or external revision conflict. Save As uses SQLite backup rather than a
 file copy. Clean close checkpoints the WAL. Discard reloads the last durable
 project state.
 
-## Export accepted frames
+## Export frames with accepted annotations
 
 Choose **Tools → Export Video Frames…**. The destination must be new or empty.
-Select the current, annotated, or verified frames, or a time range sampled by
-frames or seconds. JPEG quality 95 is the default; PNG is lossless. Annotation
-output can be Pascal VOC, YOLO, YOLO-seg, COCO, or CreateML. Annotated and
-verified selection labels show their exact frame counts before confirmation.
+Frame selection and annotation eligibility are separate:
 
-Only accepted manual/tracker states and accepted rectangle interpolation are
-exported. Pending and rejected suggestions are excluded. Names are stable:
+- **Current frame** selects the displayed frame.
+- **Annotated frames** (the default) selects PTS values with stored accepted,
+  present observations. Unlike the overview's Annotated browse mode, it does
+  not select pending-only, rejected-only, or absent-only records, and it does
+  not automatically include every interpolated frame.
+- **Verified frames** selects frames marked verified.
+- **Time range** samples a range by frames or seconds.
+
+Current, verified, and range selections can include frames without accepted
+objects; those images are still exported with no annotations. JPEG quality 95
+is the default; PNG is lossless. Annotation output can be Pascal VOC, YOLO,
+YOLO-seg, COCO, or CreateML. Annotated and verified selection labels show
+their exact frame counts before confirmation.
+
+On every selected frame, only accepted, present manual/tracker states and
+accepted rectangle interpolation are exported. Pending and rejected
+suggestions are excluded, regardless of frame selection. Names are stable:
 
 ```text
 <video-stem>__s<stream-index>__p<pts>.<extension>
