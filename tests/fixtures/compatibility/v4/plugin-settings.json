@@ -1,0 +1,20 @@
+{
+  "plugins": {
+    "enabled": [
+      "org.labelimgpp.fixture"
+    ],
+    "config": {
+      "org.labelimgpp.fixture": {
+        "activated": true,
+        "threshold": 0.75
+      }
+    },
+    "shortcut_owners": {
+      "plugin.org.labelimgpp.fixture.execute": "org.labelimgpp.fixture"
+    }
+  },
+  "shortcuts": {
+    "plugin.org.labelimgpp.fixture.execute": "Ctrl+Alt+F",
+    "save": "Ctrl+S"
+  }
+}

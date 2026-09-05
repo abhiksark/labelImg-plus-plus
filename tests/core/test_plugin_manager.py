@@ -5,8 +5,8 @@ import threading
 import time
 import weakref
 
-from PyQt5.QtCore import QCoreApplication, QEvent, QObject, QThread
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QThread
+from PyQt6.QtWidgets import QApplication
 
 from labelimgplusplus.plugins import (
     CommandSpec,
@@ -567,7 +567,7 @@ def test_retained_plugin_facade_detaches_after_host_shutdown(tmp_path):
         plugin.context = None
         manager.deleteLater()
         coordinator.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         return retained, coordinator_handle_ref
 
     retained, coordinator_handle_ref = run_host()

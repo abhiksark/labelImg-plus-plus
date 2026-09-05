@@ -1,13 +1,71 @@
 History
 =======
 
+4.0.0rc1 (2026-09-05)
+---------------------
+
+PyQt6 release candidate, not stable 4.0.0. The sections below describe changes
+since the PyQt5-based 4.0.0rc0. Draw-first annotation, inline class confirmation,
+Smart Select Box/Polygon output, and video propagation were already included
+in rc0; optional SAM 2 propagation was already available in 3.5.0.
+
+PyQt6 and Platform Baseline
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Replace PyQt5 with ``PyQt6>=6.11,<6.12`` and use scoped Qt 6 enums and
+  current event, dialog, action, image-size, font-metric, and screen APIs.
+* Require Python 3.10 through 3.13. Stable Python 3.8 and 3.9 support remains
+  on 3.5.x; the historical 4.0.0rc0 prerelease also supported those versions.
+* Replace compiled RCC resources with ordinary UTF-8 package data under
+  ``libs/assets`` and one ``--verify-assets`` source, wheel, and frozen-app
+  diagnostic.
+
+Compatibility and Packaging
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Preserve 4.0.0rc0 settings tag encodings, annotation coordinates, video
+  sidecar schema/PTS/review/anchor values, shortcut IDs, save atomicity, and
+  undo behavior with checked-in compatibility fixtures.
+* Keep plugin API major 1 standard-library-only and cross-host compatible.
+  Plugins loaded into the PyQt6-based 4.0.0rc1 or later must use that public
+  API and must not load PyQt5 beside PyQt6.
+* Use one tracked PyInstaller spec for Linux, Windows, and macOS, with packaged
+  assets and an outside-checkout startup smoke before artifact publication.
+
+Workflow and Documentation
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Reserve ``Ctrl+Shift+S`` for Save As instead of also toggling Single Class
+  Mode. Single Class Mode remains available through its existing menu and
+  class-strategy controls.
+* Refresh image/video onboarding, format-preservation and recovery guidance,
+  version-pinned candidate installation links, and real Smart Select and
+  video-review screenshots in the README and linked guides.
+* Pin published README assets and guides to the release tag rather than a
+  removable feature branch.
+
+Upgrade Notes
+~~~~~~~~~~~~~
+
+* Use a fresh Python 3.10–3.13 environment for the PyQt6 candidate. Keep the
+  previous environment until representative annotations and video projects
+  have been opened, saved, and reopened successfully.
+* Close the application before backing up image annotations, video sidecars,
+  and ``~/.labelImgSettings.json``. Qualify upgrades on copies of production
+  data; restore compatible backups when rolling back rather than assuming
+  older applications can reverse schema migrations.
+* SAM and video remain optional Python extras. Native executables contain the
+  base application and plugin host, not those dependencies or third-party
+  plugins. Torch, torchvision, SAM 2, checkpoints, and configs remain
+  separately managed.
+
 4.0.0rc0 (2026-08-12)
 ---------------------
 
-Consolidated release replacing 3.3.0, 3.4.0, and 3.5.0, which were published
-within five hours of each other and have been yanked from PyPI. It carries all
-of their functionality, reviewed together rather than shipped overnight, and
-adds a draw-first canvas. Annotation formats, filenames, command-line entry
+Consolidated prerelease incorporating 3.3.0, 3.4.0, and 3.5.0, which were
+published within five hours of each other. Those stable versions remain
+available on PyPI and are not yanked. It carries their functionality together
+and adds a draw-first canvas. Annotation formats, filenames, command-line entry
 points, plugin APIs, document methods, shortcut identifiers, and Python 3.8
 through 3.13 support remain compatible. Existing video project sidecars are
 read and migrated as before.

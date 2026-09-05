@@ -1,7 +1,7 @@
 # libs/widgets/sam_settings_dialog.py
 """Settings dialog for the SAM-assisted polygon backend."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
     QWidget)
@@ -71,7 +71,7 @@ class SamSettingsDialog(QDialog):
         propagation_hint.setWordWrap(True)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 

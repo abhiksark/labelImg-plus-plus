@@ -1,6 +1,6 @@
 # tests/widgets/test_canvas_theme.py
 import sys
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 from libs.widgets.canvas import Canvas
 from libs.utils.styles import Theme
 

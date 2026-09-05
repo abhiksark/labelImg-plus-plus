@@ -544,7 +544,9 @@ class Sam2PropagationBackend(PropagationBackend):
                             observation = ObservationRecord(
                                 track_id, int(pts), geometry,
                                 keypoints=keypoints, present=True,
-                                source='tracker', review_state='accepted',
+                                # Provisional until reviewed, same contract as
+                                # the portable OpenCV backend.
+                                source='tracker', review_state='pending',
                                 anchor=False, quality=quality,
                                 revision=request.document_revision)
                             observations.append(observation)

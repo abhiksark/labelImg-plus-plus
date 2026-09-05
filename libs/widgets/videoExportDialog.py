@@ -1,6 +1,6 @@
 """Export selection dialog for smart-video projects."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox,
     QVBoxLayout, QWidget,
@@ -73,7 +73,7 @@ class VideoExportDialog(QDialog):
         form.addRow('JPEG quality', self.jpeg_quality)
         form.addRow('Annotations', self.annotation_format)
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
@@ -89,6 +89,17 @@ class VideoExportDialog(QDialog):
             self, 'Choose new or empty export directory')
         if path:
             self.destination.setText(path)
+
+    def set_frame_counts(self, annotated, verified):
+        """State the exact default-selection counts before export starts."""
+        annotated_index = self.selection.findData('annotated')
+        verified_index = self.selection.findData('verified')
+        self.selection.setItemText(
+            annotated_index, 'Annotated frames (%d accepted)' %
+            max(0, int(annotated)))
+        self.selection.setItemText(
+            verified_index, 'Verified frames (%d)' %
+            max(0, int(verified)))
 
     def _update_enabled(self, _value=None):
         ranged = self.selection.currentData() == 'range'

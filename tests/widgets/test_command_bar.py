@@ -1,3 +1,4 @@
+# tests/widgets/test_command_bar.py
 """Structural tests for the fixed workspace command bar."""
 
 import os
@@ -5,10 +6,12 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QAction, QApplication, QMenu
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QApplication, QMenu
 
 from libs.widgets.commandBar import CommandBar
+from libs.utils.styles import Theme
 
 
 def _action(text, parent, checkable=False):
@@ -27,6 +30,7 @@ def _bar():
     next_action = _action('Next', owner)
     save = _action('Save', owner, checkable=True)
     verify = _action('Verify', owner)
+    complete = _action('Done & Next', owner)
     output_format = _action('Pascal VOC', owner)
     save_as = _action('Save as', owner)
     file_menu.addActions([open_action, save])
@@ -35,6 +39,7 @@ def _bar():
         'labelImgPlusPlus', (file_menu, edit_menu),
         (open_action, open_video), previous, next_action, save, verify,
         output_format, (save, save_as, verify, output_format),
+        primary_action=complete,
     )
     return owner, bar, {
         'open': open_action,
@@ -42,6 +47,7 @@ def _bar():
         'next': next_action,
         'save': save,
         'verify': verify,
+        'complete': complete,
         'format': output_format,
     }
 
@@ -53,6 +59,7 @@ def test_command_bar_reuses_actions_and_tracks_their_state():
     assert bar.save_button.defaultAction() is save
     assert bar.verify_button.defaultAction() is actions['verify']
     assert bar.format_button.defaultAction() is actions['format']
+    assert bar.primary_button.defaultAction() is actions['complete']
 
     save.setEnabled(False)
     save.setText('Store')
@@ -88,6 +95,11 @@ def test_command_bar_buttons_trigger_the_authoritative_action():
     bar.save_button.click()
     assert calls == [True]
 
+    actions['complete'].triggered.connect(
+        lambda checked: calls.append(('complete', checked)))
+    bar.primary_button.click()
+    assert calls[-1] == ('complete', False)
+
 
 def test_command_bar_exposes_top_level_menus_and_open_commands():
     owner, bar, actions = _bar()
@@ -104,24 +116,26 @@ def test_command_bar_focus_and_responsive_overflow():
     bar.resize(1000, bar.height())
     QApplication.processEvents()
     assert not bar.position_label.isHidden()
-    assert not bar.verify_button.isHidden()
+    assert bar.verify_button.isHidden()
+    assert bar.save_button.isHidden()
+    assert not bar.primary_button.isHidden()
     assert not bar.format_button.isHidden()
     assert bar.application_button.toolButtonStyle() == \
-        Qt.ToolButtonTextBesideIcon
+        Qt.ToolButtonStyle.ToolButtonTextBesideIcon
 
     bar.resize(600, bar.height())
     QApplication.processEvents()
     assert bar.position_label.isHidden()
     assert bar.verify_button.isHidden()
     assert bar.format_button.isHidden()
-    assert bar.application_button.toolButtonStyle() == Qt.ToolButtonIconOnly
+    assert bar.application_button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
     assert not bar.overflow_button.isHidden()
     assert actions['verify'] in bar.overflow_menu.actions()
     assert actions['format'] in bar.overflow_menu.actions()
     for button in (
             bar.application_button, bar.open_button, bar.previous_button,
             bar.next_button, bar.save_button, bar.overflow_button):
-        assert button.focusPolicy() == Qt.StrongFocus
+        assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
 
 
 def test_command_bar_document_and_dirty_state():
@@ -133,8 +147,33 @@ def test_command_bar_document_and_dirty_state():
     assert bar.document_label.text() == 'frame-001.png'
     assert bar.document_label.toolTip() == '/data/frame-001.png'
     assert not bar.dirty_indicator.isHidden()
+    assert bar.save_state_label.text() == 'Unsaved changes'
     assert bar.position_label.text() == '17 / 240'
 
     bar.set_document('clip.mp4', dirty=False, read_only=True)
     assert bar.document_label.text() == 'clip.mp4 · Read only'
     assert bar.dirty_indicator.isHidden()
+    assert bar.save_state_label.text() == 'Read only'
+
+
+def test_primary_text_renders_literal_ampersand_without_mutating_action():
+    owner, bar, actions = _bar()
+    assert owner is not None
+    bar.set_primary_text('Retry save & next')
+
+    assert actions['complete'].text() == 'Done & Next'
+    assert bar.primary_button.text() == 'Retry save && next'
+    assert bar.primary_button.accessibleName() == 'Retry save & next'
+
+
+def test_dark_theme_preserves_full_color_application_icon():
+    owner, bar, _actions = _bar()
+    assert owner is not None
+    light_image = bar.application_button.icon().pixmap(
+        QSize(18, 18)).toImage()
+
+    bar.apply_theme(Theme.DARK)
+
+    dark_image = bar.application_button.icon().pixmap(
+        QSize(18, 18)).toImage()
+    assert dark_image == light_image

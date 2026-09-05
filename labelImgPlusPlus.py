@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# labelImgPlusPlus.py
 import argparse
 import codecs
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import os.path
 import platform
 import shutil
@@ -12,38 +13,20 @@ import time
 import webbrowser as wb
 from functools import partial
 
-try:
-    from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
-    from PyQt5.QtCore import (
-        Qt, QFileInfo, QItemSelectionModel, QProcess, QRect, QSize, QTimer,
-        QPoint, QPointF, QUrl, QVariant
-    )
-    from PyQt5.QtWidgets import (
-        QAction, QActionGroup, QApplication, QCheckBox, QComboBox, QListView,
-        QDialog, QFileDialog, QHBoxLayout, QLabel,
-        QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
-        QScrollArea, QTabWidget, QToolButton,
-        QVBoxLayout, QWidget, QWidgetAction
-    )
-except ImportError:
-    # needed for py3+qt4
-    # Ref:
-    # http://pyqt.sourceforge.net/Docs/PyQt4/incompatible_apis.html
-    # http://stackoverflow.com/questions/21217399/pyqt4-qtcore-qvariant-object-instead-of-a-string
-    if sys.version_info.major >= 3:
-        import sip
-        sip.setapi('QVariant', 2)
-    from PyQt4.QtGui import (
-        QColor, QCursor, QImage, QImageReader, QPixmap,
-        QAction, QActionGroup, QApplication, QCheckBox,
-        QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-        QMainWindow, QMenu, QMessageBox, QScrollArea,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
-    )
-    from PyQt4.QtCore import (
-        Qt, QFileInfo, QItemSelectionModel, QProcess, QSize, QTimer, QPoint,
-        QPointF, QVariant
-    )
+from PyQt6.QtGui import (
+    QAction, QActionGroup, QColor, QCursor, QImage, QImageReader, QPixmap,
+)
+from PyQt6.QtCore import (
+    Qt, QFileInfo, QItemSelectionModel, QProcess, QRect, QSize, QTimer,
+    QPoint, QPointF, QUrl
+)
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QListView,
+    QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
+    QScrollArea, QTabWidget, QToolButton,
+    QVBoxLayout, QWidget, QWidgetAction
+)
 
 # Widgets
 from libs.widgets.combobox import ComboBox
@@ -64,7 +47,7 @@ from libs.widgets.videoExportDialog import VideoExportDialog
 from libs.widgets.commandBar import CommandBar
 from libs.widgets.toolRail import AnnotationToolRail
 from libs.widgets.workspaceInspector import (
-    WorkspaceInspector, WorkspaceSplitterShell,
+    InspectorContextCard, WorkspaceInspector, WorkspaceSplitterShell,
 )
 from libs.widgets.annotationInspector import (
     AnnotationFilterProxyModel, AnnotationListModel, AnnotationRoles,
@@ -98,13 +81,19 @@ from libs.core.plugin_manager import PluginManager
 from libs.core.profiling import (
     hash_path, recorder as trace_recorder, trace_span,
 )
-from libs.core.video_decoder import VIDEO_EXTENSIONS, VideoDecoderSession
+from libs.core.video_decoder import (
+    VIDEO_EXTENSIONS, VideoDecoderSession, decode_video_thumbnails,
+)
 from libs.core.video_project import (
     PROJECT_SUFFIX, VideoSourceChanged, VideoSourceMissing,
     checkpoint_project, default_project_path, save_project_as,
     save_project_delta,
 )
 from libs.core.video_model import MaterializedTrack, VideoProjectModel
+from libs.core.video_distinctness import DISTINCTNESS_POLICY
+from libs.core.video_distinctness_worker import (
+    DistinctnessRefinementRequest, refine_distinctness,
+)
 from libs.core.video_export import export_video_frames
 from libs.core.video_tracking import (  # noqa: F401 - compatibility patch seam
     OpenCVPropagationBackend, track_optical_flow,
@@ -118,6 +107,7 @@ from libs.core.video_session import (
 from libs.core.video_types import (
     DocumentKind, PropagationBatch, PropagationRequest, PropagationResult,
     TrackingRequest, VideoExportRequest, VideoFrameRef,
+    VideoThumbnailRequest,
 )
 from libs.widgets.videoTimelineWidget import format_timecode, parse_timecode
 from libs.widgets.pluginManagerDialog import (
@@ -158,16 +148,16 @@ from libs.utils.constants import (
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
-    generate_color_by_text, have_qstring, natural_sort
+    generate_color_by_text, natural_sort
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.window_geometry import default_window_size, fit_to_available
 from libs.utils.stringBundle import StringBundle
+from libs.utils.assets import ICON_FILES, STRING_FILES, read_license
+from libs.utils.assets import read_string_bundle
 from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
 
-# Resources
-from libs.resources import *  # noqa: F403
 
 __appname__ = 'labelImgPlusPlus'
 
@@ -189,10 +179,10 @@ class WindowMixin(object):
         toolbar = ToolBar(title)
         toolbar.setObjectName(u'%sToolBar' % title)
         # toolbar.setOrientation(Qt.Vertical)
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         if actions:
             add_actions(toolbar, actions)
-        self.addToolBar(Qt.LeftToolBarArea, toolbar)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
         return toolbar
 
 
@@ -205,6 +195,17 @@ def _probe_status(image_path, save_dir, image_list=None, resolver=None):
     if info.has_labels:
         return AnnotationStatus.HAS_LABELS
     return AnnotationStatus.NO_LABELS
+
+
+@dataclass(frozen=True)
+class _SaveFailureContext:
+    """Recovery intent retained independently of an individual save job."""
+
+    image_path: str
+    annotation_base: str
+    revision: int
+    on_success: object
+    message: str
 
 
 class MainWindow(QMainWindow, WindowMixin):
@@ -276,6 +277,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_save_callbacks = []
         self._video_close_save_pending = False
         self._video_frame_request_id = 0
+        self._review_navigation_key = None
+        self._review_navigation_request_id = None
+        self._video_overview_thumbnail_request_id = 0
         self._video_decode_in_flight = False
         self._video_prefetch_handle = None
         self.current_video_frame_ref = None
@@ -294,6 +298,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_before_state = None
         self._regeneration_runs = {}
         self._video_export_handle = None
+        self._video_distinctness_request_id = 0
+        self._video_distinctness_handle = None
+        self._video_distinctness_active_request = None
+        self._video_distinctness_pending = None
+        self._video_distinctness_cache = {}
+        self._video_distinctness_debounce = QTimer(self)
+        self._video_distinctness_debounce.setSingleShot(True)
+        self._video_distinctness_debounce.setInterval(200)
+        self._video_distinctness_debounce.timeout.connect(
+            self._start_video_distinctness_refinement)
         self._load_request_id = 0
         self._pending_navigation_index = None
         self._prefetch_handles = {}
@@ -301,7 +315,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self._navigation_streak = 0
         self._document_revision = 0
         self._save_handle = None
+        self._completion_handle = None
         self._save_locks = {}
+        self._save_failure = None
+        self._fit_scroll_reset_id = 0
         self._loading_veil = None
 
         # Memory optimization for large images (Issue #31)
@@ -324,6 +341,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._no_selection_slot = False
         self._beginner = True
         self.gallery_mode_enabled = False
+        self._responsive_inspector_collapsed = False
         self._gallery_batch_id = 0  # For cancelling pending batch processing
         self.annotation_catalog = AnnotationCatalog(
             self.task_coordinator, parent=self)
@@ -350,6 +368,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.prev_label_text = ''
         self._session_last_class = None
         self._pending_provisional_shape = None
+        self._provisional_phase = None
 
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
@@ -366,23 +385,29 @@ class MainWindow(QMainWindow, WindowMixin):
         use_default_label_layout.setContentsMargins(0, 0, 0, 0)
         use_default_label_layout.addWidget(self.use_default_label_checkbox)
         use_default_label_layout.addWidget(self.default_label_combo_box)
-        use_default_label_container = QWidget()
-        use_default_label_container.setLayout(use_default_label_layout)
+        self.use_default_label_container = QWidget()
+        self.use_default_label_container.setObjectName(
+            'annotationClassStrategyControls')
+        self.use_default_label_container.setLayout(use_default_label_layout)
 
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
         self.diffc_button.stateChanged.connect(self.button_state)
         self.edit_button = QToolButton()
-        self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.edit_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
 
         # Add some of widgets to list_layout
         list_layout.addWidget(self.edit_button)
         list_layout.addWidget(self.diffc_button)
-        list_layout.addWidget(use_default_label_container)
+        list_layout.addWidget(self.use_default_label_container)
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
+        # Search is the single list-filter surface in the modern inspector.
+        # Keep this compatibility projection alive for extensions and model
+        # updates without rendering a second, unlabeled filter field.
+        self.combo_box.hide()
         list_layout.addWidget(self.combo_box)
 
         self.annotation_search = QLineEdit()
@@ -482,8 +507,8 @@ class MainWindow(QMainWindow, WindowMixin):
         scroll.setWidget(self.canvas)
         scroll.setWidgetResizable(True)
         self.scroll_bars = {
-            Qt.Vertical: scroll.verticalScrollBar(),
-            Qt.Horizontal: scroll.horizontalScrollBar()
+            Qt.Orientation.Vertical.value: scroll.verticalScrollBar(),
+            Qt.Orientation.Horizontal.value: scroll.horizontalScrollBar()
         }
         self.scroll_area = scroll
         self.canvas.scrollRequest.connect(self.scroll_request)
@@ -492,6 +517,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.class_picker = InlineClassPicker(self)
         self.class_picker.accepted.connect(self._commit_provisional_shape)
         self.class_picker.cancelled.connect(self._cancel_provisional_shape)
+        self.class_picker.reviewAccepted.connect(
+            self._approve_provisional_outline)
         self.sam_controller = SamController(self)
         self.canvas.samClicked.connect(self.sam_controller.segment_at)
         self._sam_available = segmentation.sam_available()
@@ -521,7 +548,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_timeline.speedChanged.connect(
             self._set_video_playback_speed)
         self._video_playback_timer = QTimer(self)
-        self._video_playback_timer.setTimerType(Qt.PreciseTimer)
+        self._video_playback_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._video_playback_timer.setInterval(10)
         self._video_playback_timer.timeout.connect(self._video_playback_tick)
 
@@ -553,6 +580,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
         open_prev_image = action(get_str('prevImg'), self.request_previous_image,
                                  self.shortcut_config.get('open_prev_image'), 'prev', get_str('prevImgDetail'))
+
+        complete_item = action(
+            'Open source', self.trigger_primary_action,
+            self.shortcut_config.get('complete_item'), 'open',
+            'Open a source to begin annotation')
 
         verify = action(get_str('verifyImg'), self.request_verify_image,
                         self.shortcut_config.get('verify'), 'verify', get_str('verifyImgDetail'))
@@ -642,14 +674,18 @@ class MainWindow(QMainWindow, WindowMixin):
             'Cancel whole-video propagation without changing the project',
             enabled=False)
         video_accept_suggestion = action(
-            'Accept Current Suggestion', self.accept_current_suggestion,
+            'Accept && Next', self.accept_current_suggestion,
             self.shortcut_config.get('video_accept_suggestion'), 'verify',
-            'Accept the pending tracker observation on this frame',
+            'Accept this pending suggestion and open the next review issue',
             enabled=False)
         video_reject_suggestion = action(
-            'Reject Current Suggestion', self.reject_current_suggestion,
+            'Reject && Next', self.reject_current_suggestion,
             self.shortcut_config.get('video_reject_suggestion'), 'close',
-            'Reject the pending tracker observation on this frame',
+            'Reject this pending suggestion and open the next review issue',
+            enabled=False)
+        video_previous_issue = action(
+            'Previous issue', self.previous_review_issue, None, 'prev',
+            'Open the previous pending suggestion in the review queue',
             enabled=False)
         video_accept_visible = action(
             'Accept Visible Suggestions',
@@ -666,13 +702,13 @@ class MainWindow(QMainWindow, WindowMixin):
         video_accept_run = action(
             'Accept Full Propagation',
             lambda: self.review_full_propagation('accepted'),
-            None, 'verify',
+            self.shortcut_config.get('video_accept_run'), 'verify',
             'Accept pending observations from the latest propagation run',
             enabled=False)
         video_reject_run = action(
             'Reject Full Propagation',
             lambda: self.review_full_propagation('rejected'),
-            None, 'close',
+            self.shortcut_config.get('video_reject_run'), 'close',
             'Reject pending observations from the latest propagation run',
             enabled=False)
         video_export = action(
@@ -700,9 +736,10 @@ class MainWindow(QMainWindow, WindowMixin):
         copy_to_clipboard = action(get_str('copyBox'), self.copy_to_clipboard,
                                    self.shortcut_config.get('copy_to_clipboard'), 'copy', get_str('copyBoxDetail'),
                                    enabled=False)
-        paste_from_clipboard = action(get_str('pasteBox'), self.paste_from_clipboard,
-                                      self.shortcut_config.get('paste_from_clipboard'), 'paste', get_str('pasteBoxDetail'),
-                                      enabled=False)
+        paste_from_clipboard = action(
+            get_str('pasteBox'), self.paste_from_clipboard,
+            self.shortcut_config.get('paste_from_clipboard'), None,
+            get_str('pasteBoxDetail'), enabled=False)
         copy_all_to_clipboard = action(get_str('copyAllBoxes'), self.copy_all_to_clipboard,
                                        self.shortcut_config.get('copy_all_to_clipboard'), 'copy', get_str('copyAllBoxesDetail'),
                                        enabled=False)
@@ -812,13 +849,13 @@ class MainWindow(QMainWindow, WindowMixin):
         # Statistics panel moved to gallery mode (Issue #19)
 
         # Label list context menu.
-        label_menu = QMenu()
+        label_menu = QMenu(self)
         add_actions(label_menu, (
             edit, delete, shape_line_color, shape_fill_color, None,
             video_add_keyframe, video_edit_span, video_accept_suggestion,
             video_reject_suggestion, video_delete_track,
         ))
-        self.label_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.label_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.label_list.customContextMenuRequested.connect(
             self.pop_label_list_menu)
 
@@ -874,6 +911,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'copy_prev_bounding': copy_prev_bounding,
             'open_next_image': open_next_image,
             'open_prev_image': open_prev_image,
+            'complete_item': complete_item,
             'verify': verify,
             'video_play_pause': video_play_pause,
             'save': save,
@@ -922,6 +960,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               changeSaveDir=change_save_dir,
                               openAnnotation=open_annotation,
                               previous=open_prev_image, next=open_next_image,
+                              primary=complete_item,
                               close=close, resetAll=reset_all,
                               deleteImg=delete_image, verify=verify,
                               lineColor=color1, create=create, create_polygon=create_polygon,
@@ -936,6 +975,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               videoCancelPropagation=video_cancel_propagation,
                               videoAcceptSuggestion=video_accept_suggestion,
                               videoRejectSuggestion=video_reject_suggestion,
+                              videoPreviousIssue=video_previous_issue,
                               videoAcceptVisible=video_accept_visible,
                               videoRejectVisible=video_reject_visible,
                               videoAcceptRun=video_accept_run,
@@ -979,7 +1019,7 @@ class MainWindow(QMainWindow, WindowMixin):
             tools=self.menu('&Tools'),
             plugins=self.menu('&Plugins'),
             help=self.menu(get_str('menu_help')),
-            recentFiles=QMenu(get_str('menu_openRecent')),
+            recentFiles=QMenu(get_str('menu_openRecent'), self),
             labelList=label_menu)
 
         # Auto saving : Enable auto saving if pressing next
@@ -1027,7 +1067,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Sync single class mode from PR#106
         self.single_class_mode = QAction(get_str('singleClsMode'), self)
-        self.single_class_mode.setShortcut("Ctrl+Shift+S")
         self.single_class_mode.setCheckable(True)
         self.single_class_mode.setChecked(settings.get(SETTING_SINGLE_CLASS, False))
         self.lastLabel = None
@@ -1096,9 +1135,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.menus.view.addSeparator()
         self.menus.view.addAction(self.dark_mode_action)
 
-        # Apply initial theme
-        self._current_theme = Theme.DARK if settings.get(SETTING_DARK_MODE, False) else Theme.LIGHT
-        self._apply_theme(self._current_theme)
+        self._current_theme = (
+            Theme.DARK if settings.get(SETTING_DARK_MODE, False)
+            else Theme.LIGHT)
 
         self.menus.file.aboutToShow.connect(self.update_file_menu)
 
@@ -1193,6 +1232,16 @@ class MainWindow(QMainWindow, WindowMixin):
              self.label_zoom, self.label_coordinates),
             self.actions, self.zoom_widget, self)
         self.workspace_pages = canvas_column
+        self.workspace_pages.video_overview.seekRequested.connect(
+            self._seek_video_from_overview)
+        self.workspace_pages.video_overview.frames.thumbnailsRequested.connect(
+            self._request_video_overview_thumbnails)
+        self.workspace_pages.video_overview.set_workflow_actions(
+            self.actions.primary, self.actions.videoExport)
+        self.workspace_pages.save_error_notice.retryRequested.connect(
+            self.retry_failed_save)
+        self.workspace_pages.save_error_notice.saveAsRequested.connect(
+            self.retry_failed_save_as)
         self.video_timeline.set_propagation_actions(
             video_propagate_all, video_propagate_selected,
             video_cancel_propagation)
@@ -1208,8 +1257,21 @@ class MainWindow(QMainWindow, WindowMixin):
             tool_action.changed.connect(self._update_active_tool_status)
         self.workspace_inspector = WorkspaceInspector(
             self.annotation_controls, self.file_controls, self)
+        self.inspector_context_card = InspectorContextCard(
+            self.annotation_controls)
+        self.annotation_controls.layout().insertWidget(
+            0, self.inspector_context_card)
+        self.inspector_context_card.classStrategyChanged.connect(
+            self._set_annotation_class_strategy)
+        self.inspector_context_card.fixedClassChanged.connect(
+            self._set_fixed_annotation_class)
+        self.use_default_label_checkbox.toggled.connect(
+            self._sync_inspector_context)
+        self.single_class_mode.toggled.connect(
+            self._sync_inspector_context)
         self.workspace_inspector.set_selected_tab(
             self.workspace_settings.inspector_tab)
+        self._sync_inspector_context()
         self.workspace_shell = WorkspaceSplitterShell(
             self.tool_rail, canvas_column, self.workspace_inspector,
             scale_px(self.workspace_settings.inspector_width),
@@ -1272,13 +1334,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add Chris
         self.difficult = False
 
-        # Fix the compatible issue for qt4 and qt5. Convert the QStringList to python list
-        if settings.get(SETTING_RECENT_FILES):
-            if have_qstring():
-                recent_file_qstring_list = settings.get(SETTING_RECENT_FILES)
-                self.recent_files = [ustr(i) for i in recent_file_qstring_list]
-            else:
-                self.recent_files = recent_file_qstring_list = settings.get(SETTING_RECENT_FILES)
+        recent_files = settings.get(SETTING_RECENT_FILES)
+        if recent_files:
+            self.recent_files = list(recent_files)
         self.workspace_pages.empty_page.set_recent_paths(
             path for path in self.recent_files if os.path.exists(path))
 
@@ -1321,12 +1379,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add chris
         Shape.difficult = self.difficult
 
-        def xbool(x):
-            if isinstance(x, QVariant):
-                return x.toBool()
-            return bool(x)
-
-        if xbool(settings.get(SETTING_GALLERY_MODE, False)):
+        if bool(settings.get(SETTING_GALLERY_MODE, False)):
             self.actions.galleryMode.setChecked(True)
             self.toggle_gallery_mode()
 
@@ -1362,6 +1415,7 @@ class MainWindow(QMainWindow, WindowMixin):
             (open, open_video, open_dir, open_annotation,
              change_save_dir, self.menus.recentFiles),
             open_prev_image, open_next_image, save, verify, save_format,
+            primary_action=complete_item,
             overflow_entries=(
                 save, save_as, verify, save_format, None,
                 close, reset_all,
@@ -1386,7 +1440,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.addAction(candidate)
 
         self.setMenuWidget(self.command_bar)
-        self.command_bar.apply_theme(self._current_theme)
+        self._apply_theme(self._current_theme)
         self._sync_command_bar()
 
         # Start auto-save timer if enabled (Issue #13)
@@ -1400,11 +1454,17 @@ class MainWindow(QMainWindow, WindowMixin):
         self.plugin_manager.activate_enabled()
 
     def keyReleaseEvent(self, event):
-        if event.key() == Qt.Key_Control:
+        if event.key() == Qt.Key.Key_Control:
             self.canvas.set_drawing_shape_to_square(False)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Control:
+        if event.key() == Qt.Key.Key_Escape:
+            if self._pending_provisional_shape is not None:
+                self._cancel_provisional_shape()
+            else:
+                self.canvas.keyPressEvent(event)
+            return
+        if event.key() == Qt.Key.Key_Control:
             # Draw rectangle if Ctrl is pressed
             self.canvas.set_drawing_shape_to_square(True)
 
@@ -1428,16 +1488,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         Qt uses the desktop's own chooser when a platform-theme plugin
         provides one. Where none is installed -- the common case for pip and
-        conda PyQt5 builds -- it silently falls back to its built-in widget
+        conda PyQt6 builds -- it silently falls back to its built-in widget
         dialog, which opens at a tiny default size with truncated columns, no
         theme and a useless sidebar. Configure that fallback explicitly; the
         settings below are ignored when a native chooser is available.
         """
         dialog = QFileDialog(self, caption, start_dir)
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setOption(QFileDialog.ShowDirsOnly, True)
-        dialog.setOption(QFileDialog.DontResolveSymlinks, True)
-        dialog.setViewMode(QFileDialog.List)
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.Option.DontResolveSymlinks, True)
+        dialog.setViewMode(QFileDialog.ViewMode.List)
         dialog.resize(scale_px(880), scale_px(560))
         dialog.setStyleSheet(get_stylesheet(self._current_theme))
 
@@ -1453,7 +1513,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # Ships ~40px wide, which clips every entry to three characters.
             sidebar.setMinimumWidth(scale_px(180))
 
-        if dialog.exec_() != QFileDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return ''
         chosen = dialog.selectedFiles()
         return chosen[0] if chosen else ''
@@ -1463,15 +1523,15 @@ class MainWindow(QMainWindow, WindowMixin):
         new_format, warning = format_metadata.next_in_cycle(self.label_file_format)
 
         # Show confirmation dialog
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Warning)
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
         msg.setWindowTitle("Change Annotation Format")
         msg.setText(warning)
         msg.setInformativeText("This will only affect new saves. Existing annotation files will not be converted.")
-        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-        msg.setDefaultButton(QMessageBox.Ok)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
 
-        if msg.exec_() == QMessageBox.Ok:
+        if msg.exec() == QMessageBox.StandardButton.Ok:
             self.set_format(new_format)
             self.set_dirty()
             self.status(f"Format changed to {new_format}")
@@ -1494,6 +1554,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.workspace_shell.set_inspector_collapsed(collapsed)
 
     def _inspector_collapsed_changed(self, collapsed):
+        self._responsive_inspector_collapsed = False
         self.settings[SETTING_INSPECTOR_COLLAPSED] = bool(collapsed)
         if hasattr(self.actions, 'inspectorVisible'):
             self.actions.inspectorVisible.blockSignals(True)
@@ -1523,31 +1584,256 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_gallery_mode(self, value=True):
         """Switch the central stack without detaching workspace chrome."""
+        if value and not self._guard_provisional_transition():
+            self.actions.galleryMode.setChecked(False)
+            return None
         if hasattr(self, '_toggling_gallery') and self._toggling_gallery:
-            return
-        if value and self.document_kind == DocumentKind.VIDEO:
-            # Guarded here as well as on the action: the gallery has no
-            # entries for a video, so entering it strands the user on an
-            # empty page with the timeline and canvas hidden.
-            self.status(self.string_bundle.get_string(
-                'galleryModeVideoDisabled'))
             return
         self._toggling_gallery = True
         self._gallery_batch_id += 1
         try:
             self.gallery_mode_enabled = bool(value)
             if self.gallery_mode_enabled:
-                self.workspace_pages.set_page('gallery')
-                QTimer.singleShot(0, self._refresh_full_gallery_statuses)
-                QTimer.singleShot(100, self._refresh_all_statistics)
-                if self.file_path:
-                    self.full_gallery.select_image(self.file_path)
+                self._show_browse_page()
             else:
+                self._cancel_video_distinctness_refinement()
                 page = ('empty' if self.document_kind == DocumentKind.NONE
                         else 'canvas')
                 self.workspace_pages.set_page(page)
         finally:
             self._toggling_gallery = False
+
+    def _show_browse_page(self):
+        """Show the browse slot's content for the open document.
+
+        One slot, two contents: an image directory browses as the gallery of
+        its files, a video browses as the overview of its tracks and frames.
+        The document decides, so there is no second toggle to keep in step.
+        """
+        if self.document_kind == DocumentKind.VIDEO:
+            self.workspace_pages.set_page('overview')
+            self._refresh_video_overview()
+            return
+        self._cancel_video_distinctness_refinement()
+        self.workspace_pages.set_page('gallery')
+        QTimer.singleShot(0, self._refresh_full_gallery_statuses)
+        QTimer.singleShot(100, self._refresh_all_statistics)
+        if self.file_path:
+            self.full_gallery.select_image(self.file_path)
+
+    def _refresh_video_overview(self, debounce=False):
+        """Rebuild the overview from the live video model.
+
+        Guarded rather than assumed: the document kind flips to VIDEO before
+        the model exists during an open, and tests set it directly.
+        """
+        model = getattr(self, 'video_model', None)
+        if model is None:
+            return
+        snapshot = getattr(self, 'video_snapshot', None)
+        duration = 0 if snapshot is None else int(snapshot.duration_pts or 0)
+        overview = self.workspace_pages.video_overview
+        state = model.snapshot_state()
+        if snapshot is None:
+            overview.set_state(state, duration)
+            return
+        overview.frames.set_media_context(
+            (snapshot.source_path, snapshot.fingerprint,
+             snapshot.stream_index, snapshot.time_base_num,
+             snapshot.time_base_den),
+            snapshot.start_pts, snapshot.time_base_num,
+            snapshot.time_base_den, snapshot.width, snapshot.height)
+        plan = overview.set_state(
+            state, duration, start_pts=int(snapshot.start_pts or 0),
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den)
+        self._schedule_video_distinctness_refinement(plan, debounce=debounce)
+
+    @staticmethod
+    def _video_distinctness_cache_key(request):
+        return (
+            request.fingerprint, request.stream_index,
+            request.time_base_num, request.time_base_den,
+            request.start_pts, request.model_revision, request.policy,
+        )
+
+    def _cancel_video_distinctness_refinement(self, clear_cache=False):
+        """Invalidate pending/running pixel work while preserving geometry."""
+        timer = getattr(self, '_video_distinctness_debounce', None)
+        if timer is not None:
+            timer.stop()
+        self._video_distinctness_request_id = getattr(
+            self, '_video_distinctness_request_id', 0) + 1
+        handle = getattr(self, '_video_distinctness_handle', None)
+        if handle is not None:
+            handle.cancel()
+        self._video_distinctness_handle = None
+        self._video_distinctness_active_request = None
+        self._video_distinctness_pending = None
+        if clear_cache:
+            self._video_distinctness_cache = {}
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.video_overview.set_refining(False)
+
+    def _video_distinctness_is_current(self, request):
+        snapshot = getattr(self, 'video_snapshot', None)
+        model = getattr(self, 'video_model', None)
+        overview = getattr(
+            getattr(self, 'workspace_pages', None), 'video_overview', None)
+        return (
+            snapshot is not None and model is not None and overview is not None
+            and self.workspace_pages.current_page() == 'overview'
+            and request.request_id == self._video_distinctness_request_id
+            and request.generation == self._dataset_generation
+            and request.model_revision == model.revision
+            and request.source_path == snapshot.source_path
+            and request.fingerprint == snapshot.fingerprint
+            and request.stream_index == snapshot.stream_index
+            and request.time_base_num == snapshot.time_base_num
+            and request.time_base_den == snapshot.time_base_den
+            and request.start_pts == int(snapshot.start_pts or 0)
+            and request.policy == DISTINCTNESS_POLICY
+            and request.plan == overview.distinctness_plan())
+
+    def _schedule_video_distinctness_refinement(self, plan, debounce=False):
+        """Use cache or queue an independently decoded additive pixel pass."""
+        snapshot = self.video_snapshot
+        model = self.video_model
+        self._cancel_video_distinctness_refinement()
+        if (snapshot is None or model is None
+                or self.workspace_pages.current_page() != 'overview'):
+            return
+        request = DistinctnessRefinementRequest(
+            request_id=self._video_distinctness_request_id,
+            generation=self._dataset_generation,
+            model_revision=model.revision,
+            source_path=snapshot.source_path,
+            fingerprint=snapshot.fingerprint,
+            stream_index=snapshot.stream_index,
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den,
+            start_pts=int(snapshot.start_pts or 0),
+            plan=plan)
+        key = self._video_distinctness_cache_key(request)
+        cached = self._video_distinctness_cache.get(key)
+        if cached is not None:
+            self.workspace_pages.video_overview.set_refined_pts(cached)
+            return
+        # With no skipped sample, pixels cannot add anything to the answer.
+        if not set(plan.sample_pts).difference(plan.selected_pts):
+            return
+        self._video_distinctness_pending = request
+        if debounce:
+            self._video_distinctness_debounce.start()
+        else:
+            self._start_video_distinctness_refinement()
+
+    def _start_video_distinctness_refinement(self):
+        request = self._video_distinctness_pending
+        self._video_distinctness_pending = None
+        if request is None or not self._video_distinctness_is_current(request):
+            return
+
+        def refine(handle):
+            return refine_distinctness(
+                request, cancelled=handle.is_cancelled)
+
+        try:
+            handle = self.task_coordinator.submit(
+                'background', refine, priority=JobPriority.STATISTICS,
+                key='video-distinctness', latest=True,
+                generation=request.generation)
+        except RuntimeError:
+            return
+        self._video_distinctness_handle = handle
+        self._video_distinctness_active_request = request
+        self.workspace_pages.video_overview.set_refining(True)
+        handle.result.connect(
+            lambda result, expected=request:
+            self._on_video_distinctness_result(result, expected))
+        handle.finished.connect(
+            lambda current=handle:
+            self._on_video_distinctness_finished(current))
+
+    def _on_video_distinctness_result(self, result, request):
+        if (not self._video_distinctness_is_current(request)
+                or result.request_id != request.request_id
+                or result.generation != request.generation
+                or result.model_revision != request.model_revision
+                or result.source_path != request.source_path
+                or result.fingerprint != request.fingerprint
+                or result.stream_index != request.stream_index
+                or result.time_base_num != request.time_base_num
+                or result.time_base_den != request.time_base_den
+                or result.start_pts != request.start_pts
+                or result.policy != request.policy):
+            return
+        if not result.completed:
+            return
+        self.workspace_pages.video_overview.set_refined_pts(
+            result.refined_pts)
+        key = self._video_distinctness_cache_key(request)
+        self._video_distinctness_cache = {key: result.refined_pts}
+
+    def _on_video_distinctness_finished(self, handle):
+        if self._video_distinctness_handle is not handle:
+            return
+        self._video_distinctness_handle = None
+        self._video_distinctness_active_request = None
+        self.workspace_pages.video_overview.set_refining(False)
+
+    def _request_video_overview_thumbnails(self, pts, max_size):
+        snapshot = self.video_snapshot
+        model = self.video_model
+        if snapshot is None or model is None or not pts:
+            return None
+        self._video_overview_thumbnail_request_id += 1
+        request = VideoThumbnailRequest(
+            request_id=self._video_overview_thumbnail_request_id,
+            generation=self._dataset_generation,
+            model_revision=model.revision,
+            source_path=snapshot.source_path,
+            fingerprint=snapshot.fingerprint,
+            stream_index=snapshot.stream_index,
+            time_base_num=snapshot.time_base_num,
+            time_base_den=snapshot.time_base_den,
+            pts=tuple(int(value) for value in pts),
+            max_size=max(1, int(max_size)))
+
+        def decode(handle):
+            return decode_video_thumbnails(
+                request, cancelled=handle.is_cancelled)
+
+        handle = self.task_coordinator.submit(
+            'background', decode, priority=JobPriority.VISIBLE_THUMBNAIL,
+            key='video-overview-thumbnails', latest=True,
+            generation=request.generation)
+        handle.result.connect(self._on_video_overview_thumbnails)
+        return handle
+
+    def _on_video_overview_thumbnails(self, result):
+        assert QApplication.instance().thread() == self.thread()
+        request = result.request
+        snapshot = self.video_snapshot
+        model = self.video_model
+        if (request.request_id != self._video_overview_thumbnail_request_id
+                or request.generation != self._dataset_generation
+                or snapshot is None or model is None
+                or request.model_revision != model.revision
+                or request.source_path != snapshot.source_path
+                or request.fingerprint != snapshot.fingerprint
+                or request.stream_index != snapshot.stream_index
+                or request.time_base_num != snapshot.time_base_num
+                or request.time_base_den != snapshot.time_base_den):
+            return
+        frames = self.workspace_pages.video_overview.frames
+        for frame_ref, image in result.frames:
+            if (frame_ref.pts in request.pts
+                    and frame_ref.fingerprint == request.fingerprint
+                    and frame_ref.stream_index == request.stream_index
+                    and frame_ref.time_base_num == request.time_base_num
+                    and frame_ref.time_base_den == request.time_base_den):
+                frames.set_thumbnail(frame_ref.pts, image)
 
     def _cleanup_existing_gallery(self):
         """Compatibility hook: the embedded gallery has no resources to tear down."""
@@ -1565,6 +1851,22 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.galleryMode.setChecked(False)
         self.toggle_gallery_mode(False)
         self.gallery_image_activated(image_path)
+
+    def _seek_video_from_overview(self, pts):
+        """Leave the browse slot for the frame the user picked.
+
+        The gallery's precedent, restated for video: activating an item in the
+        browse slot lands the user on the canvas showing it, rather than
+        seeking behind a page they then have to dismiss themselves.
+        """
+        snapshot = self.video_snapshot
+        if self.document_kind != DocumentKind.VIDEO or snapshot is None:
+            return
+        self.actions.galleryMode.setChecked(False)
+        self.toggle_gallery_mode(False)
+        self.request_video_frame(VideoFrameRef(
+            snapshot.fingerprint, snapshot.stream_index, int(pts),
+            snapshot.time_base_num, snapshot.time_base_den))
 
     def _refresh_full_gallery_statuses(self):
         """Apply the shared progressive catalog to the full gallery."""
@@ -1630,6 +1932,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_save_status(saved=False)
         self.update_box_count()
         self._sync_command_bar()
+        self._sync_inspector_context()
         self._publish_plugin_document()
 
     def set_clean(self):
@@ -1732,7 +2035,9 @@ class MainWindow(QMainWindow, WindowMixin):
             and snapshot is not None and snapshot.read_only)
         command_bar.set_document(
             name, dirty=getattr(self, 'dirty', False),
-            full_path=source_path, read_only=read_only)
+            full_path=source_path, read_only=read_only,
+            provisional=(
+                getattr(self, '_pending_provisional_shape', None) is not None))
 
         if self.document_kind == DocumentKind.VIDEO:
             timeline = getattr(self, 'video_timeline', None)
@@ -1745,14 +2050,240 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             position = '— / —'
         command_bar.set_position(position)
+        self._sync_primary_action()
+
+    def _has_next_image(self):
+        if not self.m_img_list or not self.file_path:
+            return False
+        index = self._path_to_idx.get(self.file_path, self.cur_img_idx)
+        return 0 <= index < len(self.m_img_list) - 1
+
+    def _pending_video_observation_count(self):
+        model = getattr(self, 'video_model', None)
+        if model is None:
+            return 0
+        return sum(1 for item in model.observations.values()
+                   if item.review_state == 'pending')
+
+    def _selected_current_pending_key(self):
+        if getattr(self, '_review_navigation_key', None) is not None:
+            return None
+        model = getattr(self, 'video_model', None)
+        frame = getattr(self, 'current_video_frame_ref', None)
+        track_id = getattr(self, '_selected_video_track_id', None)
+        if model is None or frame is None or track_id is None:
+            return None
+        key = (track_id, int(frame.pts))
+        observation = model.observations.get(key)
+        return key if observation is not None \
+            and observation.review_state == 'pending' else None
+
+    def _set_primary_action(self, text, icon_name, tooltip, enabled=True):
+        primary = self.actions.primary
+        primary.setText(text)
+        primary.setProperty('iconName', icon_name)
+        primary.setIcon(themed_icon(icon_name, self._current_theme))
+        primary.setToolTip(tooltip)
+        primary.setEnabled(bool(enabled))
+        command_bar = getattr(self, 'command_bar', None)
+        if command_bar is not None:
+            command_bar.set_primary_text(text)
+
+    def _sync_primary_action(self):
+        """Project the current product state onto one completion command."""
+        if not hasattr(self, 'actions') or not hasattr(self.actions, 'primary'):
+            return
+        if self._completion_handle is not None:
+            self._set_primary_action(
+                'Finishing…', 'verify',
+                'Saving and marking this image complete', enabled=False)
+            return
+        if self.document_kind == DocumentKind.NONE:
+            self._set_primary_action(
+                'Open source', 'open', 'Open an image, folder, or video')
+            return
+        pending = self._pending_provisional_shape is not None
+        if pending:
+            if self._provisional_phase == 'review':
+                self._set_primary_action(
+                    'Review outline first', 'verify',
+                    'Use or retry the Smart Select outline before finishing',
+                    enabled=False)
+            else:
+                self._set_primary_action(
+                    'Name object first', 'verify',
+                    'Confirm or discard the provisional object before '
+                    'finishing',
+                    enabled=False)
+            return
+        if self.document_kind == DocumentKind.VIDEO:
+            if getattr(self, '_propagation_handle', None) is not None:
+                self._set_primary_action(
+                    'Cancel', 'close', 'Cancel video propagation')
+            elif getattr(self, '_review_navigation_key', None) is not None:
+                self._set_primary_action(
+                    'Opening suggestion…', 'verify',
+                    'Waiting for the exact review frame', enabled=False)
+            elif self._selected_current_pending_key() is not None:
+                self._set_primary_action(
+                    'Accept & Next', 'verify',
+                    'Accept this suggestion and open the next review issue')
+            elif self._pending_video_observation_count():
+                self._set_primary_action(
+                    'Review queue', 'verify',
+                    'Browse frames that need review')
+            else:
+                self._set_primary_action(
+                    'Browse video', 'labels',
+                    'Browse video tracks and distinct frames')
+            return
+
+        has_next = self._has_next_image()
+        failure = self._save_failure
+        if failure is not None and failure.image_path == self.file_path:
+            continues = callable(failure.on_success)
+            text = ('Retry save & next'
+                    if continues and has_next else 'Retry save')
+            self._set_primary_action(
+                text, 'save',
+                ('Retry the latest changes and open the next image only '
+                 'after that exact revision is saved'
+                 if continues and has_next else
+                 'Retry saving the latest annotation revision'))
+            return
+        if self.canvas.verified and not self.dirty:
+            self._set_primary_action(
+                'Next image' if has_next else 'Complete',
+                'next' if has_next else 'verify',
+                ('Open the next image' if has_next
+                 else 'This image is saved and complete'),
+                enabled=has_next)
+        elif self.canvas.verified:
+            self._set_primary_action(
+                'Save & Next' if has_next else 'Save completion',
+                'next' if has_next else 'save',
+                'Save this completed image%s' % (
+                    ' and open the next one' if has_next else ''))
+        else:
+            self._set_primary_action(
+                'Done & Next' if has_next else 'Mark done', 'verify',
+                'Save, mark this image complete%s' % (
+                    ', and open the next one' if has_next else ''))
+
+    def trigger_primary_action(self, _value=False):
+        """Run the state-derived high-frequency product action."""
+        if self.document_kind == DocumentKind.NONE:
+            return self.open_file()
+        if self._pending_provisional_shape is not None:
+            if self._provisional_phase == 'review':
+                self.status(
+                    'Use the Smart Select outline or press Escape to try '
+                    'again')
+            else:
+                self.status(
+                    'Name the new object or press Escape before finishing')
+            return None
+        if self.document_kind == DocumentKind.VIDEO:
+            if getattr(self, '_propagation_handle', None) is not None:
+                return self.cancel_video_propagation()
+            if self._selected_current_pending_key() is not None:
+                return self.accept_current_suggestion()
+            pending = self._pending_review_keys()
+            if pending:
+                current = self._current_pending_keys()
+                target = current[0] if current else self._pending_review_target(
+                    (self._selected_video_track_id,
+                     self.current_video_frame_ref.pts), direction=1)
+                return self._activate_pending_review(target or pending[0])
+            self.actions.galleryMode.setChecked(True)
+            self.toggle_gallery_mode(True)
+            return None
+        if (self._save_failure is not None
+                and self._save_failure.image_path == self.file_path):
+            return self.retry_failed_save()
+        if self.canvas.verified and not self.dirty:
+            return self.request_next_image()
+        return self._complete_current_image()
+
+    def _complete_current_image(self):
+        """Persist completion, navigating only after the exact revision saves."""
+        if self.document_kind != DocumentKind.IMAGE or not self.file_path:
+            return None
+        if self._completion_handle is not None:
+            return self._completion_handle
+
+        source = self.file_path
+        if self.label_file is None:
+            self.label_file = LabelFile()
+        self.label_file.verified = True
+        self.canvas.verified = True
+        if self.lock_on_verify_option.isChecked():
+            self.canvas.locked = True
+        self.set_dirty()
+        self.paint_canvas()
+
+        def saved():
+            if self.file_path != source:
+                return
+            if self._has_next_image():
+                self.status('Image complete · opening the next image')
+                self.request_next_image()
+            else:
+                self.activate_select_tool()
+                self.status('Image saved and marked complete', delay=0)
+
+        handle = self.request_save_file(on_success=saved)
+        if handle is None:
+            self._sync_command_bar()
+            self.status(
+                'Could not finish this image; resolve the save issue and retry')
+            return None
+        self._track_completion_save(handle)
+        return handle
+
+    def _track_completion_save(self, handle):
+        """Block competing navigation until one recovery save settles."""
+        self._completion_handle = handle
+        self.actions.save.setEnabled(False)
+        self.actions.previous.setEnabled(False)
+        self.actions.next.setEnabled(False)
+        handle.finished.connect(
+            lambda current=handle: self._on_completion_finished(current))
+        self._sync_command_bar()
+
+    def _on_completion_finished(self, handle):
+        if self._completion_handle is not handle:
+            return
+        self._completion_handle = None
+        self.actions.save.setEnabled(bool(self.dirty))
+        loaded = self.document_kind != DocumentKind.NONE
+        self.actions.previous.setEnabled(loaded)
+        self.actions.next.setEnabled(loaded)
+        notice = getattr(
+            getattr(self, 'workspace_pages', None), 'save_error_notice', None)
+        if notice is not None and notice.isVisible():
+            notice.set_busy(False)
+        self._sync_command_bar()
 
     def update_image_count(self):
         """Update image counter in status bar."""
-        if self.m_img_list and self.file_path:
+        if self.document_kind == DocumentKind.VIDEO:
+            # m_img_list is emptied when a video loads, so the image branch
+            # below would report a permanent, meaningless "Image: 0 / 0".
+            timeline = getattr(self, 'video_timeline', None)
+            self.label_image_count.setText(
+                timeline.position_label.text()
+                if timeline is not None else 'PTS — · Frame ~—')
+            self.label_image_count.setToolTip(
+                timeline.position_label.toolTip()
+                if timeline is not None else 'Exact video position unavailable')
+        elif self.m_img_list and self.file_path:
             idx = self._path_to_idx.get(self.file_path, -1) + 1
             self.label_image_count.setText(f'Image: {idx} / {len(self.m_img_list)}')
+            self.label_image_count.setToolTip('')
         else:
             self.label_image_count.setText('Image: 0 / 0')
+            self.label_image_count.setToolTip('')
         size = getattr(self, '_original_image_size', QSize())
         if size is None or not size.isValid():
             size = self.image.size() if self.image is not None else QSize()
@@ -1781,6 +2312,12 @@ class MainWindow(QMainWindow, WindowMixin):
         if read_only:
             color = colors['text_secondary']
             tooltip = 'Read-only'
+        elif self._pending_provisional_shape is not None and saved:
+            color = colors['status_unsaved']
+            tooltip = 'Provisional object · not saved'
+        elif self._pending_provisional_shape is not None:
+            color = colors['status_unsaved']
+            tooltip = 'Unsaved changes · provisional object'
         elif saved:
             color = colors['status_saved']
             tooltip = 'Saved'
@@ -1798,6 +2335,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self._update_save_status_style(saved)
 
     def reset_state(self):
+        if not self._guard_provisional_transition():
+            return False
         self._dismiss_class_picker()
         self._plugin_document_ready = False
         self._restart_workers_if_needed()
@@ -1819,10 +2358,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_save_status(saved=True)
         self._sync_command_bar()
         self._publish_plugin_document(new_generation=True, force=True)
+        return True
 
     def _set_document_kind(self, kind):
         """Switch cache policy and document-only UI without touching content."""
         previous = getattr(self, 'document_kind', DocumentKind.NONE)
+        if previous == DocumentKind.VIDEO and kind != DocumentKind.VIDEO:
+            self._cancel_video_distinctness_refinement(clear_cache=True)
         if previous != kind and hasattr(self, 'frame_cache'):
             self.frame_cache.clear()
         self.document_kind = kind
@@ -1832,34 +2374,25 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'workspace_pages'):
             self.workspace_pages.set_video_visible(
                 kind == DocumentKind.VIDEO)
-            # The gallery lists images from the dataset snapshot and has
-            # nothing to show for a video. Leaving it reachable was a dead
-            # end: the page went empty, the timeline and canvas disappeared,
-            # and nothing said why.
-            video_document = kind == DocumentKind.VIDEO
-            gallery_action = getattr(self.actions, 'galleryMode', None)
-            if gallery_action is not None:
-                gallery_action.setEnabled(not video_document)
-                gallery_action.setToolTip(self.string_bundle.get_string(
-                    'galleryModeVideoDisabled' if video_document
-                    else 'galleryModeDetail'))
-            if video_document and self.gallery_mode_enabled:
-                self.gallery_mode_enabled = False
-                if gallery_action is not None:
-                    gallery_action.blockSignals(True)
-                    gallery_action.setChecked(False)
-                    gallery_action.blockSignals(False)
-                # Say it out loud rather than silently changing modes.
-                self.status(self.string_bundle.get_string(
-                    'galleryModeVideoDisabled'))
-            if not self.gallery_mode_enabled:
+            # The browse slot follows the document rather than being closed
+            # off for one of them: 4.0.0rc0 disabled it for video because the
+            # image gallery had nothing to show for a clip, but the slot was
+            # never wrong -- its content was. Switching document while it is
+            # open re-routes it, so an image dataset is never left being
+            # browsed as a video's tracks, or the reverse.
+            if self.gallery_mode_enabled:
+                self._show_browse_page()
+            else:
                 self.workspace_pages.set_page(
                     'empty' if kind == DocumentKind.NONE else 'canvas')
+        if hasattr(self, 'workspace_inspector'):
+            self.workspace_inspector.set_files_visible(
+                kind != DocumentKind.VIDEO)
         if hasattr(self, 'annotation_model'):
             if kind == DocumentKind.VIDEO:
                 pts = (None if self.current_video_frame_ref is None else
                        self.current_video_frame_ref.pts)
-                self.annotation_model.set_video_context(self.video_model, pts)
+                self._set_annotation_video_context(self.video_model, pts)
             elif kind == DocumentKind.NONE:
                 self.annotation_model.clear()
         if kind != DocumentKind.VIDEO and hasattr(self, 'diffc_button'):
@@ -1881,12 +2414,15 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.videoCancelPropagation.setEnabled(False)
             self.actions.videoAcceptSuggestion.setEnabled(False)
             self.actions.videoRejectSuggestion.setEnabled(False)
+            self.actions.videoPreviousIssue.setEnabled(False)
             self.actions.videoAcceptVisible.setEnabled(False)
             self.actions.videoRejectVisible.setEnabled(False)
             self.actions.videoAcceptRun.setEnabled(False)
             self.actions.videoRejectRun.setEnabled(False)
+        self._sync_inspector_context()
 
     def _close_video_decoder(self, close_decoder=True):
+        self._cancel_video_distinctness_refinement(clear_cache=True)
         if hasattr(self, '_video_playback_timer'):
             self.pause_video()
         if hasattr(self, '_propagation_handle'):
@@ -1897,12 +2433,20 @@ class MainWindow(QMainWindow, WindowMixin):
             self.cancel_video_tracking()
         if hasattr(self, '_video_export_handle'):
             self.cancel_video_export()
+        coordinator = getattr(self, 'task_coordinator', None)
+        if coordinator is not None:
+            coordinator.cancel_key('video-overview-thumbnails')
+        if hasattr(self, 'workspace_pages'):
+            self.workspace_pages.video_overview.frames.set_media_context(
+                None, 0, 1, 1, 1, 1)
         decoder = getattr(self, 'video_decoder', None)
         self.video_decoder = None
         snapshot = getattr(self, 'video_snapshot', None)
         self.video_snapshot = None
         self.video_model = None
         self._selected_video_track_id = None
+        self._review_navigation_key = None
+        self._review_navigation_request_id = None
         self._video_save_active = False
         self._video_save_queued = False
         self._video_save_callbacks = []
@@ -1982,8 +2526,8 @@ class MainWindow(QMainWindow, WindowMixin):
         proxy = self.annotation_proxy.mapFromSource(source)
         if proxy.isValid():
             self.label_list.selectionModel().setCurrentIndex(
-                proxy, QItemSelectionModel.ClearAndSelect |
-                QItemSelectionModel.Rows)
+                proxy, QItemSelectionModel.SelectionFlag.ClearAndSelect |
+                QItemSelectionModel.SelectionFlag.Rows)
 
     def add_recent_file(self, file_path):
         if file_path in self.recent_files:
@@ -2067,7 +2611,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def show_info_dialog(self):
         from libs.__init__ import __version__
-        msg = u'Name:{0} \nApp Version:{1} \n{2} '.format(__appname__, __version__, sys.version_info)
+        license_text = read_license('feather-license')
+        msg = (
+            u'Name:{0}\nApp Version:{1}\n{2}\n\n'
+            u'Feather Icons:\n{3}'
+        ).format(__appname__, __version__, sys.version_info, license_text)
         QMessageBox.information(self, u'Information', msg)
 
     def show_shortcuts_dialog(self):
@@ -2075,13 +2623,13 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog = ShortcutsDialog(self.shortcut_config, self._action_map, self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        dialog.exec_()
+        dialog.exec()
 
     def show_plugins_dialog(self):
         dialog = PluginManagerDialog(self.plugin_manager, self)
         if hasattr(self, '_current_theme'):
             dialog.setStyleSheet(get_stylesheet(self._current_theme))
-        dialog.exec_()
+        dialog.exec()
 
     def create_shape(self):
         """Compatibility callback for the Bounding Box action."""
@@ -2211,7 +2759,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _finish_tool_activation(self):
         self._sync_tool_actions()
-        self.canvas.setFocus(Qt.OtherFocusReason)
+        self._publish_annotation_session_guidance()
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _on_provisional_click_blocked(self):
         """Explain a canvas click that went nowhere, and recover from it.
@@ -2223,10 +2772,23 @@ class MainWindow(QMainWindow, WindowMixin):
         """
         if self._pending_provisional_shape is None:
             return
-        self.status(self.string_bundle.get_string('provisionalPending'))
-        if self.class_picker.isVisible():
-            self.class_picker.raise_()
-            self.class_picker.edit.setFocus(Qt.PopupFocusReason)
+        reviewing = self._provisional_phase == 'review'
+        self.status(
+            'Use this outline or press Escape to try again'
+            if reviewing else
+            self.string_bundle.get_string('provisionalPending'))
+        self.class_picker.show()
+        self.class_picker.raise_()
+        target = (self.class_picker.use_outline_button
+                  if reviewing else self.class_picker.edit)
+        target.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    def _guard_provisional_transition(self):
+        """Keep unresolved geometry live across document transitions."""
+        if getattr(self, '_pending_provisional_shape', None) is None:
+            return True
+        self._on_provisional_click_blocked()
+        return False
 
     def _on_canvas_mode_changed(self, mode):
         """Keep the chrome consistent when the canvas changes mode itself.
@@ -2248,6 +2810,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.create_polygon.setEnabled(enabled)
             self.actions.editMode.setEnabled(False)
         self._sync_tool_actions(mode)
+        self._publish_annotation_session_guidance()
 
     def _sync_tool_actions(self, _mode=None):
         """Mirror the authoritative canvas mode into the exclusive actions."""
@@ -2265,7 +2828,215 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'workspace_pages'):
             self.workspace_pages.sam_output_toggle.setVisible(
                 self.canvas.mode == self.canvas.CREATE_SAM)
+        self._update_annotation_session_hint()
         self._update_active_tool_status()
+        self._sync_inspector_context()
+
+    def _annotation_session_guidance(self):
+        """Describe the next canvas gesture from current canonical UI state."""
+        pending = getattr(self, '_pending_provisional_shape', None)
+        if pending is not None:
+            if self._provisional_phase == 'review':
+                return ('Review this outline · Enter uses it · '
+                        'Esc tries again')
+            noun = ('polygon' if pending.shape_type == ShapeType.POLYGON
+                    else 'box')
+            return 'Name this %s · Enter confirms · Esc discards' % noun
+
+        select_shortcut = self.actions.editMode.shortcut().toString()
+        select_hint = (' or press %s to select' % select_shortcut
+                       if select_shortcut else ' or choose Select')
+        if self.canvas.mode == self.canvas.CREATE:
+            return 'Box stays active · draw the next object%s' % select_hint
+        if self.canvas.mode == self.canvas.CREATE_POLYGON:
+            return 'Polygon stays active · draw the next object%s' % select_hint
+        if self.canvas.mode == self.canvas.CREATE_SAM:
+            return 'Smart Select stays active · click the next object%s' % \
+                select_hint
+        return ''
+
+    def _update_annotation_session_hint(self):
+        pages = getattr(self, 'workspace_pages', None)
+        if pages is None:
+            return
+        pages.canvas_chrome.set_annotation_session(
+            self._annotation_session_guidance())
+
+    def _publish_annotation_session_guidance(self):
+        """Keep the status instruction consistent with the checked tool."""
+        guidance = self._annotation_session_guidance()
+        if guidance:
+            self.status(guidance, delay=0)
+        elif (hasattr(self, 'canvas')
+              and self.canvas.mode == self.canvas.EDIT):
+            self.status(
+                'Select objects or drag empty space to draw a box', delay=0)
+
+    def _annotation_class_strategy(self):
+        if self.use_default_label_checkbox.isChecked():
+            label = getattr(self, 'default_label', '') or 'chosen class'
+            return 'Fixed class · %s' % label
+        if self.single_class_mode.isChecked():
+            label = self._session_last_class or 'first confirmed class'
+            return 'Repeat last · %s' % label
+        return 'Confirm each'
+
+    def _set_annotation_class_strategy(self, strategy):
+        """Project the session choice onto compatibility settings."""
+        strategy = str(strategy)
+        self.use_default_label_checkbox.setChecked(strategy == 'fixed')
+        self.single_class_mode.setChecked(strategy == 'repeat')
+        self._sync_inspector_context()
+
+    def _set_fixed_annotation_class(self, label):
+        label = str(label).strip()
+        if not label:
+            return
+        self.default_label = label
+        if label in self.label_hist:
+            blocked = self.default_label_combo_box.cb.blockSignals(True)
+            self.default_label_combo_box.cb.setCurrentIndex(
+                self.label_hist.index(label))
+            self.default_label_combo_box.cb.blockSignals(blocked)
+        self._sync_inspector_context()
+
+    def _sync_inspector_context(self):
+        """Project canonical selection and tool state into the Objects card."""
+        card = getattr(self, 'inspector_context_card', None)
+        if card is None or not hasattr(self, 'actions'):
+            return
+        selected = self.current_annotation_identity() is not None
+        self.use_default_label_container.hide()
+        self.diffc_button.setVisible(
+            selected and self._pending_provisional_shape is None)
+        # Rename remains in the contextual More menu through the same QAction.
+        self.edit_button.hide()
+        self.annotation_search.setPlaceholderText(
+            'Search tracks…' if self.document_kind == DocumentKind.VIDEO
+            else 'Search objects…')
+        if self.document_kind == DocumentKind.NONE:
+            card.set_context(
+                'Get started', 'Open an image, folder, or video',
+                'The current tool and selected-object actions will appear here.')
+            return
+
+        pending_shape = getattr(self, '_pending_provisional_shape', None)
+        if pending_shape is not None:
+            if self._provisional_phase == 'review':
+                card.set_context(
+                    'Review outline', 'Use this outline?',
+                    'Geometry is provisional and not saved yet')
+                return
+            noun = ('polygon' if pending_shape.shape_type == ShapeType.POLYGON
+                    else 'box')
+            card.set_context(
+                'Classify object', 'Name this %s' % noun,
+                'Geometry is provisional and not saved yet')
+            return
+
+        if self.document_kind == DocumentKind.IMAGE:
+            creation = {
+                self.canvas.CREATE: ('Continuous boxes', 'Box'),
+                self.canvas.CREATE_POLYGON: ('Continuous polygons', 'Polygon'),
+                self.canvas.CREATE_SAM: ('Continuous Smart Select',
+                                         'Smart Select'),
+            }.get(self.canvas.mode)
+            if creation is not None:
+                title, tool = creation
+                card.set_context(
+                    'Annotation session', title,
+                    '%s · %s' % (tool, self._annotation_class_strategy()))
+                strategy = ('fixed'
+                            if self.use_default_label_checkbox.isChecked()
+                            else 'repeat'
+                            if self.single_class_mode.isChecked()
+                            else 'confirm')
+                card.set_class_strategy(
+                    strategy, self.label_hist,
+                    getattr(self, 'default_label', ''))
+                return
+
+            shape = self.current_shape()
+            if shape is None:
+                card.set_context(
+                    'Objects', 'Select an object to edit it',
+                    'Or choose Box, Polygon, or Smart Select to keep drawing.')
+                return
+            card.set_context(
+                'Selected object', shape.label,
+                '%s · manual annotation' % shape.shape_type.value,
+                actions=(self.actions.copy, self.actions.delete),
+                more=(self.actions.edit, self.actions.shapeLineColor,
+                      self.actions.shapeFillColor))
+            return
+
+        model = getattr(self, 'video_model', None)
+        track_id = self.current_annotation_identity() \
+            or self._selected_video_track_id
+        track = (None if model is None else model.tracks.get(track_id))
+        if track is None:
+            pending = self._pending_video_observation_count()
+            card.set_context(
+                'Tracks',
+                ('%d suggestion%s awaiting review' %
+                 (pending, '' if pending == 1 else 's')
+                 if pending else 'Select a track or draw a manual anchor'),
+                ('Use Review queue above to start with the next pending frame.'
+                 if pending else
+                 'Track actions follow the selected object and current frame.'))
+            return
+
+        pts = (None if self.current_video_frame_ref is None
+               else self.current_video_frame_ref.pts)
+        observation = (None if pts is None else
+                       model.observations.get((track_id, int(pts))))
+        pending_count = sum(
+            1 for item in model.observations.values()
+            if item.track_id == track_id and item.review_state == 'pending')
+        pending_suffix = (' · %d pending' % pending_count
+                          if pending_count else '')
+
+        common_more = (
+            self.actions.videoPropagateAll, self.actions.copy,
+            self.actions.videoEditSpan,
+            self.actions.videoTrackBackward,
+            self.actions.videoTrackForward,
+            self.actions.videoDeleteTrack)
+        if observation is not None \
+                and observation.review_state == 'pending':
+            queue = self._pending_review_keys()
+            card.set_context(
+                'Review suggestion', track.label,
+                '%d suggestion%s remaining · pending on this frame' % (
+                    len(queue), '' if len(queue) == 1 else 's'),
+                actions=(self.actions.videoAcceptSuggestion,
+                         self.actions.videoRejectSuggestion,
+                         self.actions.videoPreviousIssue),
+                more=(self.actions.videoAcceptRun,
+                      self.actions.videoRejectRun,
+                      self.actions.videoEditSpan,
+                      self.actions.videoDeleteTrack))
+            return
+        if observation is not None and observation.source == 'manual' \
+                and observation.review_state == 'accepted' \
+                and observation.anchor:
+            card.set_context(
+                'Selected track', track.label,
+                'Manual anchor ready%s' % pending_suffix,
+                actions=(self.actions.videoPropagateSelected,),
+                more=common_more)
+            return
+
+        materialized = (None if pts is None else
+                        model.materialize_one(track_id, int(pts)))
+        state = ('Not present on this frame' if materialized is None
+                 else '%s on this frame' %
+                 materialized.render_state.replace('_', ' ').capitalize())
+        card.set_context(
+            'Selected track', track.label, state + pending_suffix,
+            actions=((self.actions.videoAddKeyframe,)
+                     if materialized is not None else ()),
+            more=common_more)
 
     def _set_sam_output_mode(self, mode):
         """Persist the contextual Smart Select geometry choice."""
@@ -2307,7 +3078,7 @@ class MainWindow(QMainWindow, WindowMixin):
             parent=self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        if dialog.exec_():
+        if dialog.exec():
             values = dialog.values()
             self.settings[SETTING_SAM_ENCODER] = values["encoder"]
             self.settings[SETTING_SAM_DECODER] = values["decoder"]
@@ -2444,7 +3215,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_file_menu()
 
     def pop_label_list_menu(self, point):
-        self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
+        self.menus.labelList.exec(self.label_list.mapToGlobal(point))
 
     def edit_label(self, *_args):
         if (self.document_kind == DocumentKind.VIDEO
@@ -2745,6 +3516,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.keypoint_panel.show()
         else:
             self.keypoint_panel.hide()
+        self._sync_inspector_context()
 
     def add_label(self, shape, row=None, refresh=True):
         shape.paint_label = self.display_label_option.isChecked()
@@ -2863,8 +3635,8 @@ class MainWindow(QMainWindow, WindowMixin):
         msg = get_str('polygonDegradeWarning') % (polygon_count, format_name)
         reply = QMessageBox.question(
             self, 'Polygon Degradation', msg,
-            QMessageBox.Yes | QMessageBox.No)
-        return reply == QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        return reply == QMessageBox.StandardButton.Yes
 
     def save_labels(self, annotation_file_path):
         annotation_file_path = ustr(annotation_file_path)
@@ -3027,11 +3799,12 @@ class MainWindow(QMainWindow, WindowMixin):
             source = self.annotation_model.index(row, 0)
             label = self.annotation_model.data(source, AnnotationRoles.Class)
             self.annotation_model.setData(
-                source, Qt.Checked if not text or text == label
-                else Qt.Unchecked, Qt.CheckStateRole)
+                source, Qt.CheckState.Checked if not text or text == label
+                else Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
 
     def default_label_combo_selection_changed(self, index):
         self.default_label=self.label_hist[index]
+        self._sync_inspector_context()
 
     def label_selection_changed(self, *_args):
         # Guard selection feedback between the inspector and canvas.
@@ -3062,6 +3835,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.diffc_button.blockSignals(blocked)
         finally:
             self._updating_label_selection = False
+            self._sync_inspector_context()
 
     def _annotation_visibility_changed(self, identity, visible):
         if self.document_kind == DocumentKind.VIDEO:
@@ -3103,6 +3877,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_combo_box()
         self.canvas.update()
         self.set_dirty()
+        self._sync_inspector_context()
 
     def label_item_changed(self, item):
         """Legacy entry point routed through the unified model."""
@@ -3125,6 +3900,23 @@ class MainWindow(QMainWindow, WindowMixin):
                 and self._pending_provisional_shape is not shape):
             self._dismiss_class_picker(discard=False)
         self._pending_provisional_shape = shape
+        self._provisional_phase = (
+            'review' if self.canvas.mode == self.canvas.CREATE_SAM else 'class')
+        self.update_save_status(saved=not self.dirty)
+        self._update_annotation_session_hint()
+        self._sync_command_bar()
+        self._sync_inspector_context()
+        self.status(self._annotation_session_guidance(), delay=0)
+
+        if self._provisional_phase == 'review':
+            approval_label = ''
+            if self.use_default_label_checkbox.isChecked():
+                approval_label = getattr(self, 'default_label', '')
+            elif self.single_class_mode.isChecked():
+                approval_label = self._session_last_class or ''
+            self.class_picker.open_review_at(
+                self._provisional_picker_anchor(shape), approval_label)
+            return
 
         if self.use_default_label_checkbox.isChecked():
             text = getattr(self, 'default_label', '')
@@ -3137,6 +3929,35 @@ class MainWindow(QMainWindow, WindowMixin):
             self._commit_provisional_shape(self._session_last_class)
             return
 
+        self.class_picker.open_at(
+            self.label_hist,
+            self._session_last_class or self.prev_label_text,
+            self._provisional_picker_anchor(shape))
+
+    def _approve_provisional_outline(self):
+        """Advance a valid Smart Select result to class confirmation."""
+        shape = self._pending_provisional_shape
+        if (self._provisional_phase != 'review' or shape is None
+                or self.canvas.provisional_shape is not shape):
+            self._cancel_provisional_shape()
+            return
+        self._provisional_phase = 'class'
+        self._update_annotation_session_hint()
+        self._sync_primary_action()
+        self._sync_inspector_context()
+        self.status(self._annotation_session_guidance(), delay=0)
+        self.class_picker.hide()
+
+        if self.use_default_label_checkbox.isChecked():
+            text = getattr(self, 'default_label', '')
+            if text:
+                self._commit_provisional_shape(text)
+            else:
+                self._cancel_provisional_shape()
+            return
+        if self.single_class_mode.isChecked() and self._session_last_class:
+            self._commit_provisional_shape(self._session_last_class)
+            return
         self.class_picker.open_at(
             self.label_hist,
             self._session_last_class or self.prev_label_text,
@@ -3165,6 +3986,9 @@ class MainWindow(QMainWindow, WindowMixin):
         shape = self.canvas.commit_provisional_shape(
             text, generate_color_by_text(text))
         self._pending_provisional_shape = None
+        self._provisional_phase = None
+        self.update_save_status(saved=not self.dirty)
+        self._sync_command_bar()
         if shape is None:
             return
         self.add_label(shape)
@@ -3189,23 +4013,25 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_hist.append(text)
         self._update_current_image_stats()
 
-        # Creation is transient: hand the user back to Select with the new
-        # shape selected, so the next gesture edits rather than redraws.
-        # Gated on the drawing modes because SAM's commit_rectangle and
-        # commit_polygon reach here too, and Smart Select is meant to stay
-        # armed across clicks. Polygon keeps its tool for bulk segmentation.
-        if self.canvas.mode == self.canvas.CREATE:
-            self.activate_select_tool()
-        else:
-            self._sync_tool_actions()
+        # Creation is a sustained session. Box now follows Polygon and Smart
+        # Select: confirming a class keeps the chosen creation tool armed until
+        # the user explicitly selects, changes tool, navigates, or presses
+        # Escape. Re-arming Box after every object made the dominant workflow
+        # W -> draw -> classify -> W instead of a continuous annotation loop.
+        self._sync_tool_actions()
         self.canvas.select_shape(shape)
         self.shape_selection_changed(True)
+        self._publish_annotation_session_guidance()
         self._restore_canvas_focus()
 
     def _cancel_provisional_shape(self):
         self._pending_provisional_shape = None
+        self._provisional_phase = None
+        self.update_save_status(saved=not self.dirty)
         self.canvas.discard_provisional_shape()
         self._sync_tool_actions()
+        self._sync_command_bar()
+        self._publish_annotation_session_guidance()
         self._restore_canvas_focus()
 
     def _refocus_canvas_after_pick(self):
@@ -3230,7 +4056,7 @@ class MainWindow(QMainWindow, WindowMixin):
         QApplication.setActiveWindow(self)
         self.activateWindow()
         self.setFocusProxy(self.canvas)
-        self.canvas.setFocus(Qt.OtherFocusReason)
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _dismiss_class_picker(self, discard=True):
         picker = getattr(self, 'class_picker', None)
@@ -3239,8 +4065,11 @@ class MainWindow(QMainWindow, WindowMixin):
             picker.hide()
             picker.blockSignals(blocked)
         self._pending_provisional_shape = None
+        self._provisional_phase = None
         if discard and hasattr(self, 'canvas'):
             self.canvas.discard_provisional_shape()
+        self.update_save_status(saved=not self.dirty)
+        self._sync_command_bar()
 
     def scroll_request(self, delta, orientation):
         units = - delta / (8 * 15)
@@ -3248,6 +4077,10 @@ class MainWindow(QMainWindow, WindowMixin):
         bar.setValue(int(bar.value() + bar.singleStep() * units))
 
     def set_zoom(self, value):
+        # A queued fit reset belongs to the fit gesture that scheduled it.
+        # Manual zoom must be able to take ownership before that queued UI
+        # update runs.
+        self._fit_scroll_reset_id += 1
         self.actions.fitWidth.setChecked(False)
         self.actions.fitWindow.setChecked(False)
         self.zoom_mode = self.MANUAL_ZOOM
@@ -3261,8 +4094,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def zoom_request(self, delta):
         # get the current scrollbar positions
         # calculate the percentages ~ coordinates
-        h_bar = self.scroll_bars[Qt.Horizontal]
-        v_bar = self.scroll_bars[Qt.Vertical]
+        h_bar = self.scroll_bars[Qt.Orientation.Horizontal.value]
+        v_bar = self.scroll_bars[Qt.Orientation.Vertical.value]
 
         # get the current maximum, to know the difference after zooming
         h_bar_max = h_bar.maximum()
@@ -3316,14 +4149,22 @@ class MainWindow(QMainWindow, WindowMixin):
     def set_fit_window(self, value=True):
         if value:
             self.actions.fitWidth.setChecked(False)
+            self.actions.fitWindow.setChecked(True)
         self.zoom_mode = self.FIT_WINDOW if value else self.MANUAL_ZOOM
         self.adjust_scale()
+        if value:
+            self.paint_canvas()
+            self._schedule_fit_scroll_reset()
 
     def set_fit_width(self, value=True):
         if value:
             self.actions.fitWindow.setChecked(False)
+            self.actions.fitWidth.setChecked(True)
         self.zoom_mode = self.FIT_WIDTH if value else self.MANUAL_ZOOM
         self.adjust_scale()
+        if value:
+            self.paint_canvas()
+            self._schedule_fit_scroll_reset()
 
     def set_light(self, value):
         self.actions.lightOrg.setChecked(int(value) == 50)
@@ -3340,8 +4181,8 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.annotation_model.data(index, AnnotationRoles.Type) \
                     == ShapeType.POLYGON.value:
                 self.annotation_model.setData(
-                    index, Qt.Checked if value else Qt.Unchecked,
-                    Qt.CheckStateRole)
+                    index, Qt.CheckState.Checked if value else Qt.CheckState.Unchecked,
+                    Qt.ItemDataRole.CheckStateRole)
 
     def _video_project_target(self, source_path, project_path=None,
                               allow_dialog=False):
@@ -3368,6 +4209,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def request_open_video(self, path, project_path=None, skip_prompt=False,
                            source_override=None):
         """Queue a transactional video/project open on the decoder lane."""
+        if not self._guard_provisional_transition():
+            return None
         path = os.path.abspath(ustr(path))
         if not skip_prompt and self.dirty:
             if self.auto_saving.isChecked():
@@ -3376,9 +4219,9 @@ class MainWindow(QMainWindow, WindowMixin):
                     source_override=source_override))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(on_success=lambda: self.request_open_video(
                     path, project_path=project_path, skip_prompt=True,
                     source_override=source_override))
@@ -3386,6 +4229,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=True)
+        # The current overview remains visible while the replacement prepares,
+        # but its independent decoder must not keep working for a document the
+        # user has already asked to replace.
+        self._cancel_video_distinctness_refinement(clear_cache=True)
         self._dataset_generation = self.task_coordinator.next_generation()
         generation = self._dataset_generation
         self._video_open_request_id += 1
@@ -3444,7 +4291,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self._resolve_video_open_problem(
                 prepared, requested_path, project_path, source_override)
             return
-        self._commit_video_open(prepared)
+        if not self._commit_video_open(prepared):
+            self.canvas.setEnabled(bool(self.file_path))
         self._hide_loading_veil()
 
     def _locate_video_source(self, project_path):
@@ -3455,16 +4303,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _video_source_changed_choice(self, message):
         dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Warning)
+        dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setWindowTitle('Video source changed')
         dialog.setText(message)
         dialog.setInformativeText(
             'Annotations will not be applied to changed media.')
-        locate = dialog.addButton('Locate Original', QMessageBox.AcceptRole)
+        locate = dialog.addButton('Locate Original', QMessageBox.ButtonRole.AcceptRole)
         create = dialog.addButton(
-            'Create New Project', QMessageBox.DestructiveRole)
-        cancel = dialog.addButton(QMessageBox.Cancel)
-        dialog.exec_()
+            'Create New Project', QMessageBox.ButtonRole.DestructiveRole)
+        cancel = dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
         clicked = dialog.clickedButton()
         if clicked is locate:
             return 'locate'
@@ -3521,9 +4369,12 @@ class MainWindow(QMainWindow, WindowMixin):
     def _commit_video_open(self, prepared):
         """Atomically publish worker data on QApplication.thread()."""
         assert QApplication.instance().thread() == self.thread()
+        if self.reset_state() is False:
+            prepared.decoder.close()
+            return False
         snapshot = prepared.snapshot
         first = snapshot.initial_frame
-        self.reset_state()
+        self._clear_save_error()
         self._set_document_kind(DocumentKind.VIDEO)
         self.video_decoder = prepared.decoder
         self.video_snapshot = snapshot
@@ -3561,11 +4412,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.frame_cache.put(first)
         self.video_timeline.set_session(snapshot)
         self._refresh_video_timeline_markers()
+        # _set_document_kind routed the browse slot to the overview before
+        # this clip's model existed, so it is still showing the previous
+        # clip's tracks until it is refreshed from here.
+        if self.workspace_pages.current_page() == 'overview':
+            self._refresh_video_overview()
         self._materialize_video_frame(first.frame_ref.pts)
         self.set_clean()
         self.canvas.setEnabled(True)
-        self.adjust_scale(initial=True)
-        self.paint_canvas()
+        self._fit_loaded_document()
         self.toggle_actions(True)
         editable = not snapshot.read_only
         mutation_actions = (
@@ -3582,6 +4437,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.videoTrackBackward,
             self.actions.videoAcceptSuggestion,
             self.actions.videoRejectSuggestion,
+            self.actions.videoPreviousIssue,
             self.actions.videoAcceptVisible,
             self.actions.videoRejectVisible,
             self.actions.videoAcceptRun,
@@ -3602,7 +4458,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setWindowTitle(
             '%s %s%s' % (__appname__, snapshot.source_path, suffix))
         self.update_status_bar()
-        self.canvas.setFocus(True)
+        self.canvas.setFocus()
         if prepared.warning:
             self.status(prepared.warning, delay=15000)
         else:
@@ -3610,14 +4466,18 @@ class MainWindow(QMainWindow, WindowMixin):
                 'Opened video %s' % os.path.basename(snapshot.source_path))
         self._plugin_document_ready = True
         self._publish_plugin_document(new_generation=True, force=True)
+        return True
 
     def open_video(self, path, project_path=None):
         """Synchronous compatibility API for extensions and tests."""
+        if not self._guard_provisional_transition():
+            return False
         if self.dirty and not self.may_continue():
             return False
         path = os.path.abspath(ustr(path))
         target, read_only = self._video_project_target(
             path, project_path=project_path, allow_dialog=False)
+        self._cancel_video_distinctness_refinement(clear_cache=True)
         try:
             prepared = prepare_video_open(
                 path, project_path=target, read_only=read_only)
@@ -3625,8 +4485,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status('Error opening video: %s' % exc, delay=10000)
             return False
         self._dataset_generation = self.task_coordinator.next_generation()
-        self._commit_video_open(prepared)
-        return True
+        return self._commit_video_open(prepared)
 
     def request_save_video_project(self, _value=False, on_success=None):
         snapshot = self.video_snapshot
@@ -3785,7 +4644,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_save_status(saved=not self.dirty)
         self._refresh_video_timeline_markers()
         self._refresh_video_track_list()
+        # Only while it is on screen: rebuilding it recomputes distinctness
+        # over every observation, and nothing would see the result.
+        if self.workspace_pages.current_page() == 'overview':
+            self._refresh_video_overview(debounce=True)
         self.update_box_count()
+        self._sync_command_bar()
         self._publish_plugin_document()
 
     def _shape_geometry(self, shape):
@@ -3881,7 +4745,7 @@ class MainWindow(QMainWindow, WindowMixin):
         shapes = [self._shape_for_materialized(item)
                   for item in model.materialize(int(pts))]
         self.canvas.load_shapes(shapes)
-        self.annotation_model.set_video_context(model, pts)
+        self._set_annotation_video_context(model, pts)
         self.update_combo_box()
         if selected:
             match = next((shape for shape in shapes
@@ -3889,6 +4753,7 @@ class MainWindow(QMainWindow, WindowMixin):
             if match is not None:
                 self.canvas.select_shape(match)
             self._select_annotation_identity(selected)
+            self._sync_video_track_actions(selected)
         for shape in shapes:
             identity = shape.video_track_id
             index = self.annotation_model.index_for_identity(identity)
@@ -3897,7 +4762,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.set_shape_visible(shape, visible)
         self._render_propagation_preview(int(pts))
         self.update_box_count()
-        has_pending = any(
+        review_loading = self._review_navigation_key is not None
+        has_pending = not review_loading and any(
             item.pts == int(pts) and item.review_state == 'pending'
             for item in model.observations.values())
         editable = self._video_editable()
@@ -3910,6 +4776,9 @@ class MainWindow(QMainWindow, WindowMixin):
             key in self._tracking_run_keys
             and item.review_state == 'pending'
             for key, item in model.observations.items())
+        self.actions.videoPreviousIssue.setEnabled(
+            not review_loading and editable
+            and len(self._pending_review_keys()) > 1)
         self.actions.videoAcceptVisible.setEnabled(
             has_any_pending and editable)
         self.actions.videoRejectVisible.setEnabled(
@@ -3917,6 +4786,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.videoAcceptRun.setEnabled(has_run_pending and editable)
         self.actions.videoRejectRun.setEnabled(has_run_pending and editable)
         self._sync_video_propagation_actions()
+        self._sync_command_bar()
+        self._sync_inspector_context()
 
     def _refresh_video_track_list(self):
         model = self.video_model
@@ -3925,9 +4796,17 @@ class MainWindow(QMainWindow, WindowMixin):
         selected = self._selected_video_track_id
         pts = (None if self.current_video_frame_ref is None else
                self.current_video_frame_ref.pts)
-        self.annotation_model.set_video_context(model, pts)
+        self._set_annotation_video_context(model, pts)
         if selected:
             self._select_annotation_identity(selected)
+
+    def _set_annotation_video_context(self, model, pts):
+        snapshot = self.video_snapshot
+        self.annotation_model.set_video_context(
+            model, pts,
+            start_pts=0 if snapshot is None else snapshot.start_pts,
+            time_base_num=1 if snapshot is None else snapshot.time_base_num,
+            time_base_den=1 if snapshot is None else snapshot.time_base_den)
 
     def _video_track_selection_changed(self):
         self.label_selection_changed()
@@ -3948,6 +4827,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.videoTrackForward.setEnabled(can_track and editable)
         self.actions.videoTrackBackward.setEnabled(can_track and editable)
         self._sync_video_propagation_actions()
+        self._sync_inspector_context()
 
     def _qualifying_propagation_seeds(self, selected_only=False):
         model = self.video_model
@@ -4013,6 +4893,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.videoTrackBackward,
             self.actions.videoAcceptSuggestion,
             self.actions.videoRejectSuggestion,
+            self.actions.videoPreviousIssue,
             self.actions.videoAcceptVisible,
             self.actions.videoRejectVisible,
             self.actions.videoAcceptRun, self.actions.videoRejectRun,
@@ -4046,24 +4927,70 @@ class MainWindow(QMainWindow, WindowMixin):
             self.video_timeline.set_propagation_progress(
                 0, 0, 0, 0, None, 0, running=False)
         self._sync_video_propagation_actions()
+        self._sync_command_bar()
+        self._sync_inspector_context()
 
     def propagate_across_video(self):
         seeds = self._qualifying_propagation_seeds()
         if not seeds:
             self.status(
-                'This frame has no exact accepted manual anchors to propagate')
+                'This frame has no exact accepted manual anchors to '
+                'propagate. Tracker suggestions must be accepted before '
+                'they can seed another run.')
             return None
-        return self._start_video_propagation(seeds, (-1, 1))
+        return self._start_video_propagation(seeds, (-1, 1), confirm=True)
 
     def propagate_selected_object(self):
         seeds = self._qualifying_propagation_seeds(selected_only=True)
         if not seeds:
             self.status(
-                'Select an exact accepted manual anchor before propagation')
+                'Select an exact accepted manual anchor before propagation. '
+                'Tracker suggestions must be accepted before they can seed '
+                'another run.')
             return None
-        return self._start_video_propagation(seeds, (-1, 1))
+        return self._start_video_propagation(seeds, (-1, 1), confirm=True)
 
-    def _start_video_propagation(self, seeds, directions, endpoints=None):
+    @staticmethod
+    def _propagation_frame_totals(request, directions):
+        """Estimated frames per direction, and their sum.
+
+        Pure arithmetic over fields the request already carries, so the scope
+        can be stated before any work starts. The estimate comes from the
+        average rate, so it is approximate on variable-rate media and zero
+        when the rate is unknown.
+        """
+        totals = []
+        for direction in directions:
+            endpoint = (request.end_pts if direction > 0
+                        else request.start_pts)
+            seconds = abs(endpoint - request.current_pts) * \
+                request.time_base_num / request.time_base_den
+            totals.append(int(round(
+                seconds * request.average_rate_num / request.average_rate_den))
+                if request.average_rate_num and request.average_rate_den else 0)
+        return totals, sum(totals)
+
+    def _confirm_propagation_scope(self, request, directions, track_count):
+        """Ask before a sweeping run. Returns False when the user declines."""
+        _totals, frames = self._propagation_frame_totals(request, directions)
+        if len(directions) > 1:
+            span = 'forward and backward'
+        elif directions[0] > 0:
+            span = 'forward'
+        else:
+            span = 'backward'
+        scope = ('~%d frames' % frames if frames
+                 else 'the remainder of the clip')
+        message = self.string_bundle.get_string('propagateScopeConfirm') % (
+            track_count, scope, span)
+        reply = QMessageBox.question(
+            self, self.string_bundle.get_string('propagateScopeTitle'),
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _start_video_propagation(self, seeds, directions, endpoints=None,
+                                 confirm=False):
         if not self._ensure_video_editable():
             return None
         snapshot = self.video_snapshot
@@ -4108,7 +5035,15 @@ class MainWindow(QMainWindow, WindowMixin):
                 for track_id in track_ids)),
             average_rate_num=snapshot.average_rate_num,
             average_rate_den=snapshot.average_rate_den)
+        if confirm and not self._confirm_propagation_scope(
+                request, directions, len(track_ids)):
+            self._active_propagation_request = None
+            return None
+        self._cancel_video_distinctness_refinement()
         self._active_propagation_request = request
+        # A previous run's keys must not survive into this one, or "Accept
+        # Full Propagation" would silently act on stale suggestions.
+        self._tracking_run_keys = set()
         self._propagation_before_state = model.snapshot_state()
         self._propagation_preview = {}
         self._propagation_preview_gaps = {}
@@ -4116,22 +5051,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.video_propagation_backend,
             self.video_sam2_checkpoint, self.video_sam2_config)
 
+        totals, combined_total = self._propagation_frame_totals(
+            request, directions)
+
         def propagate(handle):
             results = []
             processed_offset = 0
-            totals = []
-            for direction in directions:
-                endpoint = (request.end_pts if direction > 0
-                            else request.start_pts)
-                seconds = abs(endpoint - request.current_pts) * \
-                    request.time_base_num / request.time_base_den
-                total = (int(round(
-                    seconds * request.average_rate_num /
-                    request.average_rate_den))
-                         if request.average_rate_num
-                         and request.average_rate_den else 0)
-                totals.append(total)
-            combined_total = sum(totals)
             for index, direction in enumerate(directions):
                 handle.check_cancelled()
 
@@ -4230,16 +5155,45 @@ class MainWindow(QMainWindow, WindowMixin):
         self._propagation_preview_gaps = {}
         applied = model.apply_propagation_result(result)
         after = model.snapshot_state()
-        if before != after:
+        changed = before != after
+        if changed:
             self.undo_stack.push(VideoModelCommand(
                 self, before, after, 'Propagate video objects'))
             self._on_video_model_mutation()
+
+        # apply_propagation_result returns the *request* unchanged when a run
+        # is fully blocked by manual anchors or gaps, so reporting its counts
+        # unconditionally would claim work that was never written.
+        written = applied.observations if changed else ()
+        # Make the run reviewable as a unit. Without this the propagated
+        # suggestions are unreachable by "Accept Full Propagation", which only
+        # ever saw the optical-flow path.
+        self._tracking_run_keys = {
+            (item.track_id, item.pts) for item in written
+            if item.review_state == 'pending'}
+
         self._materialize_video_frame(self.current_video_frame_ref.pts)
         self._set_propagation_running(False)
-        self.status(
-            'Propagation complete: %s observations, %s gaps, %s failures' % (
-                len(applied.observations), len(applied.gaps),
-                len(applied.failures)))
+        self._report_propagation_outcome(
+            len(written), len(applied.gaps) if changed else 0,
+            len(applied.failures), len(self._tracking_run_keys))
+
+    def _report_propagation_outcome(self, observations, gaps, failures,
+                                    awaiting_review):
+        """Summarise a finished run.
+
+        Deliberately not a modal. Propagation output is now pending, so the
+        durable feedback is already on screen and stays there — amber dashed
+        boxes, the Pending chip, and the timeline's pending ticks. A dialog on
+        top of that would be dismissed reflexively every single run, and a
+        modal raised from a worker callback also blocks any headless caller.
+        """
+        summary = ('%d observation(s), %d gap(s), %d failure(s)'
+                   % (observations, gaps, failures))
+        if awaiting_review:
+            summary += (' — %d awaiting review; they are not exported until '
+                        'accepted (Ctrl+Shift+Enter)' % awaiting_review)
+        self.status('Propagation complete: ' + summary, delay=15000)
 
     def _on_propagation_error(self, message):
         self._clear_propagation_state()
@@ -4437,7 +5391,7 @@ class MainWindow(QMainWindow, WindowMixin):
         identity = self.current_annotation_identity()
         if identity is not None:
             self._annotation_visibility_changed(
-                identity, item.checkState() == Qt.Checked)
+                identity, item.checkState() == Qt.CheckState.Checked)
 
     def add_track_keyframe(self):
         if not self._ensure_video_editable():
@@ -4515,8 +5469,8 @@ class MainWindow(QMainWindow, WindowMixin):
         answer = QMessageBox.question(
             self, 'Delete Track',
             'Delete track "%s" and all of its observations?' % track.label,
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if answer != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
             return
         before = model.snapshot_state()
         model.delete_track(track_id)
@@ -4712,7 +5666,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self._active_tracking_request = None
 
     def _current_pending_keys(self):
-        if self.video_model is None or self.current_video_frame_ref is None:
+        if (self._review_navigation_key is not None
+                or self.video_model is None
+                or self.current_video_frame_ref is None):
             return ()
         pts = self.current_video_frame_ref.pts
         values = [
@@ -4722,7 +5678,93 @@ class MainWindow(QMainWindow, WindowMixin):
             preferred = (self._selected_video_track_id, pts)
             if preferred in values:
                 return (preferred,)
-        return tuple(values[:1])
+        return tuple(sorted(values, key=lambda key: str(key[0]))[:1])
+
+    def _pending_review_keys(self):
+        """Return the live review queue in presentation order."""
+        model = getattr(self, 'video_model', None)
+        if model is None:
+            return ()
+        values = [
+            key for key, item in model.observations.items()
+            if item.review_state == 'pending']
+        return tuple(sorted(
+            values, key=lambda key: (int(key[1]), str(key[0]))))
+
+    @staticmethod
+    def _review_key_order(key):
+        return int(key[1]), str(key[0] or '')
+
+    def _pending_review_target(self, origin, direction=1):
+        """Find the adjacent live issue, wrapping at either queue edge."""
+        queue = self._pending_review_keys()
+        if not queue:
+            return None
+        origin_order = self._review_key_order(origin)
+        if direction < 0:
+            earlier = [key for key in queue
+                       if self._review_key_order(key) < origin_order]
+            return earlier[-1] if earlier else queue[-1]
+        later = [key for key in queue
+                 if self._review_key_order(key) > origin_order]
+        return later[0] if later else queue[0]
+
+    def _activate_pending_review(self, key):
+        """Put one canonical pending issue on the canvas with its track held."""
+        if (key is None or self.video_model is None
+                or self.video_snapshot is None):
+            return None
+        observation = self.video_model.observations.get(key)
+        if observation is None or observation.review_state != 'pending':
+            return None
+        track_id, pts = key
+        self._selected_video_track_id = track_id
+        if self.gallery_mode_enabled:
+            self.actions.galleryMode.setChecked(False)
+            self.toggle_gallery_mode(False)
+        # Review always starts from the non-creating tool. In particular, an
+        # armed Box/Polygon/Smart Select action must not turn the annotator's
+        # first click on a suggestion into new geometry.
+        self.activate_select_tool()
+        if (self.current_video_frame_ref is not None
+                and int(self.current_video_frame_ref.pts) == int(pts)):
+            self._materialize_video_frame(int(pts))
+            handle = None
+        else:
+            snapshot = self.video_snapshot
+            handle = self.request_video_frame(VideoFrameRef(
+                snapshot.fingerprint, snapshot.stream_index, int(pts),
+                snapshot.time_base_num, snapshot.time_base_den))
+            if handle is not None:
+                self._review_navigation_key = key
+                self._review_navigation_request_id = \
+                    self._video_frame_request_id
+                self.actions.videoAcceptSuggestion.setEnabled(False)
+                self.actions.videoRejectSuggestion.setEnabled(False)
+                self.actions.videoPreviousIssue.setEnabled(False)
+                self._sync_command_bar()
+                self._sync_inspector_context()
+        queue = self._pending_review_keys()
+        track = self.video_model.tracks.get(track_id)
+        self.status('%d suggestion%s remaining · %s' % (
+            len(queue), '' if len(queue) == 1 else 's',
+            track.label if track is not None else 'pending suggestion'),
+            delay=0)
+        self._restore_canvas_focus()
+        return handle
+
+    def previous_review_issue(self):
+        """Move to the pending issue before the one currently in context."""
+        if (self._review_navigation_key is not None
+                or self.video_model is None
+                or self.current_video_frame_ref is None):
+            return None
+        current = self._current_pending_keys()
+        origin = (current[0] if current else
+                  (self._selected_video_track_id,
+                   self.current_video_frame_ref.pts))
+        return self._activate_pending_review(
+            self._pending_review_target(origin, direction=-1))
 
     def _review_video_keys(self, keys, review_state, description):
         if not self._ensure_video_editable():
@@ -4745,14 +5787,38 @@ class MainWindow(QMainWindow, WindowMixin):
         return True
 
     def accept_current_suggestion(self):
-        return self._review_video_keys(
-            self._current_pending_keys(), 'accepted',
-            'Accept tracker suggestion')
+        keys = self._current_pending_keys()
+        if not keys:
+            return False
+        origin = keys[0]
+        reviewed = self._review_video_keys(
+            keys, 'accepted', 'Accept tracker suggestion')
+        if reviewed:
+            target = self._pending_review_target(origin, direction=1)
+            if target is None:
+                self.activate_select_tool()
+                self.status('Review complete · no pending suggestions',
+                            delay=0)
+            else:
+                self._activate_pending_review(target)
+        return reviewed
 
     def reject_current_suggestion(self):
-        return self._review_video_keys(
-            self._current_pending_keys(), 'rejected',
-            'Reject tracker suggestion')
+        keys = self._current_pending_keys()
+        if not keys:
+            return False
+        origin = keys[0]
+        reviewed = self._review_video_keys(
+            keys, 'rejected', 'Reject tracker suggestion')
+        if reviewed:
+            target = self._pending_review_target(origin, direction=1)
+            if target is None:
+                self.activate_select_tool()
+                self.status('Review complete · no pending suggestions',
+                            delay=0)
+            else:
+                self._activate_pending_review(target)
+        return reviewed
 
     def review_visible_suggestions(self, review_state, start_pts=None,
                                    end_pts=None):
@@ -4773,8 +5839,23 @@ class MainWindow(QMainWindow, WindowMixin):
             '%s visible tracker suggestions' % review_state.title())
 
     def review_full_propagation(self, review_state):
+        keys = tuple(
+            key for key in self._tracking_run_keys
+            if key in self.video_model.observations
+            and self.video_model.observations[key].review_state == 'pending')
+        if len(keys) > 1:
+            verb = 'Accept' if review_state == 'accepted' else 'Reject'
+            reply = QMessageBox.question(
+                self, '%s full propagation' % verb,
+                '%s %d pending suggestions from the latest propagation '
+                'run?\n\nThis will be recorded as one undoable change.' % (
+                    verb, len(keys)),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel)
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
         return self._review_video_keys(
-            tuple(self._tracking_run_keys), review_state,
+            keys, review_state,
             '%s full tracker propagation' % review_state.title())
 
     def _video_export_range_bounds(self, values):
@@ -4826,16 +5907,68 @@ class MainWindow(QMainWindow, WindowMixin):
             snapshot.time_base_num, snapshot.time_base_den)
             for pts in pts_values)
 
+    def _confirm_unreviewed_before_export(self):
+        """Choose review, accepted-only export, or cancellation explicitly.
+
+        Export filters to accepted observations in three independent places,
+        so unreviewed propagation silently contributes nothing. Without this
+        a user can propagate, save, quit, reopen, export, and receive an empty
+        dataset having been told nothing at any point.
+        """
+        model = self.video_model
+        if model is None:
+            return True
+        pending = sum(1 for item in model.observations.values()
+                      if item.review_state == 'pending')
+        if not pending:
+            return 'export'
+        message = QMessageBox(self)
+        message.setWindowTitle('Unreviewed suggestions')
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setText(
+            '%d tracker suggestion%s still await review and are excluded '
+            'from accepted-only export.' % (
+                pending, '' if pending == 1 else 's'))
+        review_button = message.addButton(
+            'Review suggestions', QMessageBox.ButtonRole.ActionRole)
+        export_button = message.addButton(
+            'Export accepted-only', QMessageBox.ButtonRole.AcceptRole)
+        cancel_button = message.addButton('Cancel', QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(review_button)
+        message.setEscapeButton(cancel_button)
+        message.exec()
+        clicked = message.clickedButton()
+        if clicked is review_button:
+            return 'review'
+        if clicked is export_button:
+            return 'export'
+        return 'cancel'
+
     def open_video_export_dialog(self):
         if self.document_kind != DocumentKind.VIDEO:
             return None
+        decision = self._confirm_unreviewed_before_export()
+        if decision == 'review':
+            pending = self._pending_review_keys()
+            if pending:
+                self._activate_pending_review(pending[0])
+            return None
+        if decision != 'export':
+            return None
         dialog = VideoExportDialog(self.label_file_format, self)
+        accepted_frames = len({
+            item.pts for item in self.video_model.observations.values()
+            if item.present and item.review_state == 'accepted'})
+        verified_frames = sum(
+            1 for item in self.video_model.frame_states.values()
+            if item.verified)
+        dialog.set_frame_counts(accepted_frames, verified_frames)
         stem = os.path.splitext(
             os.path.basename(self.video_snapshot.source_path))[0]
         dialog.destination.setText(os.path.join(
             os.path.dirname(self.video_snapshot.source_path),
             stem + '-export'))
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         values = dialog.values()
         if not values['destination']:
@@ -4932,6 +6065,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def request_video_frame(self, frame_ref, playback=False):
         """Seek by immutable PTS reference with latest-request-wins semantics."""
+        if not self._guard_provisional_transition():
+            return None
         snapshot = self.video_snapshot
         if (self.document_kind != DocumentKind.VIDEO or snapshot is None
                 or not isinstance(frame_ref, VideoFrameRef)
@@ -4940,6 +6075,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return None
         if playback and self._video_decode_in_flight:
             return None
+        self._review_navigation_key = None
+        self._review_navigation_request_id = None
         if not playback:
             self.pause_video()
         cached = self.frame_cache.get(frame_ref)
@@ -4988,6 +6125,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 or snapshot is None):
             return
         if result is None:
+            if request_id == self._review_navigation_request_id:
+                self._review_navigation_key = None
+                self._review_navigation_request_id = None
+                self._sync_command_bar()
+                self._sync_inspector_context()
             self.pause_video()
             return
         if result.frame_ref.fingerprint != snapshot.fingerprint:
@@ -4998,6 +6140,11 @@ class MainWindow(QMainWindow, WindowMixin):
     def _on_video_frame_error(self, message, request_id):
         if request_id != self._video_frame_request_id:
             return
+        if request_id == self._review_navigation_request_id:
+            self._review_navigation_key = None
+            self._review_navigation_request_id = None
+            self._sync_command_bar()
+            self._sync_inspector_context()
         self.pause_video()
         self.status('Error decoding video frame: ' + message, delay=10000)
 
@@ -5015,6 +6162,14 @@ class MainWindow(QMainWindow, WindowMixin):
             self.video_snapshot.width, self.video_snapshot.height)
         self.canvas.load_pixmap(QPixmap.fromImage(result.image))
         self.current_video_frame_ref = result.frame_ref
+        review_key = self._review_navigation_key
+        if (review_key is not None
+                and self._review_navigation_request_id
+                == self._video_frame_request_id
+                and self._selected_video_track_id == review_key[0]
+                and int(result.frame_ref.pts) == int(review_key[1])):
+            self._review_navigation_key = None
+            self._review_navigation_request_id = None
         verified = any(
             state.pts == result.frame_ref.pts and state.verified
             for state in self.video_frame_states)
@@ -5028,7 +6183,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if materialize is not None:
             materialize(result.frame_ref.pts)
         else:
-            self.annotation_model.set_video_context(
+            self._set_annotation_video_context(
                 self.video_model, result.frame_ref.pts)
             self.canvas.load_shapes([])
         self.video_timeline.set_current_frame(result.frame_ref)
@@ -5038,8 +6193,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self._schedule_video_prefetch(result.frame_ref)
 
     def request_next_video_frame(self):
+        if not self._guard_provisional_transition():
+            return None
         if self.current_video_frame_ref is None:
             return None
+        self._review_navigation_key = None
+        self._review_navigation_request_id = None
         self.pause_video()
         self._navigation_direction = 1
         cached = self.frame_cache.video_neighbor(
@@ -5052,8 +6211,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 cancelled=handle.is_cancelled))
 
     def request_previous_video_frame(self):
+        if not self._guard_provisional_transition():
+            return None
         if self.current_video_frame_ref is None:
             return None
+        self._review_navigation_key = None
+        self._review_navigation_request_id = None
         self.pause_video()
         self._navigation_direction = -1
         cached = self.frame_cache.video_neighbor(
@@ -5116,6 +6279,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.frame_cache.put(result)
 
     def play_pause_video(self, _value=False):
+        if not self._guard_provisional_transition():
+            return None
         if self.document_kind != DocumentKind.VIDEO:
             return
         if self._video_playback_timer.isActive():
@@ -5173,6 +6338,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def request_open_file(self, file_path, skip_prompt=False):
         """Load a standalone file transactionally if it is outside the dataset."""
+        if not self._guard_provisional_transition():
+            return None
         file_path = os.path.abspath(ustr(file_path))
         if (is_video_project(file_path)
                 or file_path.lower().endswith(VIDEO_EXTENSIONS)):
@@ -5188,9 +6355,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         file_path, skip_prompt=True))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.request_open_file(
                         file_path, skip_prompt=True))
@@ -5211,6 +6378,8 @@ class MainWindow(QMainWindow, WindowMixin):
                           replacement_snapshot=None,
                           previous_snapshot=None):
         """Queue a latest-wins image load while keeping the current image live."""
+        if not self._guard_provisional_transition():
+            return None
         if file_path is None:
             file_path = self.settings.get(SETTING_FILENAME)
         file_path = os.path.abspath(ustr(file_path))
@@ -5228,9 +6397,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         previous_snapshot=previous_snapshot))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.request_load_file(
                         file_path, skip_prompt=True,
@@ -5303,9 +6472,15 @@ class MainWindow(QMainWindow, WindowMixin):
         if (result is None or request_id != self._load_request_id
                 or generation != self._dataset_generation):
             return
-        if replacement_snapshot is not None:
-            self._commit_dataset_snapshot(replacement_snapshot)
-        self._commit_image_result(result)
+        if (replacement_snapshot is not None
+                and not self._commit_dataset_snapshot(replacement_snapshot)):
+            self.canvas.setEnabled(bool(self.file_path))
+            self._hide_loading_veil()
+            return
+        if not self._commit_image_result(result):
+            self.canvas.setEnabled(bool(self.file_path))
+            self._hide_loading_veil()
+            return
         self.frame_cache.put(result)
         self._pending_navigation_index = None
         self._hide_loading_veil()
@@ -5318,7 +6493,9 @@ class MainWindow(QMainWindow, WindowMixin):
             import time
             trace_started = time.perf_counter_ns()
         assert QApplication.instance().thread() == self.thread()
-        self.reset_state()
+        if self.reset_state() is False:
+            return False
+        self._clear_save_error()
         self._set_document_kind(DocumentKind.IMAGE)
         self._image_scale_factor = result.scale_factor
         self._original_image_size = QSize(
@@ -5357,8 +6534,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.edge_alignment_option.isChecked()
         self.set_clean()
         self.canvas.setEnabled(True)
-        self.adjust_scale(initial=True)
-        self.paint_canvas()
+        self._fit_loaded_document()
         self.add_recent_file(result.path)
         self.toggle_actions(True)
         if result.path in self._path_to_idx:
@@ -5368,7 +6544,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setWindowTitle(
             __appname__ + ' ' + result.path + ' ' + self.counter_str())
         self.update_status_bar()
-        self.canvas.setFocus(True)
+        self.canvas.setFocus()
         self._update_current_image_stats()
         if result.annotation_error:
             self.status('Annotation error: ' + result.annotation_error)
@@ -5379,6 +6555,7 @@ class MainWindow(QMainWindow, WindowMixin):
                       'shapes': len(result.shapes)})
         self._plugin_document_ready = True
         self._publish_plugin_document(new_generation=True, force=True)
+        return True
 
     def request_next_image(self, _value=False):
         if self.document_kind == DocumentKind.VIDEO:
@@ -5458,6 +6635,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def load_file(self, file_path=None):
         """Load the specified file, or the last opened file if None."""
+        if not self._guard_provisional_transition():
+            return False
         requested = (file_path if file_path is not None
                      else self.settings.get(SETTING_FILENAME))
         if requested:
@@ -5469,7 +6648,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.setEnabled(False)
         if file_path is None:
             file_path = self.settings.get(SETTING_FILENAME)
-        # Make sure that filePath is a regular python string, rather than QString
+        # Preserve the native path value stored in settings.
         file_path = ustr(file_path)
 
         # Fix bug: An  index error after select a directory when open a new file.
@@ -5522,7 +6701,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 # Downsample if larger than 2048px on either dimension (Issue #31)
                 MAX_DISPLAY_DIM = 2048
                 if original_size.width() > MAX_DISPLAY_DIM or original_size.height() > MAX_DISPLAY_DIM:
-                    scaled_size = original_size.scaled(MAX_DISPLAY_DIM, MAX_DISPLAY_DIM, Qt.KeepAspectRatio)
+                    scaled_size = original_size.scaled(MAX_DISPLAY_DIM, MAX_DISPLAY_DIM, Qt.AspectRatioMode.KeepAspectRatio)
                     reader.setScaledSize(scaled_size)
                     self._image_scale_factor = scaled_size.width() / original_size.width()
                 else:
@@ -5548,6 +6727,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
+            self._clear_save_error()
             self._set_document_kind(DocumentKind.IMAGE)
             if hasattr(self, 'sam_controller'):
                 self.sam_controller.on_image_changed()
@@ -5562,8 +6742,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 checked_action = self.grid_size_group.checkedAction()
                 self.canvas._grid_size = checked_action.data() if checked_action else 32
                 self.canvas._edge_alignment = self.edge_alignment_option.isChecked()
-            self.adjust_scale(initial=True)
-            self.paint_canvas()
+            self._fit_loaded_document()
             self.add_recent_file(self.file_path)
             self.toggle_actions(True)
             self.show_bounding_box_from_annotation_file(self.file_path)
@@ -5581,7 +6760,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     self.annotation_model.identity_for_shape(
                         self.canvas.shapes[-1]))
 
-            self.canvas.setFocus(True)
+            self.canvas.setFocus()
             self._update_current_image_stats()
             self._plugin_document_ready = True
             self._publish_plugin_document(new_generation=True, force=True)
@@ -5636,6 +6815,18 @@ class MainWindow(QMainWindow, WindowMixin):
            and self.zoom_mode != self.MANUAL_ZOOM:
             self.adjust_scale()
         super(MainWindow, self).resizeEvent(event)
+        shell = getattr(self, 'workspace_shell', None)
+        if shell is not None:
+            narrow = event.size().width() < scale_px(900)
+            if narrow and not shell.is_inspector_collapsed():
+                shell.set_inspector_collapsed(
+                    True, emit=False, remember_width=False)
+                self._responsive_inspector_collapsed = True
+                self.actions.inspectorVisible.setChecked(False)
+            elif not narrow and self._responsive_inspector_collapsed:
+                shell.set_inspector_collapsed(False, emit=False)
+                self._responsive_inspector_collapsed = False
+                self.actions.inspectorVisible.setChecked(True)
         if self._loading_veil is not None and self._loading_veil.isVisible():
             self._loading_veil.setGeometry(self.centralWidget().rect())
 
@@ -5651,17 +6842,54 @@ class MainWindow(QMainWindow, WindowMixin):
         value = self.scalers[self.FIT_WINDOW if initial else self.zoom_mode]()
         self.zoom_widget.setValue(int(100 * value))
 
+    def _fit_loaded_document(self):
+        """Open a replaced document fully visible at the viewport origin."""
+        self.actions.fitWidth.setChecked(False)
+        self.actions.fitWindow.setChecked(True)
+        self.zoom_mode = self.FIT_WINDOW
+        self.adjust_scale()
+        self.paint_canvas()
+        self._schedule_fit_scroll_reset()
+
+    def _reset_scrollbars_to_minimum(self):
+        for bar in self.scroll_bars.values():
+            bar.setValue(bar.minimum())
+
+    def _schedule_fit_scroll_reset(self):
+        """Reset ranges after both immediate and deferred layout passes."""
+        self._fit_scroll_reset_id += 1
+        reset_id = self._fit_scroll_reset_id
+        self._reset_scrollbars_to_minimum()
+
+        def reset_after_layout():
+            if (reset_id != self._fit_scroll_reset_id
+                    or self.zoom_mode == self.MANUAL_ZOOM):
+                return
+            self._reset_scrollbars_to_minimum()
+            self.canvas.update()
+
+        QTimer.singleShot(0, reset_after_layout)
+
+    def _canvas_viewport_contents_rect(self):
+        """Return the logical area that can actually display the canvas."""
+        return self.scroll_area.viewport().contentsRect()
+
     def scale_fit_window(self):
-        """Figure out the size of the pixmap in order to fit the main widget."""
+        """Fit the pixmap into the scroll area's usable logical viewport."""
+        viewport = self._canvas_viewport_contents_rect()
         return view_scaling.fit_window_scale(
-            self.centralWidget().width(), self.centralWidget().height(),
+            viewport.width(), viewport.height(),
             self.canvas.pixmap.width(), self.canvas.pixmap.height())
 
     def scale_fit_width(self):
+        viewport = self._canvas_viewport_contents_rect()
         return view_scaling.fit_width_scale(
-            self.centralWidget().width(), self.canvas.pixmap.width())
+            viewport.width(), self.canvas.pixmap.width())
 
     def closeEvent(self, event):
+        if not self._guard_provisional_transition():
+            event.ignore()
+            return
         if self._reset_all_in_progress:
             self._shutdown_workers()
             event.accept()
@@ -5673,10 +6901,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if self.document_kind == DocumentKind.VIDEO and self.dirty:
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 event.ignore()
                 return
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self._video_close_save_pending = True
                 handle = self.request_save_video_project(
                     on_success=self._finish_video_close_after_save)
@@ -5776,9 +7004,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def change_save_dir_dialog(self, _value=False, skip_prompt=False):
         if not skip_prompt and self.dirty:
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.change_save_dir_dialog(
                         skip_prompt=True))
@@ -5845,6 +7073,8 @@ class MainWindow(QMainWindow, WindowMixin):
         
 
     def open_dir_dialog(self, _value=False, dir_path=None, silent=False):
+        if not self._guard_provisional_transition():
+            return None
         default_open_dir_path = dir_path if dir_path else '.'
         if self.last_open_dir and os.path.exists(self.last_open_dir):
             default_open_dir_path = self.last_open_dir
@@ -5875,7 +7105,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Apply current theme before showing
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        dialog.exec_()
+        dialog.exec()
 
     def _apply_label_fix(self, old_label, new_label):
         """Report that automatic label rewriting is not implemented.
@@ -5984,7 +7214,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
 
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         verify = dialog.verify_mode
@@ -6094,7 +7324,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
 
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         if not dialog.output_dir:
@@ -6162,9 +7392,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if self.dirty and not skip_dirty_prompt:
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 return self.request_save_file(
                     on_success=lambda: self.export_ultralytics_dataset(
                         skip_dirty_prompt=True))
@@ -6179,7 +7409,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self, len(self.m_img_list), default_dir)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
 
         output_dir = ustr(dialog.output_dir)
@@ -6253,6 +7483,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def import_dir_images(self, dir_path):
         """Synchronous compatibility path used by tests and extensions."""
+        if not self._guard_provisional_transition():
+            return False
         if not self.may_continue() or not dir_path:
             return False
         self._dataset_generation = self.task_coordinator.next_generation()
@@ -6262,7 +7494,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 dir_path, save_dir=self.default_save_dir,
                 generation=self._dataset_generation,
                 extensions=self._supported_image_extensions())
-        self._commit_dataset_snapshot(snapshot)
+        if not self._commit_dataset_snapshot(snapshot):
+            return False
         if snapshot.image_paths:
             self.cur_img_idx = 0
             self.load_file(snapshot.image_paths[0])
@@ -6270,6 +7503,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def request_import_dir_images(self, dir_path, skip_prompt=False):
         """Transactionally scan a directory without clearing the live dataset."""
+        if not self._guard_provisional_transition():
+            return None
         if not dir_path:
             return None
         dir_path = os.path.abspath(ustr(dir_path))
@@ -6280,9 +7515,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         dir_path, skip_prompt=True))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.request_import_dir_images(
                         dir_path, skip_prompt=True))
@@ -6326,7 +7561,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def _on_directory_snapshot(self, snapshot, generation):
         if generation != self._dataset_generation or snapshot is None:
             return
-        self._commit_dataset_snapshot(snapshot)
+        if not self._commit_dataset_snapshot(snapshot):
+            self._hide_loading_veil()
+            return
         self._hide_loading_veil()
         if snapshot.image_paths:
             self.cur_img_idx = 0
@@ -6346,6 +7583,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _commit_dataset_snapshot(self, snapshot):
         """Atomically replace all dataset-facing widgets on the GUI thread."""
+        if self.reset_state() is False:
+            return False
         trace_started = None
         if trace_recorder is not None:
             import time
@@ -6361,13 +7600,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.cur_img_idx = 0
         self._annotation_status_cache.clear()
         self.frame_cache.clear()
+        self._clear_save_error()
         # Blank the statistics panel too. Leaving the previous dataset's
         # counts on screen beside the new folder's thumbnails is worse than
         # showing nothing: it reads as a description of what is displayed.
         if getattr(self, 'gallery_stats', None) is not None:
             self.gallery_stats.clear_stats()
-        self.reset_state()
-
         self.file_list_widget.setUpdatesEnabled(False)
         try:
             self.file_list_widget.clear()
@@ -6384,11 +7622,12 @@ class MainWindow(QMainWindow, WindowMixin):
             trace_recorder.complete(
                 'directory.ui-apply', trace_started,
                 args={'images': len(snapshot.image_paths)})
+        return True
 
     def _show_loading_veil(self, text):
         if self._loading_veil is None:
             self._loading_veil = QLabel(self.centralWidget())
-            self._loading_veil.setAlignment(Qt.AlignCenter)
+            self._loading_veil.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._loading_veil.setStyleSheet(
                 'background: rgba(20, 20, 20, 150); color: white; '
                 'font-size: 18px; padding: 20px;')
@@ -6623,7 +7862,11 @@ class MainWindow(QMainWindow, WindowMixin):
             lambda path, req=request, callback=on_success,
             gen=self._dataset_generation:
             self._on_save_result(path, req, callback, gen))
-        handle.error.connect(self._on_save_error)
+        handle.error.connect(
+            lambda message, req=request, callback=on_success,
+            base=annotation_base, gen=self._dataset_generation:
+            self._on_save_error(
+                message, req, callback, base, generation=gen))
         return handle
 
     def _on_save_result(self, path, request, on_success, generation=None):
@@ -6634,17 +7877,73 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status('Saved superseded document to %s' % path)
             return
         self._record_annotation_written(path)
-        if (self.file_path == request.image_path
-                and self._document_revision == request.revision):
+        current_revision = (
+            self.file_path == request.image_path
+            and self._document_revision == request.revision)
+        if current_revision:
+            self._clear_save_error()
             self.set_clean()
         self.status('Saved to %s' % path)
         if self.file_path == request.image_path:
             self._update_current_image_gallery_status()
-        if callable(on_success):
+        # Navigation/completion callbacks are part of the exact save request.
+        # If the user edited while that request was in flight, its older
+        # revision may be safely written but must never move them away from
+        # the newer unsaved document.
+        if callable(on_success) and current_revision:
             on_success()
 
-    def _on_save_error(self, message):
-        self.status('Error saving annotation: ' + message)
+    def _on_save_error(self, message, request=None, on_success=None,
+                       annotation_base=None, generation=None):
+        if (request is not None
+                and (generation != self._dataset_generation
+                     or request.image_path != self.file_path)):
+            return
+        if request is not None:
+            self._save_failure = _SaveFailureContext(
+                image_path=request.image_path,
+                annotation_base=annotation_base,
+                revision=request.revision,
+                on_success=on_success,
+                message=str(message))
+            notice = self.workspace_pages.save_error_notice
+            notice.show_error(message)
+            self._sync_command_bar()
+        self.status('Error saving annotation: ' + message, delay=0)
+
+    def _clear_save_error(self):
+        self._save_failure = None
+        pages = getattr(self, 'workspace_pages', None)
+        notice = getattr(pages, 'save_error_notice', None)
+        if notice is not None:
+            notice.clear()
+
+    def _start_save_recovery(self, handle):
+        if handle is None:
+            return None
+        self.workspace_pages.save_error_notice.set_busy(True)
+        self._track_completion_save(handle)
+        return handle
+
+    def retry_failed_save(self):
+        """Retry the current document's latest revision at the failed target."""
+        failure = self._save_failure
+        if (failure is None or failure.image_path != self.file_path
+                or self.document_kind != DocumentKind.IMAGE):
+            return None
+        handle = self.request_save_file(
+            on_success=failure.on_success,
+            annotation_base=failure.annotation_base)
+        return self._start_save_recovery(handle)
+
+    def retry_failed_save_as(self):
+        """Recover a failed write through a user-selected annotation path."""
+        failure = self._save_failure
+        if (failure is None or failure.image_path != self.file_path
+                or self.document_kind != DocumentKind.IMAGE):
+            return None
+        handle = self.request_save_file_as(on_success=failure.on_success)
+        return self._start_save_recovery(handle)
 
     def _record_annotation_written(self, path):
         if getattr(self, 'dataset_snapshot', None) is None:
@@ -6703,7 +8002,7 @@ class MainWindow(QMainWindow, WindowMixin):
         assert not self.image.isNull(), "cannot save empty image"
         return self._save_file(self.save_file_dialog())
 
-    def request_save_file_as(self, _value=False):
+    def request_save_file_as(self, _value=False, on_success=None):
         """Choose a target on the GUI thread and write it asynchronously."""
         if self.document_kind == DocumentKind.VIDEO:
             target = self._video_project_save_dialog()
@@ -6719,7 +8018,8 @@ class MainWindow(QMainWindow, WindowMixin):
         annotation_base = self.save_file_dialog()
         if not annotation_base:
             return None
-        return self.request_save_file(annotation_base=annotation_base)
+        return self.request_save_file(
+            on_success=on_success, annotation_base=annotation_base)
 
     def _request_video_project_backup(self, target):
         source = self.video_snapshot.project_path
@@ -6758,11 +8058,11 @@ class MainWindow(QMainWindow, WindowMixin):
         open_dialog_path = self.current_path()
         dlg = QFileDialog(self, caption, open_dialog_path, filters)
         dlg.setDefaultSuffix(LabelFile.suffix[1:])
-        dlg.setAcceptMode(QFileDialog.AcceptSave)
+        dlg.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         filename_without_extension = os.path.splitext(self.file_path)[0]
         dlg.selectFile(filename_without_extension)
-        dlg.setOption(QFileDialog.DontUseNativeDialog, False)
-        if dlg.exec_():
+        dlg.setOption(QFileDialog.Option.DontUseNativeDialog, False)
+        if dlg.exec():
             full_file_path = ustr(dlg.selectedFiles()[0])
             if remove_ext:
                 return os.path.splitext(full_file_path)[0]  # Return file path without the extension.
@@ -6784,8 +8084,11 @@ class MainWindow(QMainWindow, WindowMixin):
         return True
 
     def close_file(self, _value=False):
+        if not self._guard_provisional_transition():
+            return None
         if not self.may_continue():
             return
+        self._clear_save_error()
         self.reset_state()
         self.set_clean()
         self.toggle_actions(False)
@@ -6793,6 +8096,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.saveAs.setEnabled(False)
 
     def delete_image(self):
+        if not self._guard_provisional_transition():
+            return False
         delete_path = self.file_path
         if delete_path is None:
             return False
@@ -6803,13 +8108,15 @@ class MainWindow(QMainWindow, WindowMixin):
             (u'Permanently delete the current image?\n\n%s\n\n'
              u'This action cannot be undone. Annotation files will be kept.')
             % delete_path,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if confirmation != QMessageBox.Yes:
+        if (confirmation != QMessageBox.StandardButton.Yes
+                or not self._guard_provisional_transition()):
             return False
 
-        if not self.may_continue():
+        if (not self.may_continue()
+                or not self._guard_provisional_transition()):
             return False
 
         idx = self.cur_img_idx
@@ -6849,6 +8156,8 @@ class MainWindow(QMainWindow, WindowMixin):
         return True
 
     def reset_all(self):
+        if not self._guard_provisional_transition():
+            return False
         if not self.may_continue():
             return False
 
@@ -6860,8 +8169,8 @@ class MainWindow(QMainWindow, WindowMixin):
             'Reset all preferences and restart %s?\n\n'
             'Save directory, annotation format, theme, recent files, window '
             'layout and shortcut overrides will be lost.' % __appname__,
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
-        if confirm != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
+        if confirm != QMessageBox.StandardButton.Yes:
             return False
 
         self._reset_all_in_progress = True
@@ -6883,15 +8192,15 @@ class MainWindow(QMainWindow, WindowMixin):
             return True
         else:
             discard_changes = self.discard_changes_dialog()
-            if discard_changes == QMessageBox.No:
+            if discard_changes == QMessageBox.StandardButton.No:
                 return True
-            elif discard_changes == QMessageBox.Yes:
+            elif discard_changes == QMessageBox.StandardButton.Yes:
                 return self.save_file()
             else:
                 return False
 
     def discard_changes_dialog(self):
-        yes, no, cancel = QMessageBox.Yes, QMessageBox.No, QMessageBox.Cancel
+        yes, no, cancel = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No, QMessageBox.StandardButton.Cancel
         msg = u'You have unsaved changes, would you like to save them and proceed?\nClick "No" to undo all changes.'
         return QMessageBox.warning(self, u'Attention', msg, yes | no | cancel)
 
@@ -7299,13 +8608,15 @@ class MainWindow(QMainWindow, WindowMixin):
         where an annotation lands; this used to carry its own copy of that
         resolution and could drift from the real save path.
         """
-        if not self.dirty or not self.file_path:
+        if (not self.dirty or not self.file_path
+                or self._completion_handle is not None):
             return
         self.status("Auto-saving...")
         self.save_file()
 
     def _request_auto_save_triggered(self):
-        if self.dirty and self.file_path:
+        if (self.dirty and self.file_path
+                and self._completion_handle is None):
             self.status("Auto-saving...")
             self.request_save_file()
 
@@ -7335,6 +8646,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.workspace_inspector.apply_theme(theme)
         if hasattr(self, 'workspace_shell'):
             self.workspace_shell.apply_theme(theme)
+        if hasattr(self, 'workspace_pages'):
+            # One call, not three: the overview forwards to the lanes and the
+            # frames grid, both of which construct with Theme.LIGHT.
+            self.workspace_pages.video_overview.apply_theme(theme)
+        if hasattr(self, 'video_timeline'):
+            self.video_timeline.apply_theme(theme)
 
         # Update canvas background
         if hasattr(self, 'canvas') and self.canvas:
@@ -7410,6 +8727,10 @@ class MainWindow(QMainWindow, WindowMixin):
             icon_name = format_icon_map.get(self.label_file_format)
             if icon_name:
                 self.actions.save_format.setIcon(themed_icon(icon_name, theme))
+        # setDefaultAction follows QAction.changed while icons are repainted;
+        # re-project compact contextual labels after that signal settles.
+        self._sync_inspector_context()
+        self._sync_command_bar()
 
     # Statistics methods (Issue #19) - Stats shown in gallery mode
     def _refresh_all_statistics(self):
@@ -7443,24 +8764,23 @@ class MainWindow(QMainWindow, WindowMixin):
 def get_main_app(argv=None):
     """
     Standard boilerplate Qt application code.
-    Do everything but app.exec_() -- so that we can test the application in one thread
+    Do everything but app.exec() -- so that we can test the application in one thread
     """
     if not argv:
         argv = []
 
     app = QApplication.instance()
     if app is None:
-        # These attributes must be set before constructing QApplication.
-        try:
-            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-        except AttributeError:
-            pass  # Qt4 doesn't have these attributes
         app = QApplication(argv)
-    app.setStyle('Fusion')  # Use Fusion style for consistent cross-platform styling
-    app.setStyleSheet(get_combined_style())  # Apply global stylesheet
-    app.setApplicationName(__appname__)
-    app.setWindowIcon(new_icon("app"))
+    # Replacing live application styling can delete QStyle objects while
+    # existing windows still reference them, crashing repeated setup.
+    setup_property = 'labelimgppApplicationConfigured'
+    if not app.property(setup_property):
+        app.setStyle('Fusion')
+        app.setStyleSheet(get_combined_style())
+        app.setApplicationName(__appname__)
+        app.setWindowIcon(new_icon("app"))
+        app.setProperty(setup_property, True)
     # Tzutalin 201705+: Accept extra agruments to change predefined class file.
     # Prefer the copy packaged inside the libs package (shipped in the wheel);
     # fall back to the top-level data/ dir for source checkouts.
@@ -7490,6 +8810,27 @@ def get_main_app(argv=None):
     return app, win
 
 
+def verify_assets(argv=None):
+    """Verify every packaged asset without constructing a MainWindow."""
+    app = QApplication.instance() or QApplication(argv[:1] if argv else [])
+    for name in ICON_FILES:
+        icon = new_icon(name)
+        if icon.isNull() or icon.pixmap(32, 32).isNull():
+            raise RuntimeError("icon failed to load: %s" % name)
+    for bundle_name in STRING_FILES:
+        if read_string_bundle(bundle_name, required=True) is None:
+            raise RuntimeError("string bundle failed to load: %s" % bundle_name)
+    for locale_name in ('en', 'zh', 'zh-CN', 'zh-TW', 'ja-JP'):
+        StringBundle.get_bundle(locale_name)
+    license_text = read_license('feather-license')
+    if 'MIT License' not in license_text or 'Cole Bemis' not in license_text:
+        raise RuntimeError("Feather license markers are missing")
+    print(
+        "Verified %d icons, %d string bundles, and 1 license."
+        % (len(ICON_FILES), len(STRING_FILES)))
+    return 0
+
+
 def main_deprecated():
     """Entry point for deprecated labelImgPlusPlus command."""
     import warnings
@@ -7503,9 +8844,11 @@ def main_deprecated():
 
 
 def main():
-    """construct main app and run it"""
+    """Construct the requested application mode and run it."""
+    if '--verify-assets' in sys.argv[1:]:
+        return verify_assets(sys.argv)
     app, _win = get_main_app(sys.argv)
-    return app.exec_()
+    return app.exec()
 
 if __name__ == '__main__':
     sys.exit(main())

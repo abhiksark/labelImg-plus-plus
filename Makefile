@@ -1,27 +1,9 @@
 # ex: set ts=8 noet:
 
-all: qt5 test
+all: test
 
-test: testpy3
-
-testpy2:
-	python -m unittest discover -s tests -t .
-
-testpy3:
+test:
 	QT_QPA_PLATFORM=offscreen python3 -m pytest tests/ -v
-
-qt4: qt4py2
-
-qt5: qt5py3
-
-qt4py2:
-	pyrcc4 -py2 -o libs/resources.py resources.qrc
-
-qt4py3:
-	pyrcc4 -py3 -o libs/resources.py resources.qrc
-
-qt5py3:
-	pyrcc5 -o libs/resources.py resources.qrc
 
 clean:
 	rm -rf ~/.labelImgSettings.json ~/.labelImgSettings.pkl *.pyc dist labelImg.egg-info __pycache__ build

@@ -1,7 +1,7 @@
 import os
 import time
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_types import (
@@ -42,6 +42,20 @@ def test_export_dialog_defaults_to_annotated_jpeg_95():
         assert values['image_format'] == 'jpg'
         assert values['jpeg_quality'] == 95
         assert values['annotation_format'] == LabelFileFormat.COCO
+    finally:
+        dialog.close()
+
+
+def test_export_dialog_states_the_accepted_and_verified_frame_counts():
+    dialog = VideoExportDialog(LabelFileFormat.COCO)
+    try:
+        dialog.set_frame_counts(7, 3)
+        assert dialog.selection.itemText(
+            dialog.selection.findData('annotated')) == \
+            'Annotated frames (7 accepted)'
+        assert dialog.selection.itemText(
+            dialog.selection.findData('verified')) == 'Verified frames (3)'
+        assert dialog.values()['selection'] == 'annotated'
     finally:
         dialog.close()
 

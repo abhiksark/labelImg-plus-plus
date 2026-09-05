@@ -53,6 +53,10 @@ class TestShortcutConfigImport(unittest.TestCase):
         self.cfg.import_json(self._write('{"save": "Ctrl+K"}'))
         self.assertEqual(self.cfg.get('save'), 'Ctrl+K')
 
+    def test_completion_action_has_a_dedicated_default_shortcut(self):
+        self.assertEqual(DEFAULT_SHORTCUTS['complete_item'], 'E')
+        self.assertEqual(self.cfg.get('complete_item'), 'E')
+
     def test_plugin_override_is_retained_while_command_is_hidden(self):
         command = 'plugin.com.example.review.run'
         self.cfg.from_dict({command: 'Ctrl+Alt+R'})

@@ -4,8 +4,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import os
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImageReader
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImageReader
 
 from libs.formats import annotation_loader
 from libs.formats.annotation_paths import find_existing_annotation
@@ -34,10 +34,7 @@ class ImageLoadResult:
 
     @property
     def byte_size(self):
-        try:
-            return int(self.image.sizeInBytes())
-        except AttributeError:  # Older Qt bindings.
-            return int(self.image.byteCount())
+        return int(self.image.sizeInBytes())
 
 
 def file_fingerprint(path):
@@ -133,7 +130,7 @@ def load_image_result(path, resolver=None, image_list=None, save_dir=None,
     if (original_size.width() > MAX_DISPLAY_DIMENSION
             or original_size.height() > MAX_DISPLAY_DIMENSION):
         scaled_size = original_size.scaled(
-            MAX_DISPLAY_DIMENSION, MAX_DISPLAY_DIMENSION, Qt.KeepAspectRatio)
+            MAX_DISPLAY_DIMENSION, MAX_DISPLAY_DIMENSION, Qt.AspectRatioMode.KeepAspectRatio)
         reader.setScaledSize(scaled_size)
         scale_factor = scaled_size.width() / original_size.width()
     else:

@@ -1,3 +1,4 @@
+# tests/integration/test_async_workflows.py
 import os
 import json
 import threading
@@ -6,13 +7,14 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QThread, QTimer
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import QPointF, QThread, QTimer
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.image_pipeline import load_image_result
 from libs.formats.labelFile import LabelFileFormat
+from libs.core.shape import Shape
 
 
 def _wait(app, predicate, timeout=3):
@@ -26,9 +28,19 @@ def _wait(app, predicate, timeout=3):
 
 
 def _image(path, color):
-    image = QImage(64, 48, QImage.Format_RGB32)
+    image = QImage(64, 48, QImage.Format.Format_RGB32)
     image.fill(color)
     assert image.save(path)
+
+
+def _stage_provisional_box(window):
+    window.activate_box_tool()
+    shape = Shape()
+    for point in ((2, 3), (22, 3), (22, 23), (2, 23)):
+        shape.add_point(QPointF(*point))
+    window.canvas.current = shape
+    window.canvas.finalise()
+    return shape
 
 
 def test_rapid_load_requests_commit_only_latest(tmp_path):
@@ -58,6 +70,44 @@ def test_rapid_load_requests_commit_only_latest(tmp_path):
                 lambda: not window.task_coordinator.queue_depths()['interactive'])
         assert window.file_path == third
     finally:
+        window.dirty = False
+        window.close()
+
+
+def test_delayed_image_commit_keeps_new_provisional_object(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / 'first.png')
+    second = str(tmp_path / 'second.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    assert window.load_file(first)
+    gate = threading.Event()
+    started = threading.Event()
+    original = load_image_result
+
+    def delayed(path, *args, **kwargs):
+        started.set()
+        gate.wait(1)
+        return original(path, *args, **kwargs)
+
+    try:
+        with patch('labelImgPlusPlus.load_image_result', side_effect=delayed):
+            window.request_open_file(second, skip_prompt=True)
+            assert started.wait(1)
+            shape = _stage_provisional_box(window)
+            gate.set()
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()[
+                    'interactive'])
+            app.processEvents()
+
+        assert window.file_path == first
+        assert window.canvas.provisional_shape is shape
+        assert window.class_picker.isVisible()
+    finally:
+        gate.set()
+        window._cancel_provisional_shape()
         window.dirty = False
         window.close()
 
@@ -156,7 +206,7 @@ def test_cancelled_standalone_open_does_not_advance_generation(tmp_path):
     try:
         with patch.object(
                 window, 'discard_changes_dialog',
-                return_value=QMessageBox.Cancel):
+                return_value=QMessageBox.StandardButton.Cancel):
             assert window.request_open_file(second) is None
         assert window.file_path == first
         assert window._dataset_generation == old_generation
@@ -189,6 +239,232 @@ def test_save_completion_does_not_clean_newer_revision(tmp_path):
             assert _wait(app, lambda: os.path.exists(tmp_path / 'image.xml'))
             app.processEvents()
         assert window.dirty is True
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_done_and_next_saves_verifies_then_navigates(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / '001.png')
+    second = str(tmp_path / '002.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    window.default_save_dir = str(tmp_path)
+    window.label_file_format = LabelFileFormat.PASCAL_VOC
+    window.import_dir_images(str(tmp_path))
+
+    try:
+        assert window.file_path == first
+        assert window.actions.primary.text() == 'Done & Next'
+        assert window.actions.primary.shortcut().toString() == 'E'
+        assert window.actions.primary.property('iconName') == 'verify'
+
+        handle = window.trigger_primary_action()
+        assert handle is not None
+        assert _wait(app, lambda: window.file_path == second)
+
+        from libs.formats.pascal_voc_io import PascalVocReader
+        assert PascalVocReader(str(tmp_path / '001.xml')).verified
+        assert window.actions.primary.text() == 'Mark done'
+        assert window.command_bar.save_state_label.text() == 'Saved'
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_done_and_next_save_failure_never_navigates(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / '001.png')
+    second = str(tmp_path / '002.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    window.default_save_dir = str(tmp_path)
+    window.import_dir_images(str(tmp_path))
+    shape = Shape(label='car')
+    for point in ((4, 5), (24, 5), (24, 25), (4, 25)):
+        shape.add_point(QPointF(*point))
+    shape.close()
+    window.canvas.shapes.append(shape)
+    window.add_label(shape)
+    window.set_dirty()
+
+    try:
+        with patch(
+                'labelImgPlusPlus.write_save_request',
+                side_effect=OSError('disk is full')):
+            handle = window.trigger_primary_action()
+            assert handle is not None
+            assert _wait(app, lambda: window._completion_handle is None)
+
+        assert window.file_path == first
+        assert window.dirty is True
+        assert window.canvas.verified is True
+        assert window.canvas.shapes == [shape]
+        assert window.actions.primary.text() == 'Retry save & next'
+        notice = window.workspace_pages.save_error_notice
+        assert notice.isVisible()
+        assert notice.title.text() == 'Annotations remain intact'
+        assert 'disk is full' in notice.detail.text()
+        assert notice.retry_button.text() == 'Retry save'
+        assert notice.save_as_button.text() == 'Save as…'
+        assert 'disk is full' in window.statusBar().currentMessage()
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_done_and_next_does_not_navigate_past_newer_edit(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / '001.png')
+    second = str(tmp_path / '002.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    window.default_save_dir = str(tmp_path)
+    window.import_dir_images(str(tmp_path))
+    gate = threading.Event()
+    original = None
+
+    from libs.core.save_pipeline import write_save_request as real_write
+    original = real_write
+
+    def delayed(request, cancelled=None, begin_commit=None):
+        gate.wait(1)
+        return original(
+            request, cancelled=cancelled, begin_commit=begin_commit)
+
+    try:
+        with patch('labelImgPlusPlus.write_save_request', side_effect=delayed):
+            window.trigger_primary_action()
+            assert not window.actions.next.isEnabled()
+            assert not window.actions.previous.isEnabled()
+            window.set_dirty()
+            gate.set()
+            assert _wait(app, lambda: window._completion_handle is None)
+
+        assert window.file_path == first
+        assert window.dirty is True
+        assert window.actions.primary.text() == 'Save & Next'
+        assert window.actions.next.isEnabled()
+        assert window.actions.previous.isEnabled()
+    finally:
+        gate.set()
+        window.dirty = False
+        window.close()
+
+
+def test_failed_completion_retries_latest_revision_then_navigates(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / '001.png')
+    second = str(tmp_path / '002.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    window.default_save_dir = str(tmp_path)
+    window.label_file_format = LabelFileFormat.PASCAL_VOC
+    window.import_dir_images(str(tmp_path))
+
+    from libs.core.save_pipeline import write_save_request as real_write
+    attempts = []
+
+    def fail_once(request, cancelled=None, begin_commit=None):
+        attempts.append(request.revision)
+        if len(attempts) == 1:
+            raise OSError('disk is full')
+        return real_write(
+            request, cancelled=cancelled, begin_commit=begin_commit)
+
+    try:
+        with patch('labelImgPlusPlus.write_save_request',
+                   side_effect=fail_once):
+            window.trigger_primary_action()
+            assert _wait(app, lambda: window._completion_handle is None)
+            failed_revision = window._document_revision
+            window.set_dirty()
+            latest_revision = window._document_revision
+            assert latest_revision > failed_revision
+
+            handle = window.trigger_primary_action()
+            assert handle is not None
+            assert window.workspace_pages.save_error_notice.isVisible()
+            assert not window.workspace_pages.save_error_notice.\
+                retry_button.isEnabled()
+            assert _wait(app, lambda: window.file_path == second)
+
+        assert attempts == [failed_revision, latest_revision]
+        assert not window.workspace_pages.save_error_notice.isVisible()
+        assert os.path.isfile(tmp_path / '001.xml')
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_newer_edit_during_retry_keeps_notice_and_blocks_navigation(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / '001.png')
+    second = str(tmp_path / '002.png')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    window.default_save_dir = str(tmp_path)
+    window.import_dir_images(str(tmp_path))
+
+    with patch('labelImgPlusPlus.write_save_request',
+               side_effect=OSError('disk is full')):
+        window.trigger_primary_action()
+        assert _wait(app, lambda: window._completion_handle is None)
+
+    gate = threading.Event()
+    from libs.core.save_pipeline import write_save_request as real_write
+
+    def delayed(request, cancelled=None, begin_commit=None):
+        gate.wait(1)
+        return real_write(
+            request, cancelled=cancelled, begin_commit=begin_commit)
+
+    try:
+        with patch('labelImgPlusPlus.write_save_request',
+                   side_effect=delayed):
+            window.retry_failed_save()
+            assert window.workspace_pages.save_error_notice.isVisible()
+            window.set_dirty()
+            gate.set()
+            assert _wait(app, lambda: window._completion_handle is None)
+
+        assert window.file_path == first
+        assert window.dirty is True
+        assert window.workspace_pages.save_error_notice.isVisible()
+        assert window.actions.primary.text() == 'Retry save & next'
+    finally:
+        gate.set()
+        window.dirty = False
+        window.close()
+
+
+def test_save_as_recovers_failed_completion_without_touching_source(tmp_path):
+    app, window = get_main_app()
+    first = str(tmp_path / '001.png')
+    second = str(tmp_path / '002.png')
+    recovery_base = str(tmp_path / 'recovered' / '001-copy')
+    _image(first, 0xFFFFFFFF)
+    _image(second, 0xFF000000)
+    window.default_save_dir = str(tmp_path)
+    window.import_dir_images(str(tmp_path))
+
+    try:
+        with patch('labelImgPlusPlus.write_save_request',
+                   side_effect=OSError('read-only destination')):
+            window.trigger_primary_action()
+            assert _wait(app, lambda: window._completion_handle is None)
+
+        assert not os.path.exists(tmp_path / '001.xml')
+        with patch.object(window, 'save_file_dialog',
+                          return_value=recovery_base):
+            handle = window.retry_failed_save_as()
+        assert handle is not None
+        assert _wait(app, lambda: window.file_path == second)
+
+        assert os.path.isfile(recovery_base + '.xml')
+        assert not os.path.exists(tmp_path / '001.xml')
+        assert not window.workspace_pages.save_error_notice.isVisible()
     finally:
         window.dirty = False
         window.close()
@@ -252,9 +528,9 @@ def test_ultralytics_export_runs_on_background_lane(tmp_path):
         def apply_theme(self, _theme):
             pass
 
-        def exec_(self):
-            from PyQt5.QtWidgets import QDialog
-            return QDialog.Accepted
+        def exec(self):
+            from PyQt6.QtWidgets import QDialog
+            return QDialog.DialogCode.Accepted
 
     try:
         with patch(
@@ -351,6 +627,47 @@ def test_directory_scan_is_transactional_and_latest_request_wins(tmp_path):
             str(latest_dir))
     finally:
         gate.set()
+        window.dirty = False
+        window.close()
+
+
+def test_delayed_directory_commit_keeps_document_and_provisional_object(
+        tmp_path):
+    app, window = get_main_app()
+    current = tmp_path / 'current.png'
+    target_dir = tmp_path / 'target'
+    target_dir.mkdir()
+    _image(str(current), 0xFFFFFFFF)
+    _image(str(target_dir / 'target.png'), 0xFF000000)
+    assert window.load_file(str(current))
+    old_snapshot = window.dataset_snapshot
+    gate = threading.Event()
+    started = threading.Event()
+    original_scan = window.dataset_snapshot.scan
+
+    def delayed_scan(root, *args, **kwargs):
+        started.set()
+        gate.wait(1)
+        return original_scan(root, *args, **kwargs)
+
+    try:
+        with patch('labelImgPlusPlus.DatasetSnapshot.scan', delayed_scan):
+            window.request_import_dir_images(str(target_dir), skip_prompt=True)
+            assert started.wait(1)
+            shape = _stage_provisional_box(window)
+            gate.set()
+            assert _wait(
+                app,
+                lambda: not window.task_coordinator.queue_depths()[
+                    'background'])
+            app.processEvents()
+
+        assert window.file_path == str(current)
+        assert window.dataset_snapshot is old_snapshot
+        assert window.canvas.provisional_shape is shape
+    finally:
+        gate.set()
+        window._cancel_provisional_shape()
         window.dirty = False
         window.close()
 

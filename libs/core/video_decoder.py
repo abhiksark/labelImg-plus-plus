@@ -1,3 +1,4 @@
+# libs/core/video_decoder.py
 """Lazy PyAV compatibility adapter and frame-accurate video decoder."""
 
 from dataclasses import dataclass
@@ -7,11 +8,13 @@ import math
 import os
 import struct
 
-from PyQt5.QtGui import QImage
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
 
 from libs.core.video_project import fingerprint_video
 from libs.core.video_types import (
     VideoFrameRef, VideoFrameResult, VideoSessionSnapshot,
+    VideoThumbnailResult,
 )
 
 
@@ -196,12 +199,11 @@ class VideoDecoderSession:
         height, width = array.shape[:2]
         image = QImage(
             array.data, width, height, int(array.strides[0]),
-            QImage.Format_RGB888).copy()
+            QImage.Format.Format_RGB888).copy()
         frame_ref = VideoFrameRef(
             self.fingerprint, self.stream_index, int(frame.pts),
             self.time_base_num, self.time_base_den)
-        byte_size = int(image.sizeInBytes()) if hasattr(
-            image, 'sizeInBytes') else int(image.byteCount())
+        byte_size = int(image.sizeInBytes())
         result = VideoFrameResult(
             frame_ref, image, width, height, self.width, self.height,
             rotation, byte_size,
@@ -311,3 +313,32 @@ class VideoDecoderSession:
         self._lookahead = []
         if container is not None:
             container.close()
+
+
+def decode_video_thumbnails(request, cancelled=None):
+    """Decode detached, exact-PTS thumbnails in an independent session."""
+    if cancelled is not None and cancelled():
+        return VideoThumbnailResult(request, ())
+    decoder = VideoDecoderSession(
+        request.source_path, request.stream_index, cancelled=cancelled)
+    try:
+        if (decoder.fingerprint != request.fingerprint
+                or decoder.stream_index != request.stream_index
+                or decoder.time_base_num != request.time_base_num
+                or decoder.time_base_den != request.time_base_den):
+            raise VideoDecodeError('video thumbnail source fence changed')
+        frames = []
+        for pts in request.pts:
+            if cancelled is not None and cancelled():
+                break
+            frame = decoder.seek_pts(
+                pts, mode='nearest', cancelled=cancelled)
+            if frame is None or frame.frame_ref.pts != int(pts):
+                continue
+            image = frame.image.scaled(
+                request.max_size, request.max_size,
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            frames.append((frame.frame_ref, image))
+        return VideoThumbnailResult(request, tuple(frames))
+    finally:
+        decoder.close()

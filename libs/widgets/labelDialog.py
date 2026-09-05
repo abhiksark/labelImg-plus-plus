@@ -1,19 +1,12 @@
 # libs/labelDialog.py
 """Label dialog with search/filter capability for selecting annotation labels."""
 
-try:
-    from PyQt5.QtGui import QCursor
-    from PyQt5.QtCore import Qt, QStringListModel, QPoint
-    from PyQt5.QtWidgets import (
-        QDialog, QLineEdit, QCompleter, QDialogButtonBox, QVBoxLayout,
-        QHBoxLayout, QLabel, QListWidget
-    )
-except ImportError:
-    from PyQt4.QtGui import (
-        QCursor, QDialog, QLineEdit, QCompleter, QDialogButtonBox,
-        QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QStringListModel
-    )
-    from PyQt4.QtCore import Qt, QPoint
+from PyQt6.QtGui import QCursor
+from PyQt6.QtCore import Qt, QStringListModel, QPoint
+from PyQt6.QtWidgets import (
+    QDialog, QLineEdit, QCompleter, QDialogButtonBox, QVBoxLayout,
+    QHBoxLayout, QLabel, QListWidget
+)
 
 from libs.utils.utils import new_icon, label_validator, trimmed
 from libs.utils.styles import Theme, get_label_dialog_style, get_theme_colors
@@ -40,13 +33,15 @@ class LabelDialog(QDialog):
         model.setStringList(self.list_item)
         completer = QCompleter()
         completer.setModel(model)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.edit.setCompleter(completer)
 
         # OK/Cancel buttons
-        self.button_box = bb = BB(BB.Ok | BB.Cancel, Qt.Horizontal, self)
-        bb.button(BB.Ok).setIcon(new_icon('done'))
-        bb.button(BB.Cancel).setIcon(new_icon('undo'))
+        buttons = BB.StandardButton.Ok | BB.StandardButton.Cancel
+        self.button_box = bb = BB(
+            buttons, Qt.Orientation.Horizontal, self)
+        bb.button(BB.StandardButton.Ok).setIcon(new_icon('done'))
+        bb.button(BB.StandardButton.Cancel).setIcon(new_icon('undo'))
         bb.accepted.connect(self.validate)
         bb.rejected.connect(self.reject)
         # An empty field makes validate() a silent no-op, which reads as a
@@ -140,7 +135,8 @@ class LabelDialog(QDialog):
                 })
 
     def _sync_ok_enabled(self, text):
-        self.button_box.button(BB.Ok).setEnabled(bool(trimmed(text)))
+        self.button_box.button(BB.StandardButton.Ok).setEnabled(
+            bool(trimmed(text)))
 
     def validate(self):
         if trimmed(self.edit.text()):
@@ -157,7 +153,7 @@ class LabelDialog(QDialog):
         """
         self.edit.setText(text)
         self.edit.setSelection(0, len(text))
-        self.edit.setFocus(Qt.PopupFocusReason)
+        self.edit.setFocus(Qt.FocusReason.PopupFocusReason)
 
         # Clear filter when opening
         if hasattr(self, 'filter_edit'):
@@ -184,7 +180,7 @@ class LabelDialog(QDialog):
             if cursor_pos.y() > max_global.y():
                 cursor_pos.setY(max_global.y())
             self.move(cursor_pos)
-        return trimmed(self.edit.text()) if self.exec_() else None
+        return trimmed(self.edit.text()) if self.exec() else None
 
     def list_item_click(self, t_qlist_widget_item):
         text = trimmed(t_qlist_widget_item.text())

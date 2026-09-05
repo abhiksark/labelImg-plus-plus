@@ -248,9 +248,11 @@ class VideoProjectModel:
             if item.track_id not in self.tracks:
                 raise KeyError(item.track_id)
             if (item.source != 'tracker'
-                    or item.review_state != 'accepted' or item.anchor):
+                    or item.review_state not in ('accepted', 'pending')
+                    or item.anchor):
                 raise ValueError(
-                    'propagation observations must be accepted tracker data')
+                    'propagation observations must be unanchored tracker data '
+                    'awaiting or having passed review')
             observations[(item.track_id, int(item.pts))] = item
         gaps = {}
         for item in result.gaps:
@@ -341,9 +343,11 @@ class VideoProjectModel:
             if item.track_id != track_id:
                 raise ValueError('regeneration result contains another track')
             if (item.source != 'tracker'
-                    or item.review_state != 'accepted' or item.anchor):
+                    or item.review_state not in ('accepted', 'pending')
+                    or item.anchor):
                 raise ValueError(
-                    'regeneration observations must be accepted tracker data')
+                    'regeneration observations must be unanchored tracker data '
+                    'awaiting or having passed review')
             if inside(item.pts):
                 observations[(track_id, int(item.pts))] = item
         gaps = {}

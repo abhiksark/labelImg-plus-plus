@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import patch
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from libs.utils import dpi
 from libs.utils.styles import (
@@ -136,6 +136,35 @@ def test_slider_style_scales_negative_margin_at_2x():
     with _at_2x():
         css = get_slider_style(Theme.LIGHT)
     assert 'margin: -10px 0' in css     # was -5px 0
+
+
+def test_track_state_colours_exist_in_both_palettes():
+    """Palette parity: all four track keys must exist in light and dark."""
+    keys = ('track_anchor', 'track_interpolated',
+            'track_pending', 'track_absent')
+    for key in keys:
+        assert key in LIGHT_COLORS, key
+        assert key in DARK_COLORS, key
+
+
+def test_track_state_colours_stand_out_and_absent_recedes():
+    """The three states must be visible; absent must not compete with them.
+
+    anchor/interpolated/pending are state colours and must stand out.
+    absent marks the absence of tracking and must recede into the surface.
+    """
+    for palette, palette_name in ((LIGHT_COLORS, 'light'),
+                                   (DARK_COLORS, 'dark')):
+        surface = palette['surface']
+        # Three state colours must exceed 1.9:1 contrast against surface
+        for key in ('track_anchor', 'track_interpolated', 'track_pending'):
+            ratio = _contrast_ratio(palette[key], surface)
+            assert ratio > 1.9, (
+                f'{palette_name} {key}: {ratio:.2f}:1 (need > 1.9:1)')
+        # track_absent must stay subdued: below 2.0:1 to recede
+        ratio = _contrast_ratio(palette['track_absent'], surface)
+        assert ratio < 2.0, (
+            f'{palette_name} track_absent: {ratio:.2f}:1 (need < 2.0:1 to recede)')
 
 
 if __name__ == '__main__':

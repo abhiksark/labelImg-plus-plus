@@ -26,12 +26,12 @@ if REPOSITORY_ROOT not in sys.path:
 if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import (  # noqa: E402
+from PyQt6.QtCore import (  # noqa: E402
     PYQT_VERSION_STR, QT_VERSION_STR, QCoreApplication, QEvent, QEventLoop,
     QPointF, QTimer,
 )
-from PyQt5.QtGui import QPixmap  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QListWidget  # noqa: E402
+from PyQt6.QtGui import QPixmap  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QListWidget  # noqa: E402
 
 from libs.core.dataset import DatasetSnapshot  # noqa: E402
 from libs.core.image_pipeline import FrameCache, load_image_result  # noqa: E402
@@ -223,15 +223,15 @@ def _record(trace_events, iteration, name, started, ended, category='profile'):
 def _wait_for(application, predicate, timeout=60.0):
     deadline = time.monotonic() + timeout
     while not predicate():
-        application.processEvents(QEventLoop.AllEvents, 10)
+        application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
         if time.monotonic() >= deadline:
             raise RuntimeError('timed out waiting for Qt worker completion')
 
 
 def _release_qt_objects(application):
-    application.processEvents(QEventLoop.AllEvents, 10)
-    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    application.processEvents(QEventLoop.AllEvents, 10)
+    application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
     gc.collect()
 
 
@@ -349,7 +349,7 @@ def _gallery_metrics(application, gallery, snapshot, statuses, iteration,
     for filter_index in (1, 2, 3, 0):
         started = time.perf_counter()
         gallery.set_status_filter(filter_index)
-        application.processEvents(QEventLoop.AllEvents, 10)
+        application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
         filter_times.append((time.perf_counter() - started) * 1000)
 
     scroll_times = []
@@ -358,7 +358,7 @@ def _gallery_metrics(application, gallery, snapshot, statuses, iteration,
     for step in range(20):
         started = time.perf_counter()
         scrollbar.setValue(int(maximum * step / 19))
-        application.processEvents(QEventLoop.AllEvents, 10)
+        application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
         scroll_times.append((time.perf_counter() - started) * 1000)
 
     thumbnail_ms = 0.0
@@ -427,7 +427,7 @@ def _canvas_metrics(application, canvas, workload_root, iteration,
     for _index in range(5):
         started = time.perf_counter()
         canvas.render(target)
-        application.processEvents(QEventLoop.AllEvents, 10)
+        application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
         ended = time.perf_counter()
         paints.append(_record(
             trace_events, iteration, 'canvas.paint', started, ended))
@@ -493,7 +493,7 @@ def _memory_cycle_metric(application, widgets):
             point = QPointF((index * 37) % 2048, (index * 53) % 2048)
             canvas._spatial_index.query(point, margin=canvas.epsilon)
         canvas.render(target)
-        application.processEvents(QEventLoop.AllEvents, 10)
+        application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
     gallery.thread_pool.waitForDone(5000)
     _release_qt_objects(application)
     after = _process_sample().get('rss_bytes')

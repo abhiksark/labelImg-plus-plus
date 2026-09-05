@@ -1,11 +1,11 @@
 # libs/widgets/batchVerifyDialog.py
 """Batch verify/unverify dialog for annotation review workflow."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QRadioButton, QButtonGroup
 )
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 from libs.utils.dpi import scale_px
 

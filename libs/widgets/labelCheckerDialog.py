@@ -5,8 +5,8 @@ import os
 import tempfile
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QProgressBar, QHeaderView, QAbstractItemView,
     QMessageBox, QFileDialog, QCheckBox, QGroupBox
@@ -96,12 +96,12 @@ class LabelCheckerDialog(QDialog):
             "Select", "Type", "Label", "Suggestion", "Count", "Files"
         ])
         self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
+            QHeaderView.ResizeMode.ResizeToContents
         )
         self.table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.Stretch
+            2, QHeaderView.ResizeMode.Stretch
         )
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         layout.addWidget(self.table)
@@ -308,12 +308,12 @@ class LabelCheckerDialog(QDialog):
             # Issue type
             type_item = QTableWidgetItem(ISSUE_TYPE_NAMES[issue.issue_type])
             type_item.setBackground(self._issue_colors[issue.issue_type])
-            type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+            type_item.setFlags(type_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 1, type_item)
 
             # Label
             label_item = QTableWidgetItem(repr(issue.label))
-            label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
+            label_item.setFlags(label_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 2, label_item)
 
             # Suggestion
@@ -321,13 +321,13 @@ class LabelCheckerDialog(QDialog):
             if issue.similarity > 0 and issue.suggestion:
                 suggestion = f"{issue.suggestion} ({issue.similarity:.0%})"
             suggestion_item = QTableWidgetItem(suggestion)
-            suggestion_item.setFlags(suggestion_item.flags() & ~Qt.ItemIsEditable)
+            suggestion_item.setFlags(suggestion_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 3, suggestion_item)
 
             # Count
             count_item = QTableWidgetItem(str(issue.count))
-            count_item.setFlags(count_item.flags() & ~Qt.ItemIsEditable)
-            count_item.setTextAlignment(Qt.AlignCenter)
+            count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 4, count_item)
 
             # Files (show count, full list in tooltip)
@@ -337,7 +337,7 @@ class LabelCheckerDialog(QDialog):
                 files_item.setToolTip(
                     files_item.toolTip() + f"\n... and {len(issue.files) - 20} more"
                 )
-            files_item.setFlags(files_item.flags() & ~Qt.ItemIsEditable)
+            files_item.setFlags(files_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 5, files_item)
 
     def _update_summary(self):

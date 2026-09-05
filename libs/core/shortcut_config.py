@@ -14,6 +14,7 @@ DEFAULT_SHORTCUTS = {
     'copy_prev_bounding': 'Ctrl+Shift+V',
     'open_next_image': 'D',
     'open_prev_image': 'A',
+    'complete_item': 'E',
     'verify': 'Space',
     'video_play_pause': 'Ctrl+Space',
     'save': 'Ctrl+S',
@@ -54,6 +55,11 @@ DEFAULT_SHORTCUTS = {
     'video_track_backward': 'Shift+T',
     'video_accept_suggestion': 'Shift+Enter',
     'video_reject_suggestion': 'Backspace',
+    # Propagation now lands provisional, so reviewing a whole run is the
+    # primary workflow rather than a Tools-menu afterthought. These escalate
+    # the single-suggestion pair above.
+    'video_accept_run': 'Ctrl+Shift+Enter',
+    'video_reject_run': 'Ctrl+Shift+Backspace',
 }
 
 

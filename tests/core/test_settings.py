@@ -215,8 +215,8 @@ class TestSettingsJsonMigration(unittest.TestCase):
 
     def test_qt_types_roundtrip(self):
         """QSize/QPoint/QColor/QByteArray/enum must survive a save/load cycle."""
-        from PyQt5.QtCore import QByteArray, QPoint, QSize
-        from PyQt5.QtGui import QColor
+        from PyQt6.QtCore import QByteArray, QPoint, QSize
+        from PyQt6.QtGui import QColor
         from libs.formats.labelFile import LabelFileFormat
 
         self.settings['size'] = QSize(640, 480)
@@ -235,6 +235,13 @@ class TestSettingsJsonMigration(unittest.TestCase):
         self.assertEqual(loaded.get('color'), QColor(10, 20, 30, 200))
         self.assertEqual(loaded.get('state'), QByteArray(b'\x00\x01\x02\xff'))
         self.assertEqual(loaded.get('fmt'), LabelFileFormat.YOLO)
+
+    def test_qt_enums_are_not_generic_persistence_enums(self):
+        from PyQt6.QtCore import Qt
+        from libs.core.settings import _encode
+
+        with self.assertRaises(TypeError):
+            _encode(Qt.Orientation.Horizontal)
 
     def test_reset_keeps_path_so_persistence_survives(self):
         """reset() must not null the path (which would disable all saving)."""

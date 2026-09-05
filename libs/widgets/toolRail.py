@@ -1,15 +1,11 @@
+# libs/widgets/toolRail.py
 """Fixed annotation-tool rail for the modern workspace."""
 
-try:
-    from PyQt5.QtCore import Qt, QSize
-    from PyQt5.QtWidgets import (
-        QActionGroup, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
-    )
-except ImportError:
-    from PyQt4.QtCore import Qt, QSize
-    from PyQt4.QtGui import (
-        QActionGroup, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
-    )
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QActionGroup
+from PyQt6.QtWidgets import (
+    QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+)
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_tool_rail_style
@@ -26,9 +22,9 @@ class AnnotationToolRail(QWidget):
     def __init__(self, actions, parent=None):
         super(AnnotationToolRail, self).__init__(parent)
         self.setObjectName('annotationToolRail')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(scale_px(self.RAIL_WIDTH))
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
         self.action_group = QActionGroup(self)
         self.action_group.setExclusive(True)
@@ -48,7 +44,8 @@ class AnnotationToolRail(QWidget):
             button.setObjectName('%sToolButton' % key)
             button.setDefaultAction(action)
             button.setAutoRaise(True)
-            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIconSize(QSize(
                 scale_px(self.ICON_SIZE), scale_px(self.ICON_SIZE)))
             button.setFixedSize(
@@ -59,7 +56,7 @@ class AnnotationToolRail(QWidget):
             action.changed.connect(
                 lambda b=button, a=action, text=label:
                 self._sync_tooltip(b, a, text))
-            layout.addWidget(button, 0, Qt.AlignHCenter)
+            layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(1)
         self.apply_theme(Theme.LIGHT)

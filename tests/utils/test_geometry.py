@@ -1,7 +1,7 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QPointF
+from PyQt6.QtCore import QPointF
 from libs.utils.utils import douglas_peucker
 
 

@@ -1,0 +1,36 @@
+{
+  "filename": "/sanitized/dataset/sample.jpg",
+  "recentFiles": [
+    "/sanitized/dataset/sample.jpg"
+  ],
+  "window/size": {
+    "__type__": "QSize",
+    "w": 1280,
+    "h": 720
+  },
+  "window/position": {
+    "__type__": "QPoint",
+    "x": 48,
+    "y": 72
+  },
+  "line/color": {
+    "__type__": "QColor",
+    "rgba": [
+      10,
+      20,
+      30,
+      200
+    ]
+  },
+  "window/state": {
+    "__type__": "QByteArray",
+    "b64": "AAEC/w=="
+  },
+  "labelFileFormat": {
+    "__type__": "Enum",
+    "cls": "LabelFileFormat",
+    "value": 2
+  },
+  "autosave": true,
+  "draw/square": false
+}

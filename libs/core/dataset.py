@@ -385,10 +385,7 @@ class DatasetSnapshot:
     def scan(cls, root_dir, save_dir=None, generation=0,
              cancelled=None, progress=None, extensions=None):
         if extensions is None:
-            try:
-                from PyQt5.QtGui import QImageReader
-            except ImportError:  # pragma: no cover - Qt4 compatibility
-                from PyQt4.QtGui import QImageReader
+            from PyQt6.QtGui import QImageReader
             extensions = tuple(
                 '.' + bytes(fmt).decode('ascii').lower()
                 for fmt in QImageReader.supportedImageFormats())

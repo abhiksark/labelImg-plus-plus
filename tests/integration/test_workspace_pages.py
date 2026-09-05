@@ -1,3 +1,4 @@
+# tests/integration/test_workspace_pages.py
 """Structural and routing coverage for Empty, Canvas, and Gallery pages."""
 
 import os
@@ -5,9 +6,9 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QMimeData, QSize, QUrl
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication, QDockWidget, QPushButton, QToolButton
+from PyQt6.QtCore import QMimeData, QSize, QUrl
+from PyQt6.QtGui import QImage
+from PyQt6.QtWidgets import QApplication, QDockWidget, QPushButton, QToolButton
 
 from labelImgPlusPlus import MainWindow
 from libs.core.video_types import DocumentKind
@@ -71,6 +72,7 @@ def test_gallery_is_embedded_and_keeps_workspace_chrome(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
     try:
+        window.resize(1100, 700)
         window.show()
         QApplication.processEvents()
         original_central = window.centralWidget()
@@ -96,7 +98,7 @@ def test_drop_routing_accepts_exactly_one_supported_local_path(
         monkeypatch, tmp_path):
     window = _window(monkeypatch, tmp_path)
     image_path = tmp_path / 'image.png'
-    image = QImage(20, 10, QImage.Format_RGB32)
+    image = QImage(20, 10, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(str(image_path))
     unsupported = tmp_path / 'notes.bin'
@@ -161,6 +163,16 @@ def test_canvas_chrome_reuses_actions_and_status_bar_is_hidden_bus(
         window._apply_theme(Theme.LIGHT)
         assert 'Saved' in window.label_save_status.text()
         assert window.label_active_tool.text()
+
+        assert chrome.annotation_session_hint.isHidden()
+        window.activate_box_tool()
+        QApplication.processEvents()
+        assert not chrome.annotation_session_hint.isHidden()
+        assert 'Box stays active' in chrome.annotation_session_hint.text()
+
+        window.activate_select_tool()
+        QApplication.processEvents()
+        assert chrome.annotation_session_hint.isHidden()
 
         window._original_image_size = QSize(1920, 1080)
         window.update_status_bar()

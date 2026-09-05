@@ -14,8 +14,8 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
-from PyQt5.QtGui import QColor  # noqa: E402
-from PyQt5.QtWidgets import QAction, QApplication, QWidget  # noqa: E402
+from PyQt6.QtGui import QAction, QColor  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from libs.widgets.colorDialog import ColorDialog  # noqa: E402
 from libs.widgets.labelDialog import LabelDialog  # noqa: E402
@@ -39,13 +39,15 @@ class TestColorDialog(unittest.TestCase):
         dialog = ColorDialog()
 
         # Check option is set
-        self.assertTrue(dialog.testOption(ColorDialog.ShowAlphaChannel))
+        self.assertTrue(dialog.testOption(
+            ColorDialog.ColorDialogOption.ShowAlphaChannel))
 
     def test_native_dialog_disabled(self):
         """Test that native dialog is disabled."""
         dialog = ColorDialog()
 
-        self.assertTrue(dialog.testOption(ColorDialog.DontUseNativeDialog))
+        self.assertTrue(dialog.testOption(
+            ColorDialog.ColorDialogOption.DontUseNativeDialog))
 
     def test_has_restore_button(self):
         """Test that restore defaults button exists."""

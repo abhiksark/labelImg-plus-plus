@@ -22,8 +22,18 @@ assert PLUGIN_API_MAJOR == 1
   imported
 - Safe mode: `LABELIMGPP_DISABLE_PLUGINS=1` skips discovery and loading
 
-Production discovery uses `importlib.metadata` and supports both the legacy
-Python 3.8/3.9 collection shapes and selectable Python 3.10–3.13 collections.
+Production discovery uses selectable `importlib.metadata` entry points on the
+Python 3.10–3.13 host matrix while preserving the API-major-1 identities from
+4.0.0rc0.
+
+## Qt-host compatibility
+
+API major 1 exposes no Qt object or enum. Plugins that import only
+`labelimgplusplus.plugins` can support both the PyQt5-based 4.0.0rc0 host and
+PyQt6-based 4.0.0rc1 or later hosts without a plugin API bump. A plugin loaded
+into a PyQt6 host must not import PyQt5 into that process. Imports from
+`libs.*` are internal, binding-specific, and outside this compatibility
+contract.
 
 ## Frozen descriptors
 

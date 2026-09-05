@@ -476,33 +476,27 @@ Any         Wheel           Zoom (Ctrl) or Scroll
 
 ```
 labelImg++/
-├── labelImgPlusPlus.py          # MainWindow, entry point (1722 lines)
-│
+├── labelImgPlusPlus.py          # MainWindow and console entry point
+├── labelimgplusplus/            # Standard-library-only public plugin API
 ├── libs/
-│   ├── canvas.py        # Canvas widget (749 lines)
-│   ├── shape.py         # Shape class (210 lines)
-│   ├── labelFile.py     # Format orchestration (175 lines)
-│   │
-│   ├── pascal_voc_io.py # VOC format (172 lines)
-│   ├── yolo_io.py       # YOLO format (144 lines)
-│   ├── create_ml_io.py  # CreateML format (136 lines)
-│   │
-│   ├── settings.py      # Persistence (45 lines)
-│   ├── stringBundle.py  # i18n (78 lines)
-│   │
-│   ├── labelDialog.py   # Label input
-│   ├── colorDialog.py   # Color picker
-│   ├── zoomWidget.py    # Zoom control
-│   ├── lightWidget.py   # Brightness control
-│   │
-│   ├── utils.py         # Helpers
-│   └── constants.py     # Constants
-│
+│   ├── core/                    # Documents, commands, settings, async runtime
+│   ├── formats/                 # Annotation readers and writers
+│   ├── integrations/            # Lazily imported optional adapters
+│   ├── widgets/                 # Qt widgets, Canvas, dialogs, workspace
+│   ├── utils/                   # Asset, locale, DPI, and UI helpers
+│   ├── assets/
+│   │   ├── icons/               # Packaged icons
+│   │   ├── strings/             # UTF-8 properties bundles
+│   │   └── licenses/            # Third-party asset licenses
+│   └── data/                    # Packaged class data
 └── resources/
-    ├── resources.qrc    # Qt resource file
-    ├── icons/           # Application icons
-    └── strings/         # Localization
+    ├── demo/                    # Documentation media only
+    └── logo/                    # Project/release artwork only
 ```
+
+Runtime assets are ordinary package data resolved by
+`libs/utils/assets.py`. There is no generated Qt resource module or RCC build
+step; source, wheel, and frozen layouts use the same semantic asset catalogs.
 
 ## Threading Model
 
@@ -519,6 +513,6 @@ signals to return plain data or detached `QImage` values to the UI.
 | New format | `libs/` | Add Writer/Reader classes |
 | New action | `labelImgPlusPlus.py` | Define action, add to menu |
 | New widget | `libs/` | Create widget, add to MainWindow |
-| New language | `resources/strings/` | Add properties file |
+| New language | `libs/assets/strings/` | Add UTF-8 properties file and catalog entry |
 
 See [Extension Guide](guides/extension-guide.md) for details.

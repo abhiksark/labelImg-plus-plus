@@ -20,16 +20,13 @@ def pytest_sessionstart(session):
     """Keep one strong QApplication reference for the complete test run."""
     del session
     global _TEST_APPLICATION
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication
 
     if QApplication.instance() is None:
-        try:
-            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-        except AttributeError:
-            pass
-    _TEST_APPLICATION = QApplication.instance() or QApplication([])
+        _TEST_APPLICATION = QApplication([])
+    else:
+        _TEST_APPLICATION = QApplication.instance()
+    assert _TEST_APPLICATION is not None
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -37,7 +34,7 @@ def pytest_sessionfinish(session, exitstatus):
     del session, exitstatus
     global _TEST_APPLICATION
     try:
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
     except ImportError:
         return
 

@@ -11,7 +11,7 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from libs.widgets.zoomWidget import ZoomWidget
 
@@ -85,9 +85,9 @@ class TestZoomWidget(unittest.TestCase):
 
     def test_alignment(self):
         """Test ZoomWidget is center aligned."""
-        from PyQt5.QtCore import Qt
+        from PyQt6.QtCore import Qt
         widget = ZoomWidget(value=100)
-        self.assertEqual(widget.alignment(), Qt.AlignCenter)
+        self.assertEqual(widget.alignment(), Qt.AlignmentFlag.AlignCenter)
 
 
 if __name__ == '__main__':

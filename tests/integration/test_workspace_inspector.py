@@ -1,20 +1,23 @@
+# tests/integration/test_workspace_inspector.py
 """Structural and persistence coverage for the fixed workspace inspector."""
 
 import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QByteArray
-from PyQt5.QtWidgets import QApplication, QDockWidget, QToolBar
+from PyQt6.QtCore import QByteArray
+from PyQt6.QtWidgets import QApplication, QDockWidget, QToolBar
 
 from labelImgPlusPlus import MainWindow
 from libs.core.settings import Settings
 from libs.utils.constants import (
-    SETTING_ADVANCE_MODE, SETTING_ICON_SIZE, SETTING_INSPECTOR_COLLAPSED,
-    SETTING_INSPECTOR_TAB, SETTING_INSPECTOR_WIDTH,
+    SETTING_ADVANCE_MODE, SETTING_DARK_MODE, SETTING_ICON_SIZE,
+    SETTING_INSPECTOR_COLLAPSED, SETTING_INSPECTOR_TAB,
+    SETTING_INSPECTOR_WIDTH,
     SETTING_TOOLBAR_EXPANDED, SETTING_WIN_STATE,
 )
 from libs.utils.dpi import scale_px
+from libs.utils.styles import Theme, get_theme_colors
 
 
 def _write_settings(monkeypatch, tmp_path, values):
@@ -63,6 +66,11 @@ def test_splitter_reparents_existing_controls_without_backing_duplicates(
         assert window.label_list is window.track_list_widget
         assert not hasattr(window, 'label_tab_widget')
         assert window.file_list_widget.parent() is not None
+        assert window.combo_box.isHidden()
+        assert window.use_default_label_container.isHidden()
+        assert window.diffc_button.isHidden()
+        assert window.inspector_context_card.title.text() == \
+            'Open an image, folder, or video'
 
         assert window.findChildren(QToolBar) == []
         assert window.findChildren(QDockWidget) == []
@@ -135,6 +143,48 @@ def test_malformed_workspace_settings_restore_safe_defaults(
         assert window.workspace_inspector.selected_tab() == 'objects'
         assert abs(window.workspace_shell.inspector_width()
                    - scale_px(304)) <= scale_px(3)
+    finally:
+        _close(window)
+
+
+def test_narrow_window_temporarily_collapses_and_restores_inspector(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path, {
+        SETTING_INSPECTOR_COLLAPSED: False,
+    })
+    try:
+        window.resize(scale_px(820), 700)
+        window.show()
+        QApplication.processEvents()
+        assert window.workspace_shell.is_inspector_collapsed()
+        assert window.settings.get(SETTING_INSPECTOR_COLLAPSED) is False
+
+        window.resize(scale_px(1100), 700)
+        QApplication.processEvents()
+        assert not window.workspace_shell.is_inspector_collapsed()
+        assert abs(window.workspace_shell.inspector_width()
+                   - scale_px(304)) <= scale_px(3)
+
+        window.set_inspector_collapsed(True)
+        window.resize(scale_px(850), 700)
+        window.resize(scale_px(1100), 700)
+        QApplication.processEvents()
+        assert window.workspace_shell.is_inspector_collapsed()
+        assert window.settings.get(SETTING_INSPECTOR_COLLAPSED) is True
+    finally:
+        _close(window)
+
+
+def test_restored_dark_theme_reaches_workspace_after_construction(
+        monkeypatch, tmp_path):
+    window = _window(monkeypatch, tmp_path, {SETTING_DARK_MODE: True})
+    try:
+        colors = get_theme_colors(Theme.DARK)
+        assert window._current_theme == Theme.DARK
+        assert window.workspace_pages.video_overview.frames._colors == colors
+        assert colors['surface'] in window.workspace_inspector.styleSheet()
+        assert ('color: %s' % colors['on_accent']) in \
+            window.workspace_pages.video_overview.styleSheet()
     finally:
         _close(window)
 

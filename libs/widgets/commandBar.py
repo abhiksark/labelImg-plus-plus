@@ -1,15 +1,10 @@
+# libs/widgets/commandBar.py
 """Compact application command bar for the annotation workspace."""
 
-try:
-    from PyQt5.QtCore import Qt, QSize
-    from PyQt5.QtWidgets import (
-        QHBoxLayout, QLabel, QLayout, QMenu, QSizePolicy, QToolButton, QWidget,
-    )
-except ImportError:
-    from PyQt4.QtCore import Qt, QSize
-    from PyQt4.QtGui import (
-        QHBoxLayout, QLabel, QLayout, QMenu, QSizePolicy, QToolButton, QWidget,
-    )
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtWidgets import (
+    QHBoxLayout, QLabel, QLayout, QMenu, QSizePolicy, QToolButton, QWidget,
+)
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import (
@@ -27,16 +22,17 @@ class CommandBar(QWidget):
     """
 
     _FORMAT_BREAKPOINT = 900
-    _VERIFY_BREAKPOINT = 760
+    _SAVE_STATE_BREAKPOINT = 1040
     _APP_LABEL_BREAKPOINT = 720
     _POSITION_BREAKPOINT = 640
 
     def __init__(self, application_name, menus, open_entries,
                  previous_action, next_action, save_action, verify_action,
-                 format_action, overflow_entries=(), parent=None):
+                 format_action, overflow_entries=(), primary_action=None,
+                 parent=None):
         super(CommandBar, self).__init__(parent)
         self.setObjectName('workspaceCommandBar')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(scale_px(COMMAND_BAR_HEIGHT))
 
         self.application_menu = QMenu(self)
@@ -60,10 +56,14 @@ class CommandBar(QWidget):
         self.dirty_indicator.setToolTip('Unsaved changes')
         self.dirty_indicator.hide()
 
+        self.save_state_label = QLabel('Saved')
+        self.save_state_label.setObjectName('documentSaveState')
+        self.save_state_label.setAccessibleName('Document save state')
+
         self.document_label = QLabel('No document')
         self.document_label.setObjectName('documentLabel')
         self.document_label.setSizePolicy(
-            QSizePolicy.Ignored, QSizePolicy.Preferred)
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.document_label.setMinimumWidth(scale_px(80))
         self.document_label.setAccessibleName('Current document')
 
@@ -71,21 +71,34 @@ class CommandBar(QWidget):
             previous_action, 'previousButton', 'Previous')
         self.position_label = QLabel('— / —')
         self.position_label.setObjectName('documentPosition')
-        self.position_label.setAlignment(Qt.AlignCenter)
+        self.position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.position_label.setMinimumWidth(scale_px(76))
         self.position_label.setAccessibleName('Document position')
         self.next_button = self._action_button(
             next_action, 'nextButton', 'Next')
 
+        self.primary_button = self._action_button(
+            primary_action or next_action, 'primaryActionButton',
+            'Complete current item')
+        self.primary_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+
         self.save_button = self._action_button(
             save_action, 'saveButton', 'Save')
-        self.save_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.save_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.verify_button = self._action_button(
             verify_action, 'verifyButton', 'Verify')
-        self.verify_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.verify_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        # Save and Verify remain authoritative and reachable in overflow, but
+        # they are no longer peers of the state-derived completion action.
+        # Keep these projections for compatibility/tests without giving the
+        # annotator three competing ways to finish the current item.
+        self.save_button.setParent(self)
+        self.save_button.hide()
+        self.verify_button.setParent(self)
+        self.verify_button.hide()
         self.format_button = self._action_button(
             format_action, 'formatButton', 'Annotation format')
-        self.format_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.format_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
 
         self.overflow_menu = QMenu(self)
         self.overflow_menu.setObjectName('commandOverflowMenu')
@@ -95,7 +108,7 @@ class CommandBar(QWidget):
             'More commands')
 
         layout = QHBoxLayout(self)
-        layout.setSizeConstraint(QLayout.SetNoConstraint)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         layout.setContentsMargins(scale_px(8), 0, scale_px(8), 0)
         layout.setSpacing(scale_px(4))
         layout.addWidget(self.application_button)
@@ -107,8 +120,8 @@ class CommandBar(QWidget):
         layout.addWidget(self.position_label)
         layout.addWidget(self.next_button)
         layout.addSpacing(scale_px(4))
-        layout.addWidget(self.save_button)
-        layout.addWidget(self.verify_button)
+        layout.addWidget(self.save_state_label)
+        layout.addWidget(self.primary_button)
         layout.addWidget(self.format_button)
         layout.addWidget(self.overflow_button)
 
@@ -130,7 +143,7 @@ class CommandBar(QWidget):
         button.setObjectName(object_name)
         button.setDefaultAction(action)
         button.setAutoRaise(True)
-        button.setFocusPolicy(Qt.StrongFocus)
+        button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setIconSize(QSize(scale_px(18), scale_px(18)))
         button.setAccessibleName(accessible_name)
         return button
@@ -143,24 +156,43 @@ class CommandBar(QWidget):
         button.setIcon(new_icon(icon_name))
         button.setProperty('iconName', icon_name)
         button.setIconSize(QSize(scale_px(18), scale_px(18)))
-        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        button.setPopupMode(QToolButton.InstantPopup)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         button.setMenu(menu)
         button.setAutoRaise(True)
-        button.setFocusPolicy(Qt.StrongFocus)
+        button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setAccessibleName(accessible_name)
         return button
 
-    def set_document(self, name, dirty=False, full_path=None, read_only=False):
+    def set_document(self, name, dirty=False, full_path=None, read_only=False,
+                     provisional=False):
         display = name or 'No document'
         if read_only:
             display += ' · Read only'
         self.document_label.setText(display)
         self.document_label.setToolTip(full_path or display)
         self.dirty_indicator.setVisible(bool(dirty))
+        if read_only:
+            state = 'Read only'
+        elif provisional and dirty:
+            state = 'Unsaved changes · provisional object'
+        elif provisional:
+            state = 'Provisional object · not saved'
+        elif dirty:
+            state = 'Unsaved changes'
+        else:
+            state = 'Saved'
+        self.save_state_label.setText(state)
+        self.save_state_label.setToolTip(state)
 
     def set_position(self, text):
         self.position_label.setText(text or '— / —')
+
+    def set_primary_text(self, text):
+        """Render a literal ampersand without changing the QAction text."""
+        value = str(text or '')
+        self.primary_button.setText(value.replace('&', '&&'))
+        self.primary_button.setAccessibleName(value)
 
     def apply_theme(self, theme):
         self._current_theme = theme
@@ -170,17 +202,19 @@ class CommandBar(QWidget):
         for button in self.findChildren(QToolButton):
             icon_name = button.property('iconName')
             if icon_name:
-                button.setIcon(themed_icon(icon_name, theme))
+                button.setIcon(new_icon(icon_name) if icon_name == 'app'
+                               else themed_icon(icon_name, theme))
 
     def resizeEvent(self, event):
         """Move lower-priority labels into the always-present overflow menu."""
         width = event.size().width()
         self.format_button.setVisible(width >= scale_px(self._FORMAT_BREAKPOINT))
-        self.verify_button.setVisible(width >= scale_px(self._VERIFY_BREAKPOINT))
+        self.save_state_label.setVisible(
+            width >= scale_px(self._SAVE_STATE_BREAKPOINT))
         self.application_button.setToolButtonStyle(
-            Qt.ToolButtonTextBesideIcon
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
             if width >= scale_px(self._APP_LABEL_BREAKPOINT)
-            else Qt.ToolButtonIconOnly)
+            else Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.position_label.setVisible(
             width >= scale_px(self._POSITION_BREAKPOINT))
         super(CommandBar, self).resizeEvent(event)

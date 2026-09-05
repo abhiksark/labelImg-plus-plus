@@ -1,126 +1,132 @@
 """Main-window integration coverage for the modern command bar."""
 
 import os
+import time
+from xml.etree import ElementTree
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QAction
+import pytest
+from PyQt6.QtCore import QPoint, Qt, QTimer
+from PyQt6.QtGui import QImage
+from PyQt6.QtTest import QTest
 
 from labelImgPlusPlus import get_main_app
+from libs.formats.labelFile import LabelFileFormat
 
 
-def _menu_actions(menu):
-    found = set()
-    for action in menu.actions():
-        submenu = action.menu()
-        if submenu is not None:
-            found.update(_menu_actions(submenu))
-        elif not action.isSeparator():
-            found.add(action)
-    return found
-
-
-def test_main_window_installs_one_fixed_command_bar():
-    _app, window = get_main_app([])
-    try:
-        assert window.menuWidget() is window.command_bar
-        assert window.command_bar.minimumHeight() == \
-            window.command_bar.maximumHeight()
-        assert window.menuWidget() is not None
-        assert window.command_bar.save_button.defaultAction() is \
-            window.actions.save
-        assert window.command_bar.verify_button.defaultAction() is \
-            window.actions.verify
-        assert window.command_bar.format_button.defaultAction() is \
-            window.actions.save_format
-    finally:
-        window.dirty = False
-        window.close()
-
-
-def test_application_menu_keeps_every_existing_menu_command_reachable():
-    _app, window = get_main_app([])
-    try:
-        menus = (
-            window.menus.file, window.menus.edit, window.menus.view,
-            window.menus.tools, window.menus.plugins, window.menus.help,
-        )
-        expected = set()
-        for menu in menus:
-            expected.update(_menu_actions(menu))
-        reachable = _menu_actions(window.command_bar.application_menu)
-        assert expected <= reachable
-
-        # Plugin commands are registered after the shell exists. Adding one to
-        # the live Plugins menu must make it reachable without rebuilding UI.
-        plugin_action = QAction('Fixture plugin command', window)
-        window.menus.plugins.addAction(plugin_action)
-        assert plugin_action in _menu_actions(
-            window.command_bar.application_menu)
-    finally:
-        window.dirty = False
-        window.close()
-
-
-def test_menus_and_shortcuts_survive_one_event_loop_turn():
-    """setMenuWidget() deletes the menu bar via deleteLater().
-
-    DeferredDelete is only delivered once an event loop runs, so a test that
-    never enters one cannot see the menus die. Enter the loop once before
-    asserting, otherwise this whole file passes against a broken shell.
-    """
+@pytest.fixture
+def command_window(monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
     app, window = get_main_app([])
     try:
+        # setMenuWidget() schedules the old menu bar for DeferredDelete.
+        # Exercise commands after an event loop, not just processEvents(),
+        # so accidentally destroying its menus cannot pass these tests.
         QTimer.singleShot(0, app.quit)
-        app.exec_()
-
-        entries = window.command_bar.application_menu.actions()
-        assert len(entries) == 6
-        for entry in entries:
-            submenu = entry.menu()
-            assert submenu is not None
-            assert submenu.title()          # raises if the C++ object is gone
-
-        for name in ('undo', 'redo', 'galleryMode', 'deleteImg'):
-            action = getattr(window.actions, name)
-            assert action.associatedWidgets(), \
-                '%s lost every associated widget, so its shortcut is dead' % name
-    finally:
-        window.dirty = False
-        window.close()
-
-
-def test_command_bar_syncs_document_position_dirty_state_and_actions():
-    app, window = get_main_app([])
-    try:
-        window.file_path = '/dataset/frame-017.png'
-        window.m_img_list = [
-            '/dataset/frame-%03d.png' % value for value in range(1, 241)]
-        window._path_to_idx = {
-            path: index for index, path in enumerate(window.m_img_list)}
-        window.file_path = window.m_img_list[16]
-        window.update_status_bar()
-        assert window.command_bar.document_label.text() == 'frame-017.png'
-        assert window.command_bar.position_label.text() == '17 / 240'
-
-        window.set_dirty()
-        assert not window.command_bar.dirty_indicator.isHidden()
-        assert window.command_bar.save_button.isEnabled()
-        window.set_clean()
-        assert window.command_bar.dirty_indicator.isHidden()
-        assert not window.command_bar.save_button.isEnabled()
-
-        window.resize(1366, 768)
+        app.exec()
         window.show()
+        window.activateWindow()
+        window.setFocus()
         app.processEvents()
-        assert window.command_bar.height() == \
-            window.command_bar.minimumHeight()
-        assert window.command_bar.format_button.isVisible()
-        assert window.command_bar.verify_button.isVisible()
-        assert window.command_bar.overflow_button.geometry().right() < \
-            window.command_bar.width()
-        assert window.command_bar.save_button.focusPolicy() == Qt.StrongFocus
+        yield app, window
     finally:
         window.dirty = False
         window.close()
+        window.deleteLater()
+        app.processEvents()
+
+
+def _load_image(window, tmp_path, annotated=True):
+    image_path = tmp_path / 'frame.png'
+    image = QImage(160, 120, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    assert image.save(str(image_path))
+    assert window.load_file(str(image_path))
+    window.label_file_format = LabelFileFormat.PASCAL_VOC
+    if annotated:
+        window.load_labels([
+            ('vehicle', [(10, 10), (40, 10), (40, 30), (10, 30)],
+             None, None, False),
+        ])
+        window.set_dirty()
+    return image_path
+
+
+def _choose_application_action(app, window, menu, action):
+    application_menu = window.command_bar.application_menu
+    application_menu.popup(window.command_bar.mapToGlobal(QPoint(0, 0)))
+    application_menu.setActiveAction(menu.menuAction())
+    QTest.keyClick(application_menu, Qt.Key.Key_Right)
+    app.processEvents()
+    assert menu.isVisible()
+    menu.setActiveAction(action)
+    QTest.keyClick(menu, Qt.Key.Key_Return)
+    app.processEvents()
+
+
+@pytest.mark.parametrize('annotated', [True, False], ids=['saveable', 'disabled'])
+def test_save_as_shortcut_never_toggles_single_class_mode(
+        command_window, monkeypatch, tmp_path, annotated):
+    app, window = command_window
+    _load_image(window, tmp_path, annotated=annotated)
+    assert window.actions.saveAs.isEnabled() == annotated
+    assert not window.single_class_mode.isChecked()
+
+    dialogs = []
+
+    def cancel_save_dialog():
+        dialogs.append('save-as')
+        return ''
+
+    # Intercept only the file-dialog boundary; Qt must resolve and dispatch
+    # the real shortcut. A duplicate QAction binding makes it ambiguous.
+    monkeypatch.setattr(window, 'save_file_dialog', cancel_save_dialog)
+    modifiers = (Qt.KeyboardModifier.ControlModifier
+                 | Qt.KeyboardModifier.ShiftModifier)
+    for checked in (False, True):
+        window.activateWindow()
+        window.canvas.setFocus()
+        app.processEvents()
+        QTest.keyClick(window.canvas, Qt.Key.Key_S, modifiers)
+        app.processEvents()
+        assert window.single_class_mode.isChecked() == checked
+        assert len(dialogs) == ((2 if checked else 1) if annotated else 0)
+
+        # The original menu action remains checkable and usable in both
+        # directions, even when Save As is disabled.
+        _choose_application_action(
+            app, window, window.menus.view, window.single_class_mode)
+        assert window.single_class_mode.isChecked() != checked
+
+
+def test_command_bar_overflow_saves_annotations_and_clears_dirty_indicator(
+        command_window, tmp_path):
+    app, window = command_window
+    image_path = _load_image(window, tmp_path)
+    window.resize(1366, 768)
+    app.processEvents()
+    assert window.command_bar.dirty_indicator.isVisible()
+    button = window.command_bar.overflow_button
+    assert button.isVisible()
+    assert button.geometry().right() < window.command_bar.width()
+
+    menu = window.command_bar.overflow_menu
+    menu.popup(button.mapToGlobal(QPoint(0, button.height())))
+    menu.setActiveAction(window.actions.save)
+    QTest.keyClick(menu, Qt.Key.Key_Return)
+
+    annotation_path = image_path.with_suffix('.xml')
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if annotation_path.is_file() and not window.dirty:
+            break
+        QTest.qWait(10)
+
+    assert annotation_path.is_file()
+    annotation = ElementTree.parse(str(annotation_path))
+    assert annotation.findtext('object/name') == 'vehicle'
+    assert not window.dirty
+    assert not window.command_bar.dirty_indicator.isVisible()
+    assert not window.command_bar.save_button.isEnabled()

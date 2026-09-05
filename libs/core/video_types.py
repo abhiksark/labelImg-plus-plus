@@ -1,3 +1,4 @@
+# libs/core/video_types.py
 """Immutable contracts shared by smart-video workers and the Qt UI.
 
 This module intentionally imports no optional video dependency.  Base installs
@@ -106,6 +107,26 @@ class VideoSessionSnapshot:
     revision: int
     initial_frame: VideoFrameResult
     read_only: bool = False
+
+
+@dataclass(frozen=True)
+class VideoThumbnailRequest:
+    request_id: int
+    generation: int
+    model_revision: int
+    source_path: str
+    fingerprint: VideoFingerprint
+    stream_index: int
+    time_base_num: int
+    time_base_den: int
+    pts: tuple
+    max_size: int
+
+
+@dataclass(frozen=True)
+class VideoThumbnailResult:
+    request: VideoThumbnailRequest
+    frames: tuple
 
 
 @dataclass(frozen=True)

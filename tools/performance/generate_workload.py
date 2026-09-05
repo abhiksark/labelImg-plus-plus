@@ -10,8 +10,8 @@ import sys
 import tempfile
 from fractions import Fraction
 
-from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
-from PyQt5.QtGui import QImage
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
+from PyQt6.QtGui import QImage
 
 REPOSITORY_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..'))
@@ -25,11 +25,11 @@ from libs.core.video_decoder import (  # noqa: E402
 
 
 def _jpeg_bytes(width=64, height=64):
-    image = QImage(width, height, QImage.Format_RGB32)
+    image = QImage(width, height, QImage.Format.Format_RGB32)
     image.fill(0xFF557799)
     data = QByteArray()
     buffer = QBuffer(data)
-    buffer.open(QIODevice.WriteOnly)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
     if not image.save(buffer, 'JPEG', 85):
         raise RuntimeError('Qt JPEG encoder is unavailable')
     buffer.close()
@@ -138,7 +138,7 @@ def generate(root, count):
     for width, height in navigation_sizes:
         path = os.path.join(navigation, '%dx%d.jpg' % (width, height))
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        image = QImage(width, height, QImage.Format_RGB32)
+        image = QImage(width, height, QImage.Format.Format_RGB32)
         image.fill(0xFF334455)
         if not image.save(path, 'JPEG', 85):
             raise RuntimeError('failed to write %s' % path)
@@ -341,7 +341,7 @@ def generate_video_workload(root, profile='full'):
     switch_width, switch_height = (
         (384, 216) if profile == 'smoke' else (3840, 2160))
     switch_image = os.path.join(video_root, 'switch-image.jpg')
-    image = QImage(switch_width, switch_height, QImage.Format_RGB32)
+    image = QImage(switch_width, switch_height, QImage.Format.Format_RGB32)
     image.fill(0xFF334455)
     if not image.save(switch_image, 'JPEG', 85):
         raise RuntimeError('failed to write %s' % switch_image)

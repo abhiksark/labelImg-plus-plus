@@ -1,20 +1,12 @@
 # libs/widgets/statsWidget.py
 """Statistics widget for displaying annotation statistics."""
 
-try:
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QGroupBox, QLabel, QProgressBar,
-        QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-        QPushButton, QStyle
-    )
-except ImportError:
-    from PyQt4.QtGui import (
-        QWidget, QVBoxLayout, QGroupBox, QLabel, QProgressBar,
-        QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-        QPushButton, QStyle
-    )
-    from PyQt4.QtCore import Qt
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QGroupBox, QLabel, QProgressBar,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QPushButton, QStyle
+)
 
 
 class StatsWidget(QWidget):
@@ -80,13 +72,13 @@ class StatsWidget(QWidget):
         # column at its minimum while column 0 stretched, so the header
         # overshot the viewport and left a permanent 1px scrollbar.
         self.label_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.Stretch)
+            0, QHeaderView.ResizeMode.Stretch)
         self.label_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeToContents)
-        self.label_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            1, QHeaderView.ResizeMode.ResizeToContents)
+        self.label_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.label_table.verticalHeader().setVisible(False)
-        self.label_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.label_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.label_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.label_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.label_table.setMaximumHeight(200)
 
         label_layout.addWidget(self.label_table)
@@ -109,7 +101,7 @@ class StatsWidget(QWidget):
 
         # Refresh Button
         self.refresh_btn = QPushButton("Refresh Statistics")
-        self.refresh_btn.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.refresh_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         layout.addWidget(self.refresh_btn)
 
         # Spacer
@@ -160,7 +152,7 @@ class StatsWidget(QWidget):
         for row, (label, count) in enumerate(sorted_labels):
             label_item = QTableWidgetItem(label)
             count_item = QTableWidgetItem(str(count))
-            count_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             self.label_table.setItem(row, 0, label_item)
             self.label_table.setItem(row, 1, count_item)

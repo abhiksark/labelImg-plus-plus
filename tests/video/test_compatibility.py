@@ -8,8 +8,6 @@ from libs.core.video_decoder import VIDEO_INSTALL_HINT
 def test_video_dependency_markers_cover_each_python_line():
     with open('pyproject.toml', 'r', encoding='utf-8') as stream:
         metadata = stream.read()
-    assert 'av>=12.3,<13; python_version == \'3.8\'' in metadata
-    assert 'av>=15.1,<16; python_version == \'3.9\'' in metadata
     assert 'av>=17.1,<18; python_version == \'3.10\'' in metadata
     assert 'av>=18,<19; python_version >= \'3.11\'' in metadata
     assert metadata.count('opencv-python-headless>=4.8,<6') == 2

@@ -11,22 +11,25 @@ Linux workstation gate and its deterministic 10k corpora.
 
 ### Existing tests
 
-- `tests/test_commands.py`: unit tests for undo/redo command system (`libs/commands.py`)
-- `tests/test_io.py`: Pascal VOC + CreateML I/O smoke tests (`libs/pascal_voc_io.py`, `libs/create_ml_io.py`)
-- `tests/core/test_settings.py`: isolated JSON settings persistence (`libs/core/settings.py`)
-- `tests/test_utils.py`: basic utilities (`libs/utils.py`)
-- `tests/test_stringBundle.py`: i18n bundle loading (`libs/stringBundle.py`)
-- `tests/test_qt.py`: Qt app boot (currently a no-op test)
+- `tests/core/test_commands.py`: undo/redo command-system unit tests
+- `tests/formats/`: annotation format readers, writers, and round trips
+- `tests/core/test_settings.py`: isolated tagged-JSON settings persistence
+- `tests/core/test_utils.py`: core Qt and path utilities
+- `tests/core/test_stringBundle.py`: packaged UTF-8 locale fallback
+- `tests/test_qt.py`: application construction and initial state
 
 ### CI behavior
 
 - GitHub Actions workflow: `.github/workflows/ci.yaml`
-- Installs `pytest` and runs `pytest tests/ -v` across Python 3.8–3.13.
-- Runs focused `[video]` jobs across Python 3.8–3.13, combined `[sam,video]`
-  jobs on Python 3.8 and 3.13, and decoder/persistence smoke tests on Windows
-  and macOS.
-- Base jobs import the application without PyAV, NumPy, or OpenCV to preserve
-  the optional-dependency boundary.
+- Installs the project and runs `pytest tests/ -v` across Python 3.10–3.13.
+- Runs focused `[video]` and plugin jobs across Python 3.10–3.13, combined
+  `[sam,video]` and SAM jobs on Python 3.10 and 3.13, and decoder/persistence
+  smoke tests on Windows and macOS with Python 3.11.
+- Base jobs assert that importing the PyQt6 application does not load PyAV,
+  NumPy, OpenCV, ONNX Runtime, Torch, torchvision, or SAM 2.
+- Release jobs inspect direct and sdist-derived wheels, run packaged-asset and
+  startup checks outside the checkout, and smoke the same tracked PyInstaller
+  spec on Linux, Windows, and macOS before publication.
 
 ### Smart-video coverage
 
@@ -35,6 +38,11 @@ MP4/MOV/MKV/AVI decoding, corrupt media, source fingerprints, SQLite schema and
 revision behavior, track precedence/interpolation, frame-aware editing,
 tracking and review, cache/navigation behavior, export formats and atomic
 staging, CLI/project opening, and Qt GUI-thread boundaries.
+
+`tests/test_v4_compatibility.py` loads checked-in 4.0.0rc0 settings, annotation,
+plugin-setting/shortcut, source-fingerprint, and VFR SQLite fixtures. It pins
+settings tags, annotation coordinates, sidecar schema and PTS, review state,
+anchor state, and API-major-1 persistence across the PyQt6 cutover.
 
 Temporary smoke workloads cover CFR, VFR, short/long GOP, rotation, reduced
 4K/8K navigation analogues, and optical-flow stress. Timing remains excluded

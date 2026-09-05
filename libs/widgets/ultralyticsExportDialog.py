@@ -1,6 +1,6 @@
 """Configuration dialog for Ultralytics detection dataset export."""
 
-from PyQt5.QtWidgets import QLabel
+from PyQt6.QtWidgets import QLabel
 
 from libs.widgets.splitDialog import SplitDialog
 

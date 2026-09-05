@@ -1,11 +1,12 @@
+# tests/widgets/test_annotation_inspector.py
 """Roles, identity, filtering, and mutation requests for the unified model."""
 
 import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 
 from libs.core.shape import Shape, ShapeType
 from libs.core.video_model import VideoProjectModel
@@ -13,6 +14,21 @@ from libs.core.video_types import ObservationRecord
 from libs.widgets.annotationInspector import (
     AnnotationFilterProxyModel, AnnotationListModel, AnnotationRoles,
 )
+
+def test_custom_roles_are_stable_integers():
+    roles = (
+        AnnotationRoles.Identity, AnnotationRoles.Type, AnnotationRoles.Class,
+        AnnotationRoles.Color, AnnotationRoles.Visible,
+        AnnotationRoles.Difficult, AnnotationRoles.Selected,
+        AnnotationRoles.Provenance, AnnotationRoles.VideoSpan,
+        AnnotationRoles.CurrentRenderState, AnnotationRoles.PendingReview,
+        AnnotationRoles.Keyframe, AnnotationRoles.Object,
+    )
+    assert roles == tuple(
+        range(Qt.ItemDataRole.UserRole.value + 1,
+              Qt.ItemDataRole.UserRole.value + 14))
+    assert all(type(role) is int for role in roles)
+
 
 
 def test_image_rows_keep_shape_identity_and_expose_semantic_roles():
@@ -51,8 +67,8 @@ def test_visibility_and_class_edits_are_requests_not_geometry_mutations():
     model.classEditRequested.connect(
         lambda identity, value: edits.append((identity, value)))
 
-    assert model.setData(index, Qt.Unchecked, Qt.CheckStateRole)
-    assert model.setData(index, 'vehicle', Qt.EditRole)
+    assert model.setData(index, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+    assert model.setData(index, 'vehicle', Qt.ItemDataRole.EditRole)
 
     identity = model.identity_for_shape(shape)
     assert visibility == [(identity, False)]
@@ -89,7 +105,8 @@ def test_video_rows_include_absent_tracks_span_and_pending_state():
         review_state='pending', quality=.8))
 
     inspector = AnnotationListModel()
-    inspector.set_video_context(model, 20)
+    inspector.set_video_context(
+        model, 20, start_pts=0, time_base_num=1, time_base_den=10)
     car = inspector.index_for_identity('track-car')
     person = inspector.index_for_identity('track-person')
 
@@ -98,6 +115,10 @@ def test_video_rows_include_absent_tracks_span_and_pending_state():
     assert inspector.data(car, AnnotationRoles.PendingReview) is True
     assert inspector.data(car, AnnotationRoles.Provenance) == 'pending'
     assert inspector.data(car, AnnotationRoles.CurrentRenderState) == 'pending'
+    assert '10-30' not in inspector.data(car, Qt.ItemDataRole.DisplayRole)
+    assert '00:00:01.000–00:00:03.000' in \
+        inspector.data(car, Qt.ItemDataRole.DisplayRole)
+    assert 'exact PTS 10–30' in inspector.data(car, Qt.ItemDataRole.ToolTipRole)
     assert inspector.data(person, AnnotationRoles.VideoSpan) is None
     assert inspector.data(person, AnnotationRoles.CurrentRenderState) == 'absent'
     assert inspector.data(person, AnnotationRoles.Identity) == second.track_id

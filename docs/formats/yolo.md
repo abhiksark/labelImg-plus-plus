@@ -210,8 +210,8 @@ writer.save(class_list=class_list, target_file='test.txt')
 ### Reading
 
 ```python
-from libs.yolo_io import YoloReader
-from PyQt5.QtGui import QImage
+from libs.formats.yolo_io import YoloReader
+from PyQt6.QtGui import QImage
 
 image = QImage('test.jpg')
 reader = YoloReader('test.txt', image)

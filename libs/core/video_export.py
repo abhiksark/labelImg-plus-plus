@@ -220,6 +220,7 @@ def export_video_frames(request, handle):
                 video_stem, result.frame_ref.stream_index,
                 result.frame_ref.pts, extension)
             image_path = os.path.join(staging, name)
+            published_image_path = os.path.join(destination, name)
             if extension == 'png':
                 saved = result.image.save(image_path, 'PNG')
             else:
@@ -248,6 +249,7 @@ def export_video_frames(request, handle):
                     for track, observation in accepted)
                 write_save_request(SaveRequest(
                     image_path=image_path,
+                    serialized_image_path=published_image_path,
                     annotation_path=target_path(
                         os.path.splitext(image_path)[0],
                         request.annotation_format),

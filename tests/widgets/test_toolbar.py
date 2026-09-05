@@ -11,8 +11,9 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QAction
-from PyQt5.QtCore import QSize
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QApplication, QMainWindow
+from PyQt6.QtCore import QSize
 
 from libs.widgets.toolBar import ToolBar, DropdownToolButton, ToolButton
 

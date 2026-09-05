@@ -1,12 +1,14 @@
+# tests/integration/test_tool_rail.py
 """Main-window integration coverage for modern tool activation."""
 
 import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QEvent, QPointF, Qt
-from PyQt5.QtGui import QKeyEvent, QKeySequence
-from PyQt5.QtWidgets import QApplication, QToolBar
+from PyQt6.QtCore import QEvent, QPointF, Qt
+from PyQt6.QtGui import QKeyEvent, QKeySequence
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QToolBar
 
 from labelImgPlusPlus import MainWindow
 from libs.integrations import segmentation
@@ -142,17 +144,46 @@ def test_escape_from_box_returns_to_select_and_leaves_box_usable(
         assert not window.actions.create.isEnabled()
 
         window.canvas.keyPressEvent(
-            QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+            QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
         QApplication.processEvents()
 
         assert window.canvas.mode == window.canvas.EDIT
         assert window.actions.editMode.isChecked()
         assert window.actions.create.isEnabled()
         assert window.actions.create_polygon.isEnabled()
+        assert 'Select objects' in window.statusBar().currentMessage()
+        assert window.workspace_pages.canvas_chrome.\
+            annotation_session_hint.isHidden()
 
         # And the tool is genuinely re-armable.
         window.activate_box_tool()
         assert window.canvas.mode == window.canvas.CREATE
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_escape_from_inspector_returns_box_tool_to_select(
+        monkeypatch, tmp_path):
+    """Unconsumed workspace Escape presses must still cancel the tool."""
+    window = _window(monkeypatch, tmp_path)
+    try:
+        window.file_path = os.path.join(str(tmp_path), 'frame.png')
+        window.canvas.setEnabled(True)
+        window.toggle_actions(True)
+        window.show()
+        QApplication.processEvents()
+
+        window.activate_box_tool()
+        window.file_list_widget.setFocus(Qt.FocusReason.OtherFocusReason)
+        QApplication.processEvents()
+        assert window.file_list_widget.hasFocus()
+
+        QTest.keyClick(window.file_list_widget, Qt.Key.Key_Escape)
+        QApplication.processEvents()
+
+        assert window.canvas.mode == window.canvas.EDIT
+        assert window.actions.editMode.isChecked()
     finally:
         window.dirty = False
         window.close()

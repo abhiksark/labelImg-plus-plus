@@ -27,10 +27,7 @@ from libs.formats.pascal_voc_io import PascalVocReader, XML_EXT
 from libs.formats.yolo_io import YoloReader
 from libs.formats.annotation_paths import find_existing_annotation
 
-try:
-    from PyQt5.QtGui import QImageReader
-except ImportError:  # pragma: no cover - legacy Qt4 fallback
-    from PyQt4.QtGui import QImageReader
+from PyQt6.QtGui import QImageReader
 
 TXT_EXT = '.txt'
 COCO_JSON_NAME = 'annotations.json'

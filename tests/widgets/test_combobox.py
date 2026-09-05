@@ -11,7 +11,7 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from libs.widgets.combobox import ComboBox
 from libs.widgets.default_label_combobox import DefaultLabelComboBox

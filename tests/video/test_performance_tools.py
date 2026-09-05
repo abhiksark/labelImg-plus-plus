@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.video_decoder import VideoDecoderSession
 

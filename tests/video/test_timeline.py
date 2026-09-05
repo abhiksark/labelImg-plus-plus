@@ -1,16 +1,34 @@
+# tests/video/test_timeline.py
 from dataclasses import replace
 
 import pytest
-from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtWidgets import QAction, QApplication
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QAction, QImage
+from PyQt6.QtTest import QSignalSpy
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.video_decoder import VideoDecoderSession
 from libs.widgets.videoTimelineWidget import (
     TIMELINE_MAX, VideoTimelineWidget, format_timecode, parse_timecode,
 )
+from libs.utils.styles import Theme, get_theme_colors
 
 
 _APP = QApplication.instance() or QApplication([])
+
+
+def _median_icon_lightness(icon):
+    """Return the median lightness of visible icon pixels."""
+    image = icon.pixmap(QSize(24, 24)).toImage().convertToFormat(
+        QImage.Format.Format_ARGB32)
+    values = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() >= 128:
+                values.append((color.red() + color.green() + color.blue()) / 3)
+    assert values
+    return sorted(values)[len(values) // 2]
 
 
 @pytest.mark.parametrize('seconds, expected', [
@@ -37,6 +55,8 @@ def test_normalized_slider_handles_long_duration_without_overflow(
         widget.set_current_frame(ref)
         assert 0 <= widget.slider.value() <= TIMELINE_MAX
         assert abs(widget.slider.value() - TIMELINE_MAX // 2) <= 1
+        assert 'PTS' not in widget.position_label.text()
+        assert 'Exact PTS' in widget.position_label.toolTip()
         widget.close()
     finally:
         decoder.close()
@@ -71,6 +91,36 @@ def test_invalid_timecode_does_not_emit():
     widget.close()
 
 
+def test_timeline_controls_have_names_and_semantic_focus_style():
+    widget = VideoTimelineWidget()
+    try:
+        widget.apply_theme(Theme.DARK)
+        assert widget.play_button.accessibleName() == 'Play or pause video'
+        assert widget.previous_button.accessibleName() == 'Previous frame'
+        assert widget.next_button.accessibleName() == 'Next frame'
+        assert widget.time_edit.accessibleName() == 'Presentation time'
+        assert widget.slider.accessibleName() == 'Video timeline'
+        assert 'QSlider:focus' in widget.styleSheet()
+        assert get_theme_colors(Theme.DARK)['focus'] in widget.styleSheet()
+    finally:
+        widget.close()
+
+
+def test_dark_timeline_transport_icons_are_light_and_refresh_for_pause():
+    widget = VideoTimelineWidget()
+    try:
+        widget.apply_theme(Theme.DARK)
+        for button in (
+                widget.previous_button, widget.play_button,
+                widget.next_button):
+            assert _median_icon_lightness(button.icon()) >= 180
+
+        widget.set_playing(True)
+        assert _median_icon_lightness(widget.play_button.icon()) >= 180
+    finally:
+        widget.close()
+
+
 def test_propagation_actions_and_progress_replace_each_other():
     widget = VideoTimelineWidget()
     propagate_all = QAction('Propagate across video', widget)
@@ -94,5 +144,30 @@ def test_propagation_actions_and_progress_replace_each_other():
         0, 0, 0, 0, None, 0, running=False)
     assert widget.progress_label.isHidden() is True
     assert widget.cancel_propagation_button.isHidden() is True
-    assert widget.propagate_all_button.isHidden() is False
+    assert widget.propagate_all_button.isHidden() is True
+    widget.close()
+
+
+def test_workflow_stage_follows_canonical_markers():
+    widget = VideoTimelineWidget()
+    assert widget.workflow_stage() == 'anchor'
+
+    widget.set_markers(accepted=(10,))
+    assert widget.workflow_stage() == 'propagate'
+
+    widget.set_markers(spans=((10, 30),), accepted=(10,), pending=(20,))
+    assert widget.workflow_stage() == 'review'
+
+    widget.set_markers(spans=((10, 30),), accepted=(10,))
+    assert widget.workflow_stage() == 'export'
+
+    widget.set_propagation_progress(
+        1, 10, 1, 0, 2.0, 0, running=True)
+    assert widget.workflow_stage() == 'propagate'
+
+    widget._update_responsive_chrome(640)
+    assert widget.position_label.isHidden()
+    assert [label.text() for label in widget.workflow_stages
+            if not label.isHidden()] == ['● Propagate']
+    assert all(arrow.isHidden() for arrow in widget.workflow_arrows)
     widget.close()

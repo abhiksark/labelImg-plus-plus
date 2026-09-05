@@ -12,7 +12,7 @@ import itertools
 import os
 import threading
 
-from PyQt5.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
 
 class JobPriority:

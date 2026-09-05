@@ -11,17 +11,26 @@ dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
-from PyQt5.QtWidgets import QApplication, QMenu, QToolBar, QWidget
-from PyQt5.QtCore import QPointF
+from PyQt6.QtWidgets import QApplication, QMenu, QToolBar, QWidget
+from PyQt6.QtCore import QPointF
 
 from libs.utils.utils import (
     Struct, new_action, new_icon, add_actions, format_shortcut,
-    generate_color_by_text, natural_sort, distance, trimmed,
-    have_qstring, util_qt_strlistclass
+    generate_color_by_text, natural_sort, distance, trimmed
 )
+from libs.utils.assets import ICON_FILES
 
 # Create QApplication for tests
 app = QApplication.instance() or QApplication(sys.argv)
+
+
+class TestPackagedIcons(unittest.TestCase):
+
+    def test_every_semantic_icon_loads(self):
+        for name in ICON_FILES:
+            icon = new_icon(name)
+            self.assertFalse(icon.isNull(), name)
+            self.assertFalse(icon.pixmap(32, 32).isNull(), name)
 
 
 class TestGenerateColorByText(unittest.TestCase):
@@ -321,7 +330,7 @@ class TestAddActions(unittest.TestCase):
 
     def test_add_menu_to_menubar(self):
         """Test adding menu to menubar."""
-        from PyQt5.QtWidgets import QMenuBar
+        from PyQt6.QtWidgets import QMenuBar
         menubar = QMenuBar()
         menu = QMenu('Test Menu')
 
@@ -331,14 +340,6 @@ class TestAddActions(unittest.TestCase):
         self.assertGreaterEqual(len(menubar.actions()), 1)
 
 
-class TestLegacyQtShims(unittest.TestCase):
-    """The py2/Qt4 compatibility shims must not reference undefined names."""
-
-    def test_have_qstring_is_false_on_py3(self):
-        self.assertIs(have_qstring(), False)
-
-    def test_util_qt_strlistclass_is_list(self):
-        self.assertIs(util_qt_strlistclass(), list)
 
 
 if __name__ == '__main__':

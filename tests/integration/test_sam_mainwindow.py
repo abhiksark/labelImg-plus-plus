@@ -4,7 +4,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import json
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 import labelImgPlusPlus as app_mod
 
 app = QApplication.instance() or QApplication([])
@@ -116,7 +116,7 @@ def test_video_propagation_settings_are_normalized_and_persisted(
         def apply_theme(self, _theme):
             pass
 
-        def exec_(self):
+        def exec(self):
             return True
 
         def values(self):

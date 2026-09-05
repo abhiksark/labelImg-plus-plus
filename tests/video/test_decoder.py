@@ -1,13 +1,17 @@
+# tests/video/test_decoder.py
+from dataclasses import replace
 from types import SimpleNamespace
 import struct
 
 import pytest
 
 from libs.core.video_decoder import (
-    VIDEO_EXTENSIONS, VideoDecoderSession, _rotation_for_frame,
-    _rotation_for_stream, pyav_major,
+    VIDEO_EXTENSIONS, VideoDecodeError, VideoDecoderSession,
+    _rotation_for_frame, _rotation_for_stream, decode_video_thumbnails,
+    pyav_major,
 )
 from libs.core.video_project import default_project_path
+from libs.core.video_types import VideoThumbnailRequest
 
 
 def test_pyav_adapter_reports_supported_major():
@@ -48,6 +52,37 @@ def test_snapshot_keeps_original_source_contract(tmp_path, make_video):
         assert snapshot.codec
     finally:
         decoder.close()
+
+
+def test_thumbnail_worker_uses_independent_exact_pts_and_cancellation(
+        tmp_path, make_video):
+    path = make_video(tmp_path / 'thumbnails.mp4')
+    decoder = VideoDecoderSession(path)
+    try:
+        refs = [decoder.decode_first().frame_ref]
+        refs.extend(decoder.next_frame().frame_ref for _index in range(2))
+        request = VideoThumbnailRequest(
+            request_id=3, generation=4, model_revision=5,
+            source_path=path, fingerprint=decoder.fingerprint,
+            stream_index=decoder.stream_index,
+            time_base_num=decoder.time_base_num,
+            time_base_den=decoder.time_base_den,
+            pts=tuple(item.pts for item in refs), max_size=48)
+    finally:
+        decoder.close()
+
+    result = decode_video_thumbnails(request)
+
+    assert result.request == request
+    assert tuple(item[0].pts for item in result.frames) == request.pts
+    assert all(item[1].width() <= 48 and item[1].height() <= 48
+               for item in result.frames)
+    assert decode_video_thumbnails(
+        replace(request, request_id=6), cancelled=lambda: True).frames == ()
+    changed = replace(
+        request.fingerprint, mtime_ns=request.fingerprint.mtime_ns + 1)
+    with pytest.raises(VideoDecodeError, match='source fence changed'):
+        decode_video_thumbnails(replace(request, fingerprint=changed))
 
 
 @pytest.mark.parametrize('suffix,container_format', (

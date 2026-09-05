@@ -1,17 +1,10 @@
 # libs/widgets/canvas.py
 """Canvas widget for drawing and editing bounding box annotations."""
 
-try:
-    from PyQt5.QtGui import (QColor, QPixmap, QPainter, QCursor, QBrush,
-                             QPen, QPicture)
-    from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
-    from PyQt5.QtWidgets import QWidget, QMenu, QApplication
-except ImportError:
-    from PyQt4.QtGui import (
-        QColor, QPixmap, QPainter, QCursor, QBrush, QPicture,
-        QWidget, QMenu, QApplication
-    )
-    from PyQt4.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
+from PyQt6.QtGui import (QColor, QPixmap, QPainter, QCursor, QBrush,
+                         QPen, QPicture)
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QTimer
+from PyQt6.QtWidgets import QWidget, QMenu, QApplication
 
 import math
 from collections import defaultdict
@@ -22,11 +15,11 @@ from libs.utils.dpi import scale_px
 from libs.utils.utils import distance, douglas_peucker
 from libs.utils.styles import Theme
 
-CURSOR_DEFAULT = Qt.ArrowCursor
-CURSOR_POINT = Qt.PointingHandCursor
-CURSOR_DRAW = Qt.CrossCursor
-CURSOR_MOVE = Qt.ClosedHandCursor
-CURSOR_GRAB = Qt.OpenHandCursor
+CURSOR_DEFAULT = Qt.CursorShape.ArrowCursor
+CURSOR_POINT = Qt.CursorShape.PointingHandCursor
+CURSOR_DRAW = Qt.CursorShape.CrossCursor
+CURSOR_MOVE = Qt.CursorShape.ClosedHandCursor
+CURSOR_GRAB = Qt.CursorShape.OpenHandCursor
 
 
 class _ShapeSpatialGrid:
@@ -192,10 +185,10 @@ class Canvas(QWidget):
         self._painter = QPainter()
         self._cursor = CURSOR_DEFAULT
         # Menus:
-        self.menus = (QMenu(), QMenu())
+        self.menus = (QMenu(self), QMenu(self))
         # Set widget options.
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.WheelFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
         self.verified = False
         self._locked = False
         self.draw_square = False
@@ -233,7 +226,7 @@ class Canvas(QWidget):
         self._edit_draw_origin_image = None
         self._edit_drag_draw = False
         # One-shot: swallow the context menu of a right-click that cancelled
-        # a drag, so its exec_() cannot eat the pending left release.
+        # a drag, so its exec() cannot eat the pending left release.
         self._suppress_context_menu = False
 
         # Freehand polygon drawing state
@@ -528,22 +521,25 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, ev):
         """Update line with last point and current coordinates."""
+        event_pos = ev.position().toPoint()
         # Pan first, for the same reasons as in mousePressEvent. The delta is
         # deliberately cumulative from the press point: scroll_request divides
         # by 120 and truncates, so incremental deltas would round to zero.
         if self._panning:
-            if not (Qt.MiddleButton & ev.buttons()):
+            if not (Qt.MouseButton.MiddleButton & ev.buttons()):
                 self._end_pan()
             else:
-                delta = ev.pos() - self.pan_initial_pos
-                self.scrollRequest.emit(delta.x(), Qt.Horizontal)
-                self.scrollRequest.emit(delta.y(), Qt.Vertical)
+                delta = event_pos - self.pan_initial_pos
+                self.scrollRequest.emit(
+                    delta.x(), Qt.Orientation.Horizontal.value)
+                self.scrollRequest.emit(
+                    delta.y(), Qt.Orientation.Vertical.value)
                 self.update()
                 return
 
         if self._locked:
             return
-        pos = self.transform_pos(ev.pos())
+        pos = self.transform_pos(event_pos)
 
         # Update coordinates in status bar if image is opened
         window = self.parent().window() if self.parent() else self.window()
@@ -552,7 +548,7 @@ class Canvas(QWidget):
                 'X: %d; Y: %d' % (pos.x(), pos.y()))
 
         # Freehand polygon tracing
-        if self._freehand_active and Qt.LeftButton & ev.buttons():
+        if self._freehand_active and Qt.MouseButton.LeftButton & ev.buttons():
             if not self.out_of_pixmap(pos):
                 last = self._freehand_points[-1]
                 if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 5.0:
@@ -570,11 +566,11 @@ class Canvas(QWidget):
         # screen, so at 0.1x zoom an image-space threshold would need 100
         # widget pixels and at 10x it would fire sub-pixel.
         if self._edit_draw_origin is not None:
-            if not (Qt.LeftButton & ev.buttons()):
+            if not (Qt.MouseButton.LeftButton & ev.buttons()):
                 self._edit_draw_origin = None
                 self._edit_draw_origin_image = None
             elif not self._edit_drag_draw:
-                moved = (ev.pos() - self._edit_draw_origin).manhattanLength()
+                moved = (event_pos - self._edit_draw_origin).manhattanLength()
                 if moved < QApplication.startDragDistance():
                     return
                 # Falls through to the drawing branch below, which sets
@@ -646,7 +642,7 @@ class Canvas(QWidget):
             return
 
         # Polygon copy moving.
-        if Qt.RightButton & ev.buttons():
+        if Qt.MouseButton.RightButton & ev.buttons():
             if self.selected_shape_copy and self.prev_point:
                 self.override_cursor(CURSOR_MOVE)
                 self.bounded_move_shape(self.selected_shape_copy, pos)
@@ -657,7 +653,7 @@ class Canvas(QWidget):
             return
 
         # Polygon/Vertex moving.
-        if Qt.LeftButton & ev.buttons():
+        if Qt.MouseButton.LeftButton & ev.buttons():
             if self.selected_vertex():
                 self.bounded_move_vertex(pos)
                 self.shapeMoved.emit()
@@ -764,24 +760,25 @@ class Canvas(QWidget):
         return -1
 
     def mousePressEvent(self, ev):
+        event_pos = ev.position().toPoint()
         # Middle-button pan is handled before transform_pos (which needs a
         # pixmap), before the _locked guard (panning mutates nothing, so it
         # stays available during propagation) and before the keypoint block
         # (whose return would otherwise swallow middle clicks).
-        if ev.button() == Qt.MiddleButton:
+        if ev.button() == Qt.MouseButton.MiddleButton:
             if not self._edit_drag_draw:
                 self._panning = True
-                self.pan_initial_pos = ev.pos()
+                self.pan_initial_pos = event_pos
                 self._pre_pan_cursor = self._cursor
                 self.override_cursor(CURSOR_MOVE)
             return
 
-        pos = self.transform_pos(ev.pos())
+        pos = self.transform_pos(event_pos)
 
         # Snapshot polygon points before any potential vertex drag.
         # Emitted on release if any point actually changed.
         self._polygon_drag_old_points = None
-        if (ev.button() == Qt.LeftButton
+        if (ev.button() == Qt.MouseButton.LeftButton
                 and self.selected_shape
                 and self.selected_shape.shape_type == ShapeType.POLYGON):
             self._polygon_drag_old_points = list(self.selected_shape.points)
@@ -790,7 +787,7 @@ class Canvas(QWidget):
         # move or corner resize. Emitted as shapeMoveFinished on release if
         # the drag actually changed the geometry.
         self._move_shape_old_points = None
-        if (ev.button() == Qt.LeftButton
+        if (ev.button() == Qt.MouseButton.LeftButton
                 and self.selected_shape
                 and self.selected_shape.shape_type != ShapeType.POLYGON):
             self._move_shape_old_points = [
@@ -799,7 +796,7 @@ class Canvas(QWidget):
         # Keypoint placement
         if self.mode == self.KEYPOINT_MODE and self._keypoint_shape:
             kp_count = self._keypoint_count()
-            if ev.button() == Qt.LeftButton and self._keypoint_index < kp_count:
+            if ev.button() == Qt.MouseButton.LeftButton and self._keypoint_index < kp_count:
                 if not self.out_of_pixmap(pos):
                     old_kps = (list(self._keypoint_shape.keypoints)
                                if self._keypoint_shape.keypoints else None)
@@ -816,7 +813,7 @@ class Canvas(QWidget):
                     self.shapeMoved.emit()
                     self.update()
                 return
-            elif ev.button() == Qt.RightButton and self._keypoint_index < kp_count:
+            elif ev.button() == Qt.MouseButton.RightButton and self._keypoint_index < kp_count:
                 if not self.out_of_pixmap(pos):
                     old_kps = (list(self._keypoint_shape.keypoints)
                                if self._keypoint_shape.keypoints else None)
@@ -835,10 +832,10 @@ class Canvas(QWidget):
                 return
             return
 
-        if ev.button() == Qt.LeftButton and self._locked:
+        if ev.button() == Qt.MouseButton.LeftButton and self._locked:
             return
 
-        if ev.button() == Qt.LeftButton:
+        if ev.button() == Qt.MouseButton.LeftButton:
             if self.provisional_shape is not None:
                 # Geometry is waiting to be named, in any mode. Swallowing
                 # this click in silence is a dead end: the class picker does
@@ -851,7 +848,7 @@ class Canvas(QWidget):
                     self.samClicked.emit(pos)
                 return
             if self.drawing():
-                if self.mode == self.CREATE_POLYGON and ev.modifiers() & Qt.ShiftModifier:
+                if self.mode == self.CREATE_POLYGON and ev.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     # Start freehand drawing
                     if not self.out_of_pixmap(pos):
                         self._freehand_active = True
@@ -888,12 +885,12 @@ class Canvas(QWidget):
                 # threshold stays a plain deselect -- select_shape_point has
                 # already done that unconditionally.
                 if selection is None and self._can_edit_draw_at(pos):
-                    self._edit_draw_origin = ev.pos()
+                    self._edit_draw_origin = event_pos
                     self._edit_draw_origin_image = pos
 
-        elif ev.button() == Qt.RightButton and self.editing():
+        elif ev.button() == Qt.MouseButton.RightButton and self.editing():
             if self._edit_drag_draw or self._edit_draw_origin is not None:
-                # The release handler's menu.exec_() is a nested event loop
+                # The release handler's menu.exec() is a nested event loop
                 # that would eat the pending left release and strand the
                 # gesture, so cancel and swallow the menu.
                 self.cancel_edit_drag_draw()
@@ -905,11 +902,12 @@ class Canvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, ev):
-        if ev.button() == Qt.MiddleButton:
+        event_pos = ev.position().toPoint()
+        if ev.button() == Qt.MouseButton.MiddleButton:
             self._end_pan()
             return
 
-        if self._freehand_active and ev.button() == Qt.LeftButton:
+        if self._freehand_active and ev.button() == Qt.MouseButton.LeftButton:
             self._freehand_active = False
             if len(self._freehand_points) >= 3:
                 simplified = douglas_peucker(self._freehand_points, 2.0)
@@ -927,8 +925,8 @@ class Canvas(QWidget):
         # Finish an EDIT-mode drag-draw explicitly, before the elif chain
         # below: its `provisional_shape is not None: return` guard would
         # otherwise leave self.current dangling.
-        if ev.button() == Qt.LeftButton and self._edit_drag_draw:
-            pos = self.transform_pos(ev.pos())
+        if ev.button() == Qt.MouseButton.LeftButton and self._edit_drag_draw:
+            pos = self.transform_pos(event_pos)
             self._edit_drag_draw = False
             self._edit_draw_origin = None
             self._edit_draw_origin_image = None
@@ -951,7 +949,7 @@ class Canvas(QWidget):
         # If a polygon was selected on press and any vertex moved during
         # the drag, emit polygonVerticesEdited so MainWindow can push an
         # undo command. Compares pre-press snapshot to current points.
-        if (ev.button() == Qt.LeftButton
+        if (ev.button() == Qt.MouseButton.LeftButton
                 and self._polygon_drag_old_points is not None
                 and self.selected_shape
                 and self.selected_shape.shape_type == ShapeType.POLYGON):
@@ -967,7 +965,7 @@ class Canvas(QWidget):
 
         # Same for a non-polygon (rectangle) shape moved or resized during the
         # drag: emit shapeMoveFinished so MainWindow can push a MoveShapeCommand.
-        if (ev.button() == Qt.LeftButton
+        if (ev.button() == Qt.MouseButton.LeftButton
                 and self._move_shape_old_points is not None
                 and self.selected_shape
                 and self.selected_shape.shape_type != ShapeType.POLYGON):
@@ -981,27 +979,27 @@ class Canvas(QWidget):
             if moved:
                 self.shapeMoveFinished.emit(self.selected_shape, old_pts)
 
-        if ev.button() == Qt.LeftButton:
+        if ev.button() == Qt.MouseButton.LeftButton:
             self._polygon_drag_old_points = None
             self._move_shape_old_points = None
             # Sub-threshold press: disarm without ever having drawn.
             self._edit_draw_origin = None
             self._edit_draw_origin_image = None
 
-        if ev.button() == Qt.RightButton:
+        if ev.button() == Qt.MouseButton.RightButton:
             if self._suppress_context_menu:
                 self._suppress_context_menu = False
                 return
             # Check if right-clicking a polygon vertex
             if self.selected_shape and self.selected_shape.shape_type == ShapeType.POLYGON:
-                pos = self.transform_pos(ev.pos())
+                pos = self.transform_pos(event_pos)
                 idx = self.selected_shape.nearest_vertex(pos, self.epsilon)
                 if idx is not None:
-                    vertex_menu = QMenu()
+                    vertex_menu = QMenu(self)
                     delete_action = vertex_menu.addAction("Delete Vertex")
                     if len(self.selected_shape.points) <= 3:
                         delete_action.setEnabled(False)
-                    action = vertex_menu.exec_(self.mapToGlobal(ev.pos()))
+                    action = vertex_menu.exec(self.mapToGlobal(event_pos))
                     if action == delete_action:
                         old_points = list(self.selected_shape.points)
                         self.selected_shape.remove_point(idx)
@@ -1014,18 +1012,18 @@ class Canvas(QWidget):
 
             menu = self.menus[bool(self.selected_shape_copy)]
             self.restore_cursor()
-            if not menu.exec_(self.mapToGlobal(ev.pos()))\
+            if not menu.exec(self.mapToGlobal(event_pos))\
                and self.selected_shape_copy:
                 # Cancel the move by deleting the shadow copy.
                 self.selected_shape_copy = None
                 self.update()
-        elif ev.button() == Qt.LeftButton and self.selected_shape:
+        elif ev.button() == Qt.MouseButton.LeftButton and self.selected_shape:
             if self.selected_vertex():
                 self.override_cursor(CURSOR_POINT)
             else:
                 self.override_cursor(CURSOR_GRAB)
-        elif ev.button() == Qt.LeftButton and self.drawing():
-            pos = self.transform_pos(ev.pos())
+        elif ev.button() == Qt.MouseButton.LeftButton and self.drawing():
+            pos = self.transform_pos(event_pos)
             if self.provisional_shape is not None:
                 return
             self.handle_drawing(pos)
@@ -1392,7 +1390,7 @@ class Canvas(QWidget):
             if kp_a[2] == 0 or kp_b[2] == 0:
                 continue
             color = hex_to_qcolor(get_keypoint_color(start_idx, template_name))
-            pen_style = Qt.DashLine if (kp_a[2] == 1 or kp_b[2] == 1) else Qt.SolidLine
+            pen_style = Qt.PenStyle.DashLine if (kp_a[2] == 1 or kp_b[2] == 1) else Qt.PenStyle.SolidLine
             pen = QPen(color, max(1, int(2 / self.scale)), pen_style)
             painter.setPen(pen)
             painter.drawLine(
@@ -1410,9 +1408,9 @@ class Canvas(QWidget):
                 painter.setBrush(color)
                 painter.drawEllipse(QPointF(x, y), dot_size / 2, dot_size / 2)
             elif v == 1:
-                pen = QPen(color, max(1, int(2 / self.scale)), Qt.DashLine)
+                pen = QPen(color, max(1, int(2 / self.scale)), Qt.PenStyle.DashLine)
                 painter.setPen(pen)
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(QPointF(x, y), dot_size / 2, dot_size / 2)
 
         # Draw label on hovered keypoint
@@ -1437,9 +1435,8 @@ class Canvas(QWidget):
 
         p = self._painter
         p.begin(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.HighQualityAntialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         p.scale(self.scale, self.scale)
         p.translate(self.offset_to_center())
@@ -1487,7 +1484,7 @@ class Canvas(QWidget):
             if self.mode == self.CREATE_POLYGON:
                 # Draw dotted line from cursor back to first vertex (close preview)
                 if len(self.current) >= 2:
-                    pen = QPen(self.drawing_line_color, 1, Qt.DashLine)
+                    pen = QPen(self.drawing_line_color, 1, Qt.PenStyle.DashLine)
                     p.setPen(pen)
                     p.drawLine(self.line[1], self.current[0])
             else:
@@ -1497,7 +1494,7 @@ class Canvas(QWidget):
                 rect_width = right_bottom.x() - left_top.x()
                 rect_height = right_bottom.y() - left_top.y()
                 p.setPen(self.drawing_rect_color)
-                brush = QBrush(Qt.BDiagPattern)
+                brush = QBrush(Qt.BrushStyle.BDiagPattern)
                 p.setBrush(brush)
                 p.drawRect(int(left_top.x()), int(left_top.y()),
                            int(rect_width), int(rect_height))
@@ -1536,7 +1533,7 @@ class Canvas(QWidget):
             from libs.utils.styles import get_theme_colors, hex_to_qcolor
             colors = get_theme_colors(getattr(self, '_theme', None))
             guide_color = hex_to_qcolor(colors.get('alignment_guide', '#4da6ff'))
-            pen = QPen(guide_color, 1, Qt.DashLine)
+            pen = QPen(guide_color, 1, Qt.PenStyle.DashLine)
             p.setPen(pen)
             w, h = self.pixmap.width(), self.pixmap.height()
             for orientation, position in self._alignment_guides:
@@ -1567,7 +1564,7 @@ class Canvas(QWidget):
 
     def transform_pos(self, point):
         """Convert from widget-logical coordinates to painter-logical coordinates."""
-        return point / self.scale - self.offset_to_center()
+        return QPointF(point) / self.scale - self.offset_to_center()
 
     def offset_to_center(self):
         s = self.scale
@@ -1634,27 +1631,21 @@ class Canvas(QWidget):
         return super(Canvas, self).minimumSizeHint()
 
     def wheelEvent(self, ev):
-        qt_version = 4 if hasattr(ev, "delta") else 5
-        if qt_version == 4:
-            if ev.orientation() == Qt.Vertical:
-                v_delta = ev.delta()
-                h_delta = 0
-            else:
-                h_delta = ev.delta()
-                v_delta = 0
-        else:
-            delta = ev.angleDelta()
-            h_delta = delta.x()
-            v_delta = delta.y()
+        delta = ev.angleDelta()
+        h_delta = delta.x()
+        v_delta = delta.y()
 
         mods = ev.modifiers()
-        if int(Qt.ControlModifier) | int(Qt.ShiftModifier) == int(mods) and v_delta:
+        if (mods == (Qt.KeyboardModifier.ControlModifier |
+                     Qt.KeyboardModifier.ShiftModifier) and v_delta):
             self.lightRequest.emit(v_delta)
-        elif Qt.ControlModifier == int(mods) and v_delta:
+        elif mods == Qt.KeyboardModifier.ControlModifier and v_delta:
             self.zoomRequest.emit(v_delta)
         else:
-            v_delta and self.scrollRequest.emit(v_delta, Qt.Vertical)
-            h_delta and self.scrollRequest.emit(h_delta, Qt.Horizontal)
+            v_delta and self.scrollRequest.emit(
+                v_delta, Qt.Orientation.Vertical.value)
+            h_delta and self.scrollRequest.emit(
+                h_delta, Qt.Orientation.Horizontal.value)
         ev.accept()
 
     def keyPressEvent(self, ev):
@@ -1664,7 +1655,7 @@ class Canvas(QWidget):
         # Escape is two-stage: it cancels whatever is in flight, and only a
         # press with nothing left to cancel returns the canvas to EDIT. That
         # keeps the documented keypoint "skip to next unplaced" behaviour.
-        if key == Qt.Key_Escape and self.mode == self.KEYPOINT_MODE:
+        if key == Qt.Key.Key_Escape and self.mode == self.KEYPOINT_MODE:
             kp_count = self._keypoint_count()
             if self._keypoint_index < kp_count:
                 if self._keypoint_shape and self._keypoint_shape.keypoints is None:
@@ -1678,7 +1669,7 @@ class Canvas(QWidget):
                 self.exit_keypoint_mode()
             return
 
-        if (key == Qt.Key_Z and mods == Qt.ControlModifier
+        if (key == Qt.Key.Key_Z and mods == Qt.KeyboardModifier.ControlModifier
                 and self.mode == self.KEYPOINT_MODE
                 and self._keypoint_shape):
             kps = self._keypoint_shape.keypoints
@@ -1696,24 +1687,24 @@ class Canvas(QWidget):
             self.update()
             return
 
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             self.cancel_to_edit()
-        elif key == Qt.Key_Return and self.can_close_shape():
+        elif key == Qt.Key.Key_Return and self.can_close_shape():
             self.finalise()
-        elif (key == Qt.Key_Z and mods == Qt.ControlModifier
+        elif (key == Qt.Key.Key_Z and mods == Qt.KeyboardModifier.ControlModifier
               and self.mode == self.CREATE_POLYGON
               and self.current and len(self.current) > 1):
             # Undo last vertex during polygon drawing
             self.current.pop_point()
             self.line.points = [self.current[-1], self.line[1]]
             self.update()
-        elif key == Qt.Key_Left and self.selected_shape:
+        elif key == Qt.Key.Key_Left and self.selected_shape:
             self.move_one_pixel('Left')
-        elif key == Qt.Key_Right and self.selected_shape:
+        elif key == Qt.Key.Key_Right and self.selected_shape:
             self.move_one_pixel('Right')
-        elif key == Qt.Key_Up and self.selected_shape:
+        elif key == Qt.Key.Key_Up and self.selected_shape:
             self.move_one_pixel('Up')
-        elif key == Qt.Key_Down and self.selected_shape:
+        elif key == Qt.Key.Key_Down and self.selected_shape:
             self.move_one_pixel('Down')
 
     def move_one_pixel(self, direction):
@@ -1799,7 +1790,7 @@ class Canvas(QWidget):
         if self._overlay_cache_key != key:
             composited = QPixmap(self.pixmap)
             painter = QPainter(composited)
-            painter.setCompositionMode(QPainter.CompositionMode_Overlay)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Overlay)
             painter.fillRect(composited.rect(), self.overlay_color)
             painter.end()
             self._overlay_cache = composited

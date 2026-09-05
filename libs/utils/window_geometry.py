@@ -6,10 +6,7 @@ querying ``QApplication`` themselves, so they stay pure and can be unit tested
 without a real screen.
 """
 
-try:
-    from PyQt5.QtCore import QPoint, QRect, QSize
-except ImportError:
-    from PyQt4.QtCore import QPoint, QRect, QSize
+from PyQt6.QtCore import QPoint, QRect, QSize
 
 from libs.utils.dpi import scale_px
 

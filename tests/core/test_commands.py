@@ -9,8 +9,8 @@ import unittest
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QPointF
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF
 
 from libs.core.commands import (
     UndoStack,
@@ -265,6 +265,24 @@ class TestCreateShapeCommand(unittest.TestCase):
 
         self.assertEqual(len(mw.canvas.shapes), 1)
         self.assertIn(shape, mw.canvas.shapes)
+
+    def test_execute_restores_created_geometry(self):
+        """Redo must restore the geometry captured when the command was made."""
+        mw = MockMainWindow()
+        shape = create_test_shape()
+        expected = [(point.x(), point.y()) for point in shape.points]
+        cmd = CreateShapeCommand(mw, shape)
+
+        shape.points = [
+            QPointF(10, 20),
+            QPointF(30, 20),
+            QPointF(30, 40),
+            QPointF(10, 40),
+        ]
+        cmd.execute()
+
+        self.assertEqual(
+            [(point.x(), point.y()) for point in shape.points], expected)
 
 
 class TestDeleteShapeCommand(unittest.TestCase):
