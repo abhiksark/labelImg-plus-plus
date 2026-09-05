@@ -1,11 +1,11 @@
 # libs/widgets/shortcutsDialog.py
 """Keyboard shortcuts configuration dialog."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QHeaderView, QKeySequenceEdit, QMessageBox, QFileDialog
 )
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors, hex_to_qcolor
@@ -27,10 +27,10 @@ class ShortcutsDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(['Action', 'Shortcut', 'Default'])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._populate_table()
         layout.addWidget(self.table)
 
@@ -64,8 +64,8 @@ class ShortcutsDialog(QDialog):
         for row, name in enumerate(actions):
             # Action name (human-readable)
             name_item = QTableWidgetItem(name.replace('_', ' ').title())
-            name_item.setData(Qt.UserRole, name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            name_item.setData(Qt.ItemDataRole.UserRole, name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, name_item)
 
             # Current shortcut (editable via QKeySequenceEdit)
@@ -76,7 +76,7 @@ class ShortcutsDialog(QDialog):
 
             # Default (read-only, gray)
             default_item = QTableWidgetItem(self.config.get_default(name))
-            default_item.setFlags(default_item.flags() & ~Qt.ItemIsEditable)
+            default_item.setFlags(default_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             colors = get_theme_colors(self._theme)
             default_item.setForeground(hex_to_qcolor(colors['text_secondary']))
             self.table.setItem(row, 2, default_item)
@@ -110,7 +110,7 @@ class ShortcutsDialog(QDialog):
         row = self.table.currentRow()
         if row < 0:
             return
-        name = self.table.item(row, 0).data(Qt.UserRole)
+        name = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         self.config.reset(name)
         self._pending[name] = self.config.get(name)
         self._sync_action_shortcuts((name,))

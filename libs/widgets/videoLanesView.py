@@ -39,9 +39,9 @@ Coverage policy, stated once so the three "not this" cases agree:
 
 from collections import namedtuple
 
-from PyQt5.QtCore import QRect, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFontMetrics, QPainter
-from PyQt5.QtWidgets import QSizePolicy, QWidget
+from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFontMetrics, QPainter
+from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from libs.utils.dpi import scale_px
 from libs.utils.styles import Theme, get_theme_colors
@@ -146,8 +146,8 @@ class VideoLanesView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('videoLanesView')
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._tracks = ()
         self._segments = {}
         self._duration_pts = 0
@@ -264,7 +264,7 @@ class VideoLanesView(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         lane_height = scale_px(self.LANE_HEIGHT)
         left, width = self._track_geometry()
         for index, track in enumerate(self._tracks):
@@ -309,21 +309,22 @@ class VideoLanesView(QWidget):
             self._selected_text_color if selected else self._text_color)
         metrics = QFontMetrics(painter.font())
         painter.drawText(
-            text_rect, Qt.AlignVCenter | Qt.AlignLeft,
-            metrics.elidedText(track.label, Qt.ElideRight, text_rect.width()))
+            text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            metrics.elidedText(track.label, Qt.TextElideMode.ElideRight, text_rect.width()))
 
     # -- interaction ----------------------------------------------------
 
     def mousePressEvent(self, event):
+        event_pos = event.position().toPoint()
         lane_height = scale_px(self.LANE_HEIGHT)
-        index = int(event.pos().y() // lane_height)
-        if event.button() != Qt.LeftButton or not 0 <= index < len(
+        index = int(event_pos.y() // lane_height)
+        if event.button() != Qt.MouseButton.LeftButton or not 0 <= index < len(
                 self._tracks):
             super().mousePressEvent(event)
             return
         self.select_track(self._tracks[index].track_id)
         left, width = self._track_geometry()
-        if event.pos().x() < left or self._duration_pts <= 0:
+        if event_pos.x() < left or self._duration_pts <= 0:
             return
-        ratio = min(1.0, max(0.0, (event.pos().x() - left) / width))
+        ratio = min(1.0, max(0.0, (event_pos.x() - left) / width))
         self.seekRequested.emit(int(round(ratio * self._duration_pts)))

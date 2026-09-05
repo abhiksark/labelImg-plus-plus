@@ -160,7 +160,7 @@ def hex_to_qcolor(hex_color, alpha=255):
     Returns:
         QColor object
     """
-    from PyQt5.QtGui import QColor
+    from PyQt6.QtGui import QColor
     hex_clean = hex_color.lstrip('#')
     r, g, b = tuple(int(hex_clean[i:i+2], 16) for i in (0, 2, 4))
     return QColor(r, g, b, alpha)

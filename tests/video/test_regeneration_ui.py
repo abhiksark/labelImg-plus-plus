@@ -2,7 +2,7 @@ import threading
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import QPointF
+from PyQt6.QtCore import QPointF
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_types import ObservationRecord, PropagationResult

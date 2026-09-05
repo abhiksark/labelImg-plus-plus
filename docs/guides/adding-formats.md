@@ -315,20 +315,16 @@ def save_label_file(self, filename, shapes, image_path, ...):
 
 ### Add Format Icon
 
-1. Create icon: `resources/icons/format_newformat.png`
-2. Add to `resources.qrc`:
-
-```xml
-<qresource>
-    <file>icons/format_newformat.png</file>
-</qresource>
-```
-
-3. Rebuild resources:
+1. Add `libs/assets/icons/format_newformat.svg`.
+2. Add a semantic `format_newformat` entry to `ICON_FILES` in
+   `libs/utils/assets.py`.
+3. Verify the packaged catalog:
 
 ```bash
-pyrcc5 -o libs/resources.py resources.qrc
+python3 labelImgPlusPlus.py --verify-assets
 ```
+
+No RCC manifest or generated resource module is used.
 
 ### Update Format Toggle
 
@@ -495,8 +491,8 @@ def test_round_trip():
     writer.save(target_file=output_path)
 
     # Read back
-    from PyQt5.QtGui import QImage
-    image = QImage(800, 600, QImage.Format_RGB32)  # Dummy image
+    from PyQt6.QtGui import QImage
+    image = QImage(800, 600, QImage.Format.Format_RGB32)  # Dummy image
     reader = NewFormatReader(output_path, image)
     shapes = reader.get_shapes()
 
@@ -522,8 +518,8 @@ def test_round_trip():
 - [ ] Added `LabelFileFormat.NEW_FORMAT` enum value
 - [ ] Added `save_new_format()` method in LabelFile
 - [ ] Added dispatch case in `save_label_file()`
-- [ ] Created format icon in `resources/icons/`
-- [ ] Updated `resources.qrc` and rebuilt resources
+- [ ] Added the format icon under `libs/assets/icons/`
+- [ ] Updated `ICON_FILES` and passed `--verify-assets`
 - [ ] Updated `get_format_meta()` in labelImgPlusPlus.py
 - [ ] Updated `change_format()` cycle in labelImgPlusPlus.py
 - [ ] Added format detection in load logic

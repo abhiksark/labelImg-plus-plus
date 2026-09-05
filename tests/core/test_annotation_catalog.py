@@ -1,6 +1,6 @@
 import time
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.annotation_catalog import AnnotationCatalog, HAS_LABELS
 from libs.core.dataset import DatasetSnapshot

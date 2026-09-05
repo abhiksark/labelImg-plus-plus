@@ -8,18 +8,11 @@ user-facing toggle, so both live in this stack side by side.
 
 import os
 
-try:
-    from PyQt5.QtCore import Qt, pyqtSignal
-    from PyQt5.QtWidgets import (
-        QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
-        QStackedWidget, QToolButton, QVBoxLayout, QWidget,
-    )
-except ImportError:
-    from PyQt4.QtCore import Qt, pyqtSignal
-    from PyQt4.QtGui import (
-        QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
-        QStackedWidget, QToolButton, QVBoxLayout, QWidget,
-    )
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+    QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+)
 
 from libs.utils.dpi import scale_px
 from libs.widgets.videoOverview import VideoOverview
@@ -28,7 +21,7 @@ from libs.widgets.videoOverview import VideoOverview
 def _action_button(action, parent):
     button = QToolButton(parent)
     button.setDefaultAction(action)
-    button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
     button.setAutoRaise(True)
     button.setFixedSize(scale_px(32), scale_px(32))
     return button
@@ -58,7 +51,7 @@ class SamOutputModeToggle(QWidget):
             button.setText(text)
             button.setCheckable(True)
             button.setAutoRaise(True)
-            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             button.setFixedHeight(scale_px(28))
             button.setMinimumWidth(scale_px(48 if value == 'box' else 68))
             button.setProperty('outputMode', value)
@@ -90,7 +83,7 @@ class EmptyWorkspacePage(QWidget):
         self.setObjectName('emptyWorkspacePage')
         title = QLabel('Start annotating')
         title.setObjectName('emptyWorkspaceTitle')
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         actions = QHBoxLayout()
         for label, action in (
                 ('Open Image', open_image), ('Open Folder', open_folder),
@@ -168,7 +161,7 @@ class CanvasChrome(QWidget):
         self.annotation_session_hint.setMinimumWidth(scale_px(96))
         self.annotation_session_hint.setMaximumWidth(scale_px(520))
         self.annotation_session_hint.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred)
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.annotation_session_hint.hide()
         layout.addWidget(self.annotation_session_hint)
         layout.addStretch(1)
@@ -177,7 +170,7 @@ class CanvasChrome(QWidget):
         visibility.setIcon(show_all.icon())
         visibility.setToolTip('Annotation visibility')
         visibility.setFixedSize(scale_px(32), scale_px(32))
-        visibility.setPopupMode(QToolButton.InstantPopup)
+        visibility.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(visibility)
         menu.addAction(show_all)
         menu.addAction(hide_all)
@@ -205,7 +198,7 @@ class SaveErrorNotice(QWidget):
     def __init__(self, parent=None):
         super(SaveErrorNotice, self).__init__(parent)
         self.setObjectName('saveErrorNotice')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self.title = QLabel('Annotations remain intact', self)
         self.title.setObjectName('saveErrorTitle')
@@ -272,12 +265,12 @@ class WorkspacePages(QWidget):
         super(WorkspacePages, self).__init__(parent)
         self.setObjectName('workspacePagesColumn')
         self.setMinimumWidth(0)
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.stack = QStackedWidget(self)
         self.timeline = timeline
         self.stack.setObjectName('workspacePageStack')
         self.stack.setMinimumWidth(0)
-        self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.empty_page = EmptyWorkspacePage(
             actions.open, actions.openDir, actions.openVideo, self.stack)
         self.stack.addWidget(self.empty_page)
@@ -311,7 +304,7 @@ class WorkspacePages(QWidget):
         self._status_message = self.status_widgets[0].text()
         self.status_widgets[0].setMinimumWidth(0)
         self.status_widgets[0].setSizePolicy(
-            QSizePolicy.Ignored, QSizePolicy.Preferred)
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         status_layout = QHBoxLayout(self.status_strip)
         status_layout.setContentsMargins(
             scale_px(6), 0, scale_px(6), 0)
@@ -355,7 +348,7 @@ class WorkspacePages(QWidget):
             label.setText(self._status_message)
             return
         label.setText(label.fontMetrics().elidedText(
-            self._status_message, Qt.ElideMiddle, available))
+            self._status_message, Qt.TextElideMode.ElideMiddle, available))
 
     def resizeEvent(self, event):
         super(WorkspacePages, self).resizeEvent(event)

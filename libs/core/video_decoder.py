@@ -8,8 +8,8 @@ import math
 import os
 import struct
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImage
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
 
 from libs.core.video_project import fingerprint_video
 from libs.core.video_types import (
@@ -199,12 +199,11 @@ class VideoDecoderSession:
         height, width = array.shape[:2]
         image = QImage(
             array.data, width, height, int(array.strides[0]),
-            QImage.Format_RGB888).copy()
+            QImage.Format.Format_RGB888).copy()
         frame_ref = VideoFrameRef(
             self.fingerprint, self.stream_index, int(frame.pts),
             self.time_base_num, self.time_base_den)
-        byte_size = int(image.sizeInBytes()) if hasattr(
-            image, 'sizeInBytes') else int(image.byteCount())
+        byte_size = int(image.sizeInBytes())
         result = VideoFrameResult(
             frame_ref, image, width, height, self.width, self.height,
             rotation, byte_size,
@@ -338,7 +337,7 @@ def decode_video_thumbnails(request, cancelled=None):
                 continue
             image = frame.image.scaled(
                 request.max_size, request.max_size,
-                Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             frames.append((frame.frame_ref, image))
         return VideoThumbnailResult(request, tuple(frames))
     finally:

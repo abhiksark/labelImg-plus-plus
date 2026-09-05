@@ -1,7 +1,7 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 from libs.widgets.sam_settings_dialog import SamSettingsDialog
 from libs.utils.styles import Theme
 

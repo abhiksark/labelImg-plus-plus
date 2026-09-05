@@ -37,9 +37,9 @@ visible PTS through its task coordinator and returns detached images here.
 
 from collections import OrderedDict
 
-from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtWidgets import (
     QButtonGroup, QHBoxLayout, QListView, QListWidget, QListWidgetItem,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
@@ -93,7 +93,7 @@ class VideoFramesView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('videoFramesView')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._annotated = {}
         self._pending = {}
         self._distinct = ()
@@ -127,7 +127,7 @@ class VideoFramesView(QWidget):
             chip.setText(FILTER_LABELS[name])
             chip.setCheckable(True)
             chip.setChecked(name == self._filter)
-            chip.setCursor(Qt.PointingHandCursor)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
             # clicked, not toggled: set_filter checks the chip itself, and
             # toggled would send that back round as a second set_filter.
             chip.clicked.connect(
@@ -140,15 +140,15 @@ class VideoFramesView(QWidget):
 
         self.list_widget = QListWidget(self)
         self.list_widget.setObjectName('videoFramesGrid')
-        self.list_widget.setViewMode(QListView.IconMode)
-        self.list_widget.setResizeMode(QListView.Adjust)
+        self.list_widget.setViewMode(QListView.ViewMode.IconMode)
+        self.list_widget.setResizeMode(QListView.ResizeMode.Adjust)
         self.list_widget.setWrapping(True)
         self.list_widget.setSpacing(scale_px(self.TILE_SPACING))
-        self.list_widget.setMovement(QListView.Static)
+        self.list_widget.setMovement(QListView.Movement.Static)
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.setWordWrap(False)
         self.list_widget.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Expanding)
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         self.list_widget.verticalScrollBar().valueChanged.connect(
             self._schedule_thumbnail_request)
@@ -328,7 +328,7 @@ class VideoFramesView(QWidget):
         pixmap = QPixmap(tile, tile)
         pixmap.fill(QColor(self._colors['placeholder']))
         frame = QPixmap.fromImage(image).scaled(
-            tile, tile, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            tile, tile, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         left = (tile - frame.width()) // 2
         top = (tile - frame.height()) // 2
         painter = QPainter(pixmap)
@@ -347,7 +347,7 @@ class VideoFramesView(QWidget):
                 *self._track_colors.get(observation.track_id, (37, 99, 235)))
             pen = QPen(color, max(2, scale_px(2)))
             if observation.review_state == 'pending':
-                pen.setStyle(Qt.DashLine)
+                pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             rect = QRectF(
                 left + bounds[0] * scale_x,
@@ -378,9 +378,9 @@ class VideoFramesView(QWidget):
         self.list_widget.clear()
         for pts in self._visible_pts:
             item = QListWidgetItem(self._thumbnail_icon(pts), self._elapsed(pts))
-            item.setData(Qt.UserRole, pts)
+            item.setData(Qt.ItemDataRole.UserRole, pts)
             item.setToolTip(self._tooltip(pts))
-            item.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
             self.list_widget.addItem(item)
         self._schedule_thumbnail_request()
 
@@ -416,7 +416,7 @@ class VideoFramesView(QWidget):
     def _on_item_clicked(self, item):
         if item is None:
             return
-        self.frameActivated.emit(int(item.data(Qt.UserRole)))
+        self.frameActivated.emit(int(item.data(Qt.ItemDataRole.UserRole)))
 
     # -- theming --------------------------------------------------------
 

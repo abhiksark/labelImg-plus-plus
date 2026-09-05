@@ -24,8 +24,8 @@ Both children are self-styled panels that construct light, so ``apply_theme``
 forwards to each of them: this widget is the only thing the host themes.
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
     QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
@@ -67,7 +67,7 @@ class VideoOverview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('videoOverview')
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._state = None
         self._plan = DistinctnessPlan((), (), ())
         self._geometry_pts = ()
@@ -89,7 +89,7 @@ class VideoOverview(QWidget):
         self.lanes_scroll = QScrollArea(self)
         self.lanes_scroll.setObjectName('videoOverviewLanesScroll')
         self.lanes_scroll.setWidgetResizable(True)
-        self.lanes_scroll.setFrameShape(QFrame.NoFrame)
+        self.lanes_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.lanes_scroll.setWidget(self.lanes)
         #: The stack page for each view.  Lanes scroll, frames do not, so the
         #: page and the view are not always the same widget.
@@ -107,7 +107,7 @@ class VideoOverview(QWidget):
             button.setText(VIEW_LABELS[name])
             button.setCheckable(True)
             button.setChecked(name == VIEWS[0])
-            button.setCursor(Qt.PointingHandCursor)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             # clicked, not toggled: set_view checks the button itself, and
             # toggled would send that back round as a second set_view.
             button.clicked.connect(
@@ -131,10 +131,10 @@ class VideoOverview(QWidget):
         self.readiness_label.setWordWrap(True)
         self.review_button = QToolButton(self)
         self.review_button.setObjectName('videoOverviewReview')
-        self.review_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.review_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.export_button = QToolButton(self)
         self.export_button.setObjectName('videoOverviewExport')
-        self.export_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         readiness = QHBoxLayout()
         readiness.setContentsMargins(
             scale_px(9), scale_px(6), scale_px(7), scale_px(6))
@@ -145,7 +145,7 @@ class VideoOverview(QWidget):
 
         self.stack = QStackedWidget(self)
         self.stack.setObjectName('videoOverviewStack')
-        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         for name in VIEWS:
             self.stack.addWidget(self._pages[name])
 

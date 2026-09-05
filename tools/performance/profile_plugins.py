@@ -23,8 +23,8 @@ if REPOSITORY_ROOT not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QCoreApplication, QEvent  # noqa: E402
-from PyQt5.QtWidgets import (  # noqa: E402
+from PyQt6.QtCore import QCoreApplication, QEvent  # noqa: E402
+from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QMainWindow,
     QMenu,
@@ -161,7 +161,7 @@ def _profile_manager_open(candidates, settings_path):
         raise AssertionError("plugin manager did not render all candidates")
     dialog.close()
     dialog.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     manager.shutdown()
     coordinator.shutdown()
 
@@ -226,7 +226,7 @@ def _verify_teardown(settings_path):
     del plugin, context, action
     owner.close()
     owner.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     gc.collect()
     retained = [name for name, reference in references.items()
                 if reference() is not None]

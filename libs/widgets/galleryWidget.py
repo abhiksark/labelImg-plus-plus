@@ -1,16 +1,10 @@
 # libs/galleryWidget.py
 """Gallery view widget for image thumbnail display with annotation status."""
 
-try:
-    from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush, QPolygonF
-    from PyQt5.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer, QPoint, QPointF
-    from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-                                  QListView, QSlider, QLabel, QPushButton, QFrame)
-except ImportError:
-    from PyQt4.QtGui import (QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush,
-                              QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-                              QListView, QSlider, QLabel, QPolygonF)
-    from PyQt4.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QPoint, QPointF
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QImageReader, QIcon, QBrush, QPolygonF
+from PyQt6.QtCore import Qt, QSize, QObject, pyqtSignal, QRunnable, QThreadPool, QTimer, QPoint, QPointF
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
+                              QListView, QSlider, QLabel, QPushButton, QFrame)
 
 import json
 import math
@@ -639,7 +633,7 @@ class ThumbnailLoaderWorker(QRunnable):
         original_size = reader.size()
         if original_size.isValid():
             scaled_size = original_size.scaled(
-                self.size, self.size, Qt.KeepAspectRatio)
+                self.size, self.size, Qt.AspectRatioMode.KeepAspectRatio)
             reader.setScaledSize(scaled_size)
 
         image = reader.read()
@@ -682,7 +676,7 @@ class ThumbnailLoaderWorker(QRunnable):
         img_h = image.height()
 
         painter = QPainter(image)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Corner marker length (proportional to image size)
         corner_len = max(4, min(img_w, img_h) // 8)
@@ -787,12 +781,12 @@ class GalleryWidget(QWidget):
     def _setup_ui(self):
         """Initialize UI components."""
         self.list_widget = QListWidget(self)
-        self.list_widget.setViewMode(QListView.IconMode)
+        self.list_widget.setViewMode(QListView.ViewMode.IconMode)
         self._apply_icon_size()
-        self.list_widget.setResizeMode(QListView.Adjust)
+        self.list_widget.setResizeMode(QListView.ResizeMode.Adjust)
         self.list_widget.setWrapping(True)
         self.list_widget.setSpacing(5)
-        self.list_widget.setMovement(QListView.Static)
+        self.list_widget.setMovement(QListView.Movement.Static)
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.setWordWrap(True)
 
@@ -834,7 +828,7 @@ class GalleryWidget(QWidget):
             slider_layout.addSpacing(10)
 
             # Size slider
-            self.size_slider = QSlider(Qt.Horizontal)
+            self.size_slider = QSlider(Qt.Orientation.Horizontal)
             self.size_slider.setMinimum(self.MIN_ICON_SIZE)
             self.size_slider.setMaximum(self.MAX_ICON_SIZE)
             self.size_slider.setValue(self._icon_size)
@@ -1019,7 +1013,7 @@ class GalleryWidget(QWidget):
         item.setBackground(QBrush(self._item_bg_color))
 
         # Store path in item's data
-        item.setData(Qt.UserRole, image_path)
+        item.setData(Qt.ItemDataRole.UserRole, image_path)
 
         self.list_widget.addItem(item)
         self._path_to_item[image_path] = item
@@ -1054,8 +1048,8 @@ class GalleryWidget(QWidget):
         try:
             items = self._visible_items_with_margin()
             desired = {
-                item.data(Qt.UserRole) for item in items
-                if item.data(Qt.UserRole)
+                item.data(Qt.ItemDataRole.UserRole) for item in items
+                if item.data(Qt.ItemDataRole.UserRole)
             }
             # Queued work outside the viewport is no longer useful. Running
             # decodes are cooperatively invalidated and their results dropped.
@@ -1067,7 +1061,7 @@ class GalleryWidget(QWidget):
                     self._active_thumbnail_requests.pop(path, None)
 
             for item in items:
-                path = item.data(Qt.UserRole)
+                path = item.data(Qt.ItemDataRole.UserRole)
                 if path and path not in self._loading_paths:
                     cached = self.thumbnail_cache.get(path)
                     if cached:
@@ -1195,7 +1189,7 @@ class GalleryWidget(QWidget):
         source = pixmap
         if source.width() > inner or source.height() > inner:
             source = source.scaled(
-                inner, inner, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                inner, inner, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
         painter = QPainter(bordered)
         # Center the original pixmap
@@ -1209,13 +1203,13 @@ class GalleryWidget(QWidget):
 
     def _on_item_clicked(self, item):
         """Handle item click."""
-        path = item.data(Qt.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.image_selected.emit(path)
 
     def _on_item_double_clicked(self, item):
         """Handle item double-click."""
-        path = item.data(Qt.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.image_activated.emit(path)
 

@@ -1,10 +1,10 @@
 # Annotation flow product contract
 
-Status: implemented and visually verified
+Status: 4.0.0rc0 PyQt5 baseline, implemented and visually verified
 
-Scope: image and video annotation from source opening through completion
-
-Runtime behavior: implemented by the linked workspace actions and model state
+Scope: historical 4.0.0rc0 image/video annotation contract retained for
+migration comparison; current 4.0.0rc1 PyQt6 support is documented in the
+active architecture, component, and testing guides
 
 ## Product promise
 
@@ -161,7 +161,7 @@ no new database state is required.
 - Reuse authoritative `QAction` objects and existing shortcut IDs.
 - Do not change annotation formats, SQLite schema, plugin API, export contract,
   undo boundaries, or dirty-state semantics.
-- Preserve Python 3.8–3.13 and lazy optional video/SAM imports.
+- The 4.0 baseline supports Python 3.8–3.13 and lazy optional video/SAM imports.
 - Keep widgets and shape/model mutation on the GUI thread; background workers
   continue to return plain immutable data or `QImage`.
 - Preserve accepted manual anchors, pending review compatibility, generation
@@ -254,5 +254,5 @@ export dialog, and preview/export counts agree.
 - undo/redo and dirty-state checks;
 - read-only and in-flight-worker states;
 - light/dark and 1×/2× screenshots at 1366×768 and 1440×900;
-- Python 3.8 AST, Ruff, compileall, resources, lazy optional imports;
+- baseline Python 3.8 AST, compileall, packaged resources, and lazy imports;
 - focused tests followed by the full base and relevant optional suites.

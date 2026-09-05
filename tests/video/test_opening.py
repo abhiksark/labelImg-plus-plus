@@ -5,9 +5,9 @@ import threading
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import QPointF, QThread, Qt
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtTest import QTest
+from PyQt6.QtCore import QPointF, QThread, Qt
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtTest import QTest
 
 from labelImgPlusPlus import DocumentKind, get_main_app
 from libs.core.shape import Shape
@@ -31,7 +31,7 @@ def _wait(app, predicate, timeout=5):
 
 
 def _image(path):
-    image = QImage(64, 48, QImage.Format_RGB32)
+    image = QImage(64, 48, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)
     assert image.save(str(path))
 
@@ -300,13 +300,13 @@ def test_read_only_video_blocks_controller_mutations_and_keeps_clean(
         assert window.request_verify_image() is None
         window.delete_selected_shape()
         window.add_track_keyframe()
-        window.annotation_model.setData(index, 'changed', Qt.EditRole)
+        window.annotation_model.setData(index, 'changed', Qt.ItemDataRole.EditRole)
         window.copy_to_clipboard()
         window.set_dirty()
 
         assert window.video_model.snapshot_state() == before
         index = window.annotation_model.index_for_identity('track-1')
-        assert window.annotation_model.data(index, Qt.EditRole) == 'car'
+        assert window.annotation_model.data(index, Qt.ItemDataRole.EditRole) == 'car'
         assert not window.actions.pasteFromClipboard.isEnabled()
         assert window.dirty is False
         assert window.request_save_video_project() is None
@@ -447,7 +447,7 @@ def test_review_entry_neutralizes_drawing_and_canvas_click_is_safe(
         assert window.canvas.hasFocus()
         shape_count = len(window.canvas.shapes)
 
-        QTest.mouseClick(window.canvas, Qt.LeftButton,
+        QTest.mouseClick(window.canvas, Qt.MouseButton.LeftButton,
                          pos=window.canvas.rect().center())
         app.processEvents()
         assert len(window.canvas.shapes) == shape_count

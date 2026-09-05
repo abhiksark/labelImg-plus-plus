@@ -1,18 +1,11 @@
 # libs/widgets/toolBar.py
 """Custom toolbar and button classes for labelImg++."""
 
-try:
-    from PyQt5.QtCore import Qt, pyqtSignal, QSize
-    from PyQt5.QtWidgets import (
-        QToolBar, QToolButton, QWidgetAction, QWidget,
-        QMenu, QSizePolicy
-    )
-except ImportError:
-    from PyQt4.QtGui import (
-        QToolBar, QToolButton, QWidgetAction, QWidget,
-        QMenu, QSizePolicy
-    )
-    from PyQt4.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtWidgets import (
+    QToolBar, QToolButton, QWidgetAction, QWidget,
+    QMenu, QSizePolicy
+)
 
 from libs.utils.styles import Theme, get_expand_button_style
 # get_dpi_scale_factor re-exported for back-compat; it now lives in libs.utils.dpi.
@@ -54,7 +47,7 @@ class ToolBar(QToolBar):
         self.setContentsMargins(0, 0, 0, 0)
         self._icon_size = calculate_icon_size()
         self.setIconSize(QSize(self._icon_size, self._icon_size))
-        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         # Track tool buttons for icon size updates
         self._tool_buttons = []
@@ -115,7 +108,7 @@ class ToolBar(QToolBar):
 
         # Add spacer to push button to bottom
         spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        spacer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.addWidget(spacer)
 
         # Add separator
@@ -174,7 +167,7 @@ class ToolButton(QToolButton):
         super(ToolButton, self).__init__()
         self._icon_size = icon_size or calculate_icon_size()
         self.setIconSize(QSize(self._icon_size, self._icon_size))
-        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
 
     def update_icon_size(self, size):
         """Update the icon size."""
@@ -187,7 +180,7 @@ class ToolButton(QToolButton):
         # Calculate width based on actual text
         fm = self.fontMetrics()
         text = self.text()
-        text_width = fm.horizontalAdvance(text) if hasattr(fm, 'horizontalAdvance') else fm.width(text)
+        text_width = fm.horizontalAdvance(text)
         # Add padding for icon and margins
         width = max(hint.width(), text_width + 20, 70)
         height = max(hint.height(), self._icon_size + 30)
@@ -197,7 +190,7 @@ class ToolButton(QToolButton):
         # Use actual text width for minimum
         fm = self.fontMetrics()
         text = self.text()
-        text_width = fm.horizontalAdvance(text) if hasattr(fm, 'horizontalAdvance') else fm.width(text)
+        text_width = fm.horizontalAdvance(text)
         return QSize(max(text_width + 16, 65), self._icon_size + 24)
 
 
@@ -211,8 +204,8 @@ class DropdownToolButton(QToolButton):
         if icon:
             self.setIcon(icon)
         self.setIconSize(QSize(self._icon_size, self._icon_size))
-        self.setPopupMode(QToolButton.InstantPopup)
-        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Preferred)
+        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
 
         # Create menu for dropdown actions
         self.dropdown_menu = QMenu(self)
@@ -242,7 +235,7 @@ class DropdownToolButton(QToolButton):
         # Calculate width based on actual text
         fm = self.fontMetrics()
         text = self.text()
-        text_width = fm.horizontalAdvance(text) if hasattr(fm, 'horizontalAdvance') else fm.width(text)
+        text_width = fm.horizontalAdvance(text)
         # Add padding for icon, dropdown arrow, and margins
         width = max(hint.width(), text_width + 30, 70)
         height = max(hint.height(), self._icon_size + 30)
@@ -252,5 +245,5 @@ class DropdownToolButton(QToolButton):
         # Use actual text width for minimum
         fm = self.fontMetrics()
         text = self.text()
-        text_width = fm.horizontalAdvance(text) if hasattr(fm, 'horizontalAdvance') else fm.width(text)
+        text_width = fm.horizontalAdvance(text)
         return QSize(max(text_width + 24, 65), self._icon_size + 24)

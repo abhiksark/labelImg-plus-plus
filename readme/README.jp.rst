@@ -12,7 +12,7 @@ labelImg++
 
 **labelImg++** は、`LabelImg <https://github.com/tzutalin/labelImg>`__ をベースにした拡張版アノテーションツールです。
 
-PythonとPyQt5で開発され、PASCAL VOC、YOLO、CreateML形式をサポートしています。
+Python 3.10以降とPyQt6 6.11で開発され、PASCAL VOC、YOLO、CreateML形式をサポートしています。
 
 .. image:: https://raw.githubusercontent.com/tzutalin/labelImg/master/demo/demo3.jpg
      :alt: Demo Image
@@ -35,8 +35,8 @@ labelImg++ の新機能
 インストール方法
 ----------------
 
-PyPIからインストール（Python 3.8以降）
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PyPIからインストール（Python 3.10以降）
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code:: shell
 
@@ -51,26 +51,24 @@ PyPIからインストール（Python 3.8以降）
 
 .. code:: shell
 
-    sudo apt-get install pyqt5-dev-tools
-    sudo pip3 install -r requirements/requirements-linux-python3.txt
-    make qt5py3
+    python3 -m pip install -e .
     python3 labelImgPlusPlus.py
 
 **macOS:**
 
 .. code:: shell
 
-    pip3 install pyqt5 lxml
-    make qt5py3
+    python3 -m pip install -e .
     python3 labelImgPlusPlus.py
 
 **Windows:**
 
 .. code:: shell
 
-    pip install pyqt5 lxml
-    pyrcc5 -o libs/resources.py resources.qrc
-    python labelImgPlusPlus.py
+    py -m pip install -e .
+    py labelImgPlusPlus.py
+
+アイコンと翻訳は ``libs/assets`` のパッケージデータです。RCCのビルド手順は不要です。
 
 ショートカット一覧
 ------------------

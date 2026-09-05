@@ -1,7 +1,7 @@
 import os
 import time
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_types import (

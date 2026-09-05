@@ -13,38 +13,20 @@ import time
 import webbrowser as wb
 from functools import partial
 
-try:
-    from PyQt5.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
-    from PyQt5.QtCore import (
-        Qt, QFileInfo, QItemSelectionModel, QProcess, QRect, QSize, QTimer,
-        QPoint, QPointF, QUrl, QVariant
-    )
-    from PyQt5.QtWidgets import (
-        QAction, QActionGroup, QApplication, QCheckBox, QComboBox, QListView,
-        QDialog, QFileDialog, QHBoxLayout, QLabel,
-        QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
-        QScrollArea, QTabWidget, QToolButton,
-        QVBoxLayout, QWidget, QWidgetAction
-    )
-except ImportError:
-    # needed for py3+qt4
-    # Ref:
-    # http://pyqt.sourceforge.net/Docs/PyQt4/incompatible_apis.html
-    # http://stackoverflow.com/questions/21217399/pyqt4-qtcore-qvariant-object-instead-of-a-string
-    if sys.version_info.major >= 3:
-        import sip
-        sip.setapi('QVariant', 2)
-    from PyQt4.QtGui import (
-        QColor, QCursor, QImage, QImageReader, QPixmap,
-        QAction, QActionGroup, QApplication, QCheckBox,
-        QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-        QMainWindow, QMenu, QMessageBox, QScrollArea,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
-    )
-    from PyQt4.QtCore import (
-        Qt, QFileInfo, QItemSelectionModel, QProcess, QSize, QTimer, QPoint,
-        QPointF, QVariant
-    )
+from PyQt6.QtGui import (
+    QAction, QActionGroup, QColor, QCursor, QImage, QImageReader, QPixmap,
+)
+from PyQt6.QtCore import (
+    Qt, QFileInfo, QItemSelectionModel, QProcess, QRect, QSize, QTimer,
+    QPoint, QPointF, QUrl
+)
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QListView,
+    QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QInputDialog, QLineEdit, QListWidget, QMainWindow, QMenu, QMessageBox,
+    QScrollArea, QTabWidget, QToolButton,
+    QVBoxLayout, QWidget, QWidgetAction
+)
 
 # Widgets
 from libs.widgets.combobox import ComboBox
@@ -166,16 +148,16 @@ from libs.utils.constants import (
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
-    generate_color_by_text, have_qstring, natural_sort
+    generate_color_by_text, natural_sort
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.window_geometry import default_window_size, fit_to_available
 from libs.utils.stringBundle import StringBundle
+from libs.utils.assets import ICON_FILES, STRING_FILES, read_license
+from libs.utils.assets import read_string_bundle
 from libs.utils.styles import get_combined_style, Theme, get_stylesheet, get_canvas_background
 from libs.utils.ustr import ustr
 
-# Resources
-from libs.resources import *  # noqa: F403
 
 __appname__ = 'labelImgPlusPlus'
 
@@ -197,10 +179,10 @@ class WindowMixin(object):
         toolbar = ToolBar(title)
         toolbar.setObjectName(u'%sToolBar' % title)
         # toolbar.setOrientation(Qt.Vertical)
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         if actions:
             add_actions(toolbar, actions)
-        self.addToolBar(Qt.LeftToolBarArea, toolbar)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
         return toolbar
 
 
@@ -413,7 +395,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.diffc_button.setChecked(False)
         self.diffc_button.stateChanged.connect(self.button_state)
         self.edit_button = QToolButton()
-        self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.edit_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
 
         # Add some of widgets to list_layout
         list_layout.addWidget(self.edit_button)
@@ -525,8 +507,8 @@ class MainWindow(QMainWindow, WindowMixin):
         scroll.setWidget(self.canvas)
         scroll.setWidgetResizable(True)
         self.scroll_bars = {
-            Qt.Vertical: scroll.verticalScrollBar(),
-            Qt.Horizontal: scroll.horizontalScrollBar()
+            Qt.Orientation.Vertical.value: scroll.verticalScrollBar(),
+            Qt.Orientation.Horizontal.value: scroll.horizontalScrollBar()
         }
         self.scroll_area = scroll
         self.canvas.scrollRequest.connect(self.scroll_request)
@@ -566,7 +548,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.video_timeline.speedChanged.connect(
             self._set_video_playback_speed)
         self._video_playback_timer = QTimer(self)
-        self._video_playback_timer.setTimerType(Qt.PreciseTimer)
+        self._video_playback_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._video_playback_timer.setInterval(10)
         self._video_playback_timer.timeout.connect(self._video_playback_tick)
 
@@ -702,7 +684,7 @@ class MainWindow(QMainWindow, WindowMixin):
             'Reject this pending suggestion and open the next review issue',
             enabled=False)
         video_previous_issue = action(
-            'Previous issue', self.previous_review_issue, None, 'previous',
+            'Previous issue', self.previous_review_issue, None, 'prev',
             'Open the previous pending suggestion in the review queue',
             enabled=False)
         video_accept_visible = action(
@@ -754,9 +736,10 @@ class MainWindow(QMainWindow, WindowMixin):
         copy_to_clipboard = action(get_str('copyBox'), self.copy_to_clipboard,
                                    self.shortcut_config.get('copy_to_clipboard'), 'copy', get_str('copyBoxDetail'),
                                    enabled=False)
-        paste_from_clipboard = action(get_str('pasteBox'), self.paste_from_clipboard,
-                                      self.shortcut_config.get('paste_from_clipboard'), 'paste', get_str('pasteBoxDetail'),
-                                      enabled=False)
+        paste_from_clipboard = action(
+            get_str('pasteBox'), self.paste_from_clipboard,
+            self.shortcut_config.get('paste_from_clipboard'), None,
+            get_str('pasteBoxDetail'), enabled=False)
         copy_all_to_clipboard = action(get_str('copyAllBoxes'), self.copy_all_to_clipboard,
                                        self.shortcut_config.get('copy_all_to_clipboard'), 'copy', get_str('copyAllBoxesDetail'),
                                        enabled=False)
@@ -872,7 +855,7 @@ class MainWindow(QMainWindow, WindowMixin):
             video_add_keyframe, video_edit_span, video_accept_suggestion,
             video_reject_suggestion, video_delete_track,
         ))
-        self.label_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.label_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.label_list.customContextMenuRequested.connect(
             self.pop_label_list_menu)
 
@@ -1084,7 +1067,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Sync single class mode from PR#106
         self.single_class_mode = QAction(get_str('singleClsMode'), self)
-        self.single_class_mode.setShortcut("Ctrl+Shift+S")
         self.single_class_mode.setCheckable(True)
         self.single_class_mode.setChecked(settings.get(SETTING_SINGLE_CLASS, False))
         self.lastLabel = None
@@ -1352,13 +1334,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add Chris
         self.difficult = False
 
-        # Fix the compatible issue for qt4 and qt5. Convert the QStringList to python list
-        if settings.get(SETTING_RECENT_FILES):
-            if have_qstring():
-                recent_file_qstring_list = settings.get(SETTING_RECENT_FILES)
-                self.recent_files = [ustr(i) for i in recent_file_qstring_list]
-            else:
-                self.recent_files = recent_file_qstring_list = settings.get(SETTING_RECENT_FILES)
+        recent_files = settings.get(SETTING_RECENT_FILES)
+        if recent_files:
+            self.recent_files = list(recent_files)
         self.workspace_pages.empty_page.set_recent_paths(
             path for path in self.recent_files if os.path.exists(path))
 
@@ -1401,12 +1379,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Add chris
         Shape.difficult = self.difficult
 
-        def xbool(x):
-            if isinstance(x, QVariant):
-                return x.toBool()
-            return bool(x)
-
-        if xbool(settings.get(SETTING_GALLERY_MODE, False)):
+        if bool(settings.get(SETTING_GALLERY_MODE, False)):
             self.actions.galleryMode.setChecked(True)
             self.toggle_gallery_mode()
 
@@ -1481,17 +1454,17 @@ class MainWindow(QMainWindow, WindowMixin):
         self.plugin_manager.activate_enabled()
 
     def keyReleaseEvent(self, event):
-        if event.key() == Qt.Key_Control:
+        if event.key() == Qt.Key.Key_Control:
             self.canvas.set_drawing_shape_to_square(False)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             if self._pending_provisional_shape is not None:
                 self._cancel_provisional_shape()
             else:
                 self.canvas.keyPressEvent(event)
             return
-        if event.key() == Qt.Key_Control:
+        if event.key() == Qt.Key.Key_Control:
             # Draw rectangle if Ctrl is pressed
             self.canvas.set_drawing_shape_to_square(True)
 
@@ -1515,16 +1488,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         Qt uses the desktop's own chooser when a platform-theme plugin
         provides one. Where none is installed -- the common case for pip and
-        conda PyQt5 builds -- it silently falls back to its built-in widget
+        conda PyQt6 builds -- it silently falls back to its built-in widget
         dialog, which opens at a tiny default size with truncated columns, no
         theme and a useless sidebar. Configure that fallback explicitly; the
         settings below are ignored when a native chooser is available.
         """
         dialog = QFileDialog(self, caption, start_dir)
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setOption(QFileDialog.ShowDirsOnly, True)
-        dialog.setOption(QFileDialog.DontResolveSymlinks, True)
-        dialog.setViewMode(QFileDialog.List)
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.Option.DontResolveSymlinks, True)
+        dialog.setViewMode(QFileDialog.ViewMode.List)
         dialog.resize(scale_px(880), scale_px(560))
         dialog.setStyleSheet(get_stylesheet(self._current_theme))
 
@@ -1540,7 +1513,7 @@ class MainWindow(QMainWindow, WindowMixin):
             # Ships ~40px wide, which clips every entry to three characters.
             sidebar.setMinimumWidth(scale_px(180))
 
-        if dialog.exec_() != QFileDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return ''
         chosen = dialog.selectedFiles()
         return chosen[0] if chosen else ''
@@ -1551,14 +1524,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Show confirmation dialog
         msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Warning)
+        msg.setIcon(QMessageBox.Icon.Warning)
         msg.setWindowTitle("Change Annotation Format")
         msg.setText(warning)
         msg.setInformativeText("This will only affect new saves. Existing annotation files will not be converted.")
-        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-        msg.setDefaultButton(QMessageBox.Ok)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
 
-        if msg.exec_() == QMessageBox.Ok:
+        if msg.exec() == QMessageBox.StandardButton.Ok:
             self.set_format(new_format)
             self.set_dirty()
             self.status(f"Format changed to {new_format}")
@@ -2553,8 +2526,8 @@ class MainWindow(QMainWindow, WindowMixin):
         proxy = self.annotation_proxy.mapFromSource(source)
         if proxy.isValid():
             self.label_list.selectionModel().setCurrentIndex(
-                proxy, QItemSelectionModel.ClearAndSelect |
-                QItemSelectionModel.Rows)
+                proxy, QItemSelectionModel.SelectionFlag.ClearAndSelect |
+                QItemSelectionModel.SelectionFlag.Rows)
 
     def add_recent_file(self, file_path):
         if file_path in self.recent_files:
@@ -2638,7 +2611,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def show_info_dialog(self):
         from libs.__init__ import __version__
-        msg = u'Name:{0} \nApp Version:{1} \n{2} '.format(__appname__, __version__, sys.version_info)
+        license_text = read_license('feather-license')
+        msg = (
+            u'Name:{0}\nApp Version:{1}\n{2}\n\n'
+            u'Feather Icons:\n{3}'
+        ).format(__appname__, __version__, sys.version_info, license_text)
         QMessageBox.information(self, u'Information', msg)
 
     def show_shortcuts_dialog(self):
@@ -2646,13 +2623,13 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog = ShortcutsDialog(self.shortcut_config, self._action_map, self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        dialog.exec_()
+        dialog.exec()
 
     def show_plugins_dialog(self):
         dialog = PluginManagerDialog(self.plugin_manager, self)
         if hasattr(self, '_current_theme'):
             dialog.setStyleSheet(get_stylesheet(self._current_theme))
-        dialog.exec_()
+        dialog.exec()
 
     def create_shape(self):
         """Compatibility callback for the Bounding Box action."""
@@ -2783,7 +2760,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def _finish_tool_activation(self):
         self._sync_tool_actions()
         self._publish_annotation_session_guidance()
-        self.canvas.setFocus(Qt.OtherFocusReason)
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _on_provisional_click_blocked(self):
         """Explain a canvas click that went nowhere, and recover from it.
@@ -2804,7 +2781,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.class_picker.raise_()
         target = (self.class_picker.use_outline_button
                   if reviewing else self.class_picker.edit)
-        target.setFocus(Qt.PopupFocusReason)
+        target.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def _guard_provisional_transition(self):
         """Keep unresolved geometry live across document transitions."""
@@ -3101,7 +3078,7 @@ class MainWindow(QMainWindow, WindowMixin):
             parent=self)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        if dialog.exec_():
+        if dialog.exec():
             values = dialog.values()
             self.settings[SETTING_SAM_ENCODER] = values["encoder"]
             self.settings[SETTING_SAM_DECODER] = values["decoder"]
@@ -3238,7 +3215,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_file_menu()
 
     def pop_label_list_menu(self, point):
-        self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
+        self.menus.labelList.exec(self.label_list.mapToGlobal(point))
 
     def edit_label(self, *_args):
         if (self.document_kind == DocumentKind.VIDEO
@@ -3658,8 +3635,8 @@ class MainWindow(QMainWindow, WindowMixin):
         msg = get_str('polygonDegradeWarning') % (polygon_count, format_name)
         reply = QMessageBox.question(
             self, 'Polygon Degradation', msg,
-            QMessageBox.Yes | QMessageBox.No)
-        return reply == QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        return reply == QMessageBox.StandardButton.Yes
 
     def save_labels(self, annotation_file_path):
         annotation_file_path = ustr(annotation_file_path)
@@ -3822,8 +3799,8 @@ class MainWindow(QMainWindow, WindowMixin):
             source = self.annotation_model.index(row, 0)
             label = self.annotation_model.data(source, AnnotationRoles.Class)
             self.annotation_model.setData(
-                source, Qt.Checked if not text or text == label
-                else Qt.Unchecked, Qt.CheckStateRole)
+                source, Qt.CheckState.Checked if not text or text == label
+                else Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
 
     def default_label_combo_selection_changed(self, index):
         self.default_label=self.label_hist[index]
@@ -4079,7 +4056,7 @@ class MainWindow(QMainWindow, WindowMixin):
         QApplication.setActiveWindow(self)
         self.activateWindow()
         self.setFocusProxy(self.canvas)
-        self.canvas.setFocus(Qt.OtherFocusReason)
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _dismiss_class_picker(self, discard=True):
         picker = getattr(self, 'class_picker', None)
@@ -4117,8 +4094,8 @@ class MainWindow(QMainWindow, WindowMixin):
     def zoom_request(self, delta):
         # get the current scrollbar positions
         # calculate the percentages ~ coordinates
-        h_bar = self.scroll_bars[Qt.Horizontal]
-        v_bar = self.scroll_bars[Qt.Vertical]
+        h_bar = self.scroll_bars[Qt.Orientation.Horizontal.value]
+        v_bar = self.scroll_bars[Qt.Orientation.Vertical.value]
 
         # get the current maximum, to know the difference after zooming
         h_bar_max = h_bar.maximum()
@@ -4204,8 +4181,8 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.annotation_model.data(index, AnnotationRoles.Type) \
                     == ShapeType.POLYGON.value:
                 self.annotation_model.setData(
-                    index, Qt.Checked if value else Qt.Unchecked,
-                    Qt.CheckStateRole)
+                    index, Qt.CheckState.Checked if value else Qt.CheckState.Unchecked,
+                    Qt.ItemDataRole.CheckStateRole)
 
     def _video_project_target(self, source_path, project_path=None,
                               allow_dialog=False):
@@ -4242,9 +4219,9 @@ class MainWindow(QMainWindow, WindowMixin):
                     source_override=source_override))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(on_success=lambda: self.request_open_video(
                     path, project_path=project_path, skip_prompt=True,
                     source_override=source_override))
@@ -4326,16 +4303,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _video_source_changed_choice(self, message):
         dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Warning)
+        dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setWindowTitle('Video source changed')
         dialog.setText(message)
         dialog.setInformativeText(
             'Annotations will not be applied to changed media.')
-        locate = dialog.addButton('Locate Original', QMessageBox.AcceptRole)
+        locate = dialog.addButton('Locate Original', QMessageBox.ButtonRole.AcceptRole)
         create = dialog.addButton(
-            'Create New Project', QMessageBox.DestructiveRole)
-        cancel = dialog.addButton(QMessageBox.Cancel)
-        dialog.exec_()
+            'Create New Project', QMessageBox.ButtonRole.DestructiveRole)
+        cancel = dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
         clicked = dialog.clickedButton()
         if clicked is locate:
             return 'locate'
@@ -4481,7 +4458,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setWindowTitle(
             '%s %s%s' % (__appname__, snapshot.source_path, suffix))
         self.update_status_bar()
-        self.canvas.setFocus(True)
+        self.canvas.setFocus()
         if prepared.warning:
             self.status(prepared.warning, delay=15000)
         else:
@@ -5009,8 +4986,8 @@ class MainWindow(QMainWindow, WindowMixin):
         reply = QMessageBox.question(
             self, self.string_bundle.get_string('propagateScopeTitle'),
             message,
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
-        return reply == QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
+        return reply == QMessageBox.StandardButton.Yes
 
     def _start_video_propagation(self, seeds, directions, endpoints=None,
                                  confirm=False):
@@ -5414,7 +5391,7 @@ class MainWindow(QMainWindow, WindowMixin):
         identity = self.current_annotation_identity()
         if identity is not None:
             self._annotation_visibility_changed(
-                identity, item.checkState() == Qt.Checked)
+                identity, item.checkState() == Qt.CheckState.Checked)
 
     def add_track_keyframe(self):
         if not self._ensure_video_editable():
@@ -5492,8 +5469,8 @@ class MainWindow(QMainWindow, WindowMixin):
         answer = QMessageBox.question(
             self, 'Delete Track',
             'Delete track "%s" and all of its observations?' % track.label,
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if answer != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
             return
         before = model.snapshot_state()
         model.delete_track(track_id)
@@ -5873,9 +5850,9 @@ class MainWindow(QMainWindow, WindowMixin):
                 '%s %d pending suggestions from the latest propagation '
                 'run?\n\nThis will be recorded as one undoable change.' % (
                     verb, len(keys)),
-                QMessageBox.Yes | QMessageBox.Cancel,
-                QMessageBox.Cancel)
-            if reply != QMessageBox.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel)
+            if reply != QMessageBox.StandardButton.Yes:
                 return False
         return self._review_video_keys(
             keys, review_state,
@@ -5947,19 +5924,19 @@ class MainWindow(QMainWindow, WindowMixin):
             return 'export'
         message = QMessageBox(self)
         message.setWindowTitle('Unreviewed suggestions')
-        message.setIcon(QMessageBox.Warning)
+        message.setIcon(QMessageBox.Icon.Warning)
         message.setText(
             '%d tracker suggestion%s still await review and are excluded '
             'from accepted-only export.' % (
                 pending, '' if pending == 1 else 's'))
         review_button = message.addButton(
-            'Review suggestions', QMessageBox.ActionRole)
+            'Review suggestions', QMessageBox.ButtonRole.ActionRole)
         export_button = message.addButton(
-            'Export accepted-only', QMessageBox.AcceptRole)
-        cancel_button = message.addButton('Cancel', QMessageBox.RejectRole)
+            'Export accepted-only', QMessageBox.ButtonRole.AcceptRole)
+        cancel_button = message.addButton('Cancel', QMessageBox.ButtonRole.RejectRole)
         message.setDefaultButton(review_button)
         message.setEscapeButton(cancel_button)
-        message.exec_()
+        message.exec()
         clicked = message.clickedButton()
         if clicked is review_button:
             return 'review'
@@ -5991,7 +5968,7 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog.destination.setText(os.path.join(
             os.path.dirname(self.video_snapshot.source_path),
             stem + '-export'))
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         values = dialog.values()
         if not values['destination']:
@@ -6378,9 +6355,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         file_path, skip_prompt=True))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.request_open_file(
                         file_path, skip_prompt=True))
@@ -6420,9 +6397,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         previous_snapshot=previous_snapshot))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.request_load_file(
                         file_path, skip_prompt=True,
@@ -6567,7 +6544,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setWindowTitle(
             __appname__ + ' ' + result.path + ' ' + self.counter_str())
         self.update_status_bar()
-        self.canvas.setFocus(True)
+        self.canvas.setFocus()
         self._update_current_image_stats()
         if result.annotation_error:
             self.status('Annotation error: ' + result.annotation_error)
@@ -6671,7 +6648,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.setEnabled(False)
         if file_path is None:
             file_path = self.settings.get(SETTING_FILENAME)
-        # Make sure that filePath is a regular python string, rather than QString
+        # Preserve the native path value stored in settings.
         file_path = ustr(file_path)
 
         # Fix bug: An  index error after select a directory when open a new file.
@@ -6724,7 +6701,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 # Downsample if larger than 2048px on either dimension (Issue #31)
                 MAX_DISPLAY_DIM = 2048
                 if original_size.width() > MAX_DISPLAY_DIM or original_size.height() > MAX_DISPLAY_DIM:
-                    scaled_size = original_size.scaled(MAX_DISPLAY_DIM, MAX_DISPLAY_DIM, Qt.KeepAspectRatio)
+                    scaled_size = original_size.scaled(MAX_DISPLAY_DIM, MAX_DISPLAY_DIM, Qt.AspectRatioMode.KeepAspectRatio)
                     reader.setScaledSize(scaled_size)
                     self._image_scale_factor = scaled_size.width() / original_size.width()
                 else:
@@ -6783,7 +6760,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     self.annotation_model.identity_for_shape(
                         self.canvas.shapes[-1]))
 
-            self.canvas.setFocus(True)
+            self.canvas.setFocus()
             self._update_current_image_stats()
             self._plugin_document_ready = True
             self._publish_plugin_document(new_generation=True, force=True)
@@ -6924,10 +6901,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if self.document_kind == DocumentKind.VIDEO and self.dirty:
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 event.ignore()
                 return
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self._video_close_save_pending = True
                 handle = self.request_save_video_project(
                     on_success=self._finish_video_close_after_save)
@@ -7027,9 +7004,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def change_save_dir_dialog(self, _value=False, skip_prompt=False):
         if not skip_prompt and self.dirty:
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.change_save_dir_dialog(
                         skip_prompt=True))
@@ -7128,7 +7105,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Apply current theme before showing
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        dialog.exec_()
+        dialog.exec()
 
     def _apply_label_fix(self, old_label, new_label):
         """Report that automatic label rewriting is not implemented.
@@ -7237,7 +7214,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
 
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         verify = dialog.verify_mode
@@ -7347,7 +7324,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
 
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         if not dialog.output_dir:
@@ -7415,9 +7392,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if self.dirty and not skip_dirty_prompt:
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 return self.request_save_file(
                     on_success=lambda: self.export_ultralytics_dataset(
                         skip_dirty_prompt=True))
@@ -7432,7 +7409,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self, len(self.m_img_list), default_dir)
         if hasattr(self, '_current_theme'):
             dialog.apply_theme(self._current_theme)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
 
         output_dir = ustr(dialog.output_dir)
@@ -7538,9 +7515,9 @@ class MainWindow(QMainWindow, WindowMixin):
                         dir_path, skip_prompt=True))
                 return None
             answer = self.discard_changes_dialog()
-            if answer == QMessageBox.Cancel:
+            if answer == QMessageBox.StandardButton.Cancel:
                 return None
-            if answer == QMessageBox.Yes:
+            if answer == QMessageBox.StandardButton.Yes:
                 self.request_save_file(
                     on_success=lambda: self.request_import_dir_images(
                         dir_path, skip_prompt=True))
@@ -7650,7 +7627,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def _show_loading_veil(self, text):
         if self._loading_veil is None:
             self._loading_veil = QLabel(self.centralWidget())
-            self._loading_veil.setAlignment(Qt.AlignCenter)
+            self._loading_veil.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._loading_veil.setStyleSheet(
                 'background: rgba(20, 20, 20, 150); color: white; '
                 'font-size: 18px; padding: 20px;')
@@ -8081,11 +8058,11 @@ class MainWindow(QMainWindow, WindowMixin):
         open_dialog_path = self.current_path()
         dlg = QFileDialog(self, caption, open_dialog_path, filters)
         dlg.setDefaultSuffix(LabelFile.suffix[1:])
-        dlg.setAcceptMode(QFileDialog.AcceptSave)
+        dlg.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         filename_without_extension = os.path.splitext(self.file_path)[0]
         dlg.selectFile(filename_without_extension)
-        dlg.setOption(QFileDialog.DontUseNativeDialog, False)
-        if dlg.exec_():
+        dlg.setOption(QFileDialog.Option.DontUseNativeDialog, False)
+        if dlg.exec():
             full_file_path = ustr(dlg.selectedFiles()[0])
             if remove_ext:
                 return os.path.splitext(full_file_path)[0]  # Return file path without the extension.
@@ -8131,10 +8108,10 @@ class MainWindow(QMainWindow, WindowMixin):
             (u'Permanently delete the current image?\n\n%s\n\n'
              u'This action cannot be undone. Annotation files will be kept.')
             % delete_path,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if (confirmation != QMessageBox.Yes
+        if (confirmation != QMessageBox.StandardButton.Yes
                 or not self._guard_provisional_transition()):
             return False
 
@@ -8192,8 +8169,8 @@ class MainWindow(QMainWindow, WindowMixin):
             'Reset all preferences and restart %s?\n\n'
             'Save directory, annotation format, theme, recent files, window '
             'layout and shortcut overrides will be lost.' % __appname__,
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
-        if confirm != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
+        if confirm != QMessageBox.StandardButton.Yes:
             return False
 
         self._reset_all_in_progress = True
@@ -8215,15 +8192,15 @@ class MainWindow(QMainWindow, WindowMixin):
             return True
         else:
             discard_changes = self.discard_changes_dialog()
-            if discard_changes == QMessageBox.No:
+            if discard_changes == QMessageBox.StandardButton.No:
                 return True
-            elif discard_changes == QMessageBox.Yes:
+            elif discard_changes == QMessageBox.StandardButton.Yes:
                 return self.save_file()
             else:
                 return False
 
     def discard_changes_dialog(self):
-        yes, no, cancel = QMessageBox.Yes, QMessageBox.No, QMessageBox.Cancel
+        yes, no, cancel = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No, QMessageBox.StandardButton.Cancel
         msg = u'You have unsaved changes, would you like to save them and proceed?\nClick "No" to undo all changes.'
         return QMessageBox.warning(self, u'Attention', msg, yes | no | cancel)
 
@@ -8787,19 +8764,13 @@ class MainWindow(QMainWindow, WindowMixin):
 def get_main_app(argv=None):
     """
     Standard boilerplate Qt application code.
-    Do everything but app.exec_() -- so that we can test the application in one thread
+    Do everything but app.exec() -- so that we can test the application in one thread
     """
     if not argv:
         argv = []
 
     app = QApplication.instance()
     if app is None:
-        # These attributes must be set before constructing QApplication.
-        try:
-            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-        except AttributeError:
-            pass  # Qt4 doesn't have these attributes
         app = QApplication(argv)
     # Replacing live application styling can delete QStyle objects while
     # existing windows still reference them, crashing repeated setup.
@@ -8839,6 +8810,27 @@ def get_main_app(argv=None):
     return app, win
 
 
+def verify_assets(argv=None):
+    """Verify every packaged asset without constructing a MainWindow."""
+    app = QApplication.instance() or QApplication(argv[:1] if argv else [])
+    for name in ICON_FILES:
+        icon = new_icon(name)
+        if icon.isNull() or icon.pixmap(32, 32).isNull():
+            raise RuntimeError("icon failed to load: %s" % name)
+    for bundle_name in STRING_FILES:
+        if read_string_bundle(bundle_name, required=True) is None:
+            raise RuntimeError("string bundle failed to load: %s" % bundle_name)
+    for locale_name in ('en', 'zh', 'zh-CN', 'zh-TW', 'ja-JP'):
+        StringBundle.get_bundle(locale_name)
+    license_text = read_license('feather-license')
+    if 'MIT License' not in license_text or 'Cole Bemis' not in license_text:
+        raise RuntimeError("Feather license markers are missing")
+    print(
+        "Verified %d icons, %d string bundles, and 1 license."
+        % (len(ICON_FILES), len(STRING_FILES)))
+    return 0
+
+
 def main_deprecated():
     """Entry point for deprecated labelImgPlusPlus command."""
     import warnings
@@ -8852,9 +8844,11 @@ def main_deprecated():
 
 
 def main():
-    """construct main app and run it"""
+    """Construct the requested application mode and run it."""
+    if '--verify-assets' in sys.argv[1:]:
+        return verify_assets(sys.argv)
     app, _win = get_main_app(sys.argv)
-    return app.exec_()
+    return app.exec()
 
 if __name__ == '__main__':
     sys.exit(main())

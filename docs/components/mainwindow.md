@@ -19,6 +19,15 @@ guarded, and keep the current document visible until the replacement is ready.
 The similarly named synchronous `import_dir_images()`, `load_file()`, and
 `save_file()` methods are retained as extension compatibility contracts.
 
+## PyQt6 Boundaries
+
+Qt-facing code imports directly from `PyQt6`. MainWindow compares modal results
+with `QDialog.DialogCode.Accepted`, uses scoped values such as
+`QMessageBox.StandardButton.Save`, and constructs images with
+`QImage.Format.Format_RGB32`. Pointer handlers convert
+`event.position().toPoint()` once before integer hit-testing or signal
+emission. Do not add a second Qt binding or unscoped compatibility aliases.
+
 ## Class Hierarchy
 
 ```

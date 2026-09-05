@@ -1,0 +1,29 @@
+README screenshot media
+=======================
+
+workspace-dark.png, workspace-light.png, inline-class.png,
+smart-select-box.png, smart-select-polygon.png:
+
+Photograph: Cat November 2010-1a by Alvesgaspar.
+Source: https://commons.wikimedia.org/wiki/File:Cat_November_2010-1a.jpg
+License: Creative Commons Attribution-ShareAlike 3.0 Unported.
+https://creativecommons.org/licenses/by-sa/3.0/
+
+Changes: photograph resized and displayed inside labelImg++; manual or
+MobileSAM-generated annotations and the application's controls are visible.
+These screenshot adaptations are distributed under CC BY-SA 3.0.
+The application's source code remains under its separate MIT license.
+No endorsement by the photographer is implied.
+
+video-review.png:
+
+Footage: Samplelib 10-second MP4 sample (buses passing a park).
+Source and reuse statement: https://samplelib.com/sample-mp4.html
+Downloaded video: https://samplelib.com/preview/mp4/sample-10s.mp4
+Samplelib offers these samples without license restrictions.
+Changes: frame displayed in labelImg++ with a manual anchor, actual OpenCV
+propagation, and a pending observation selected in the review interface.
+
+All screenshots show the running application. They are workflow illustrations,
+not benchmarks of segmentation or tracking accuracy. Only screenshots, not
+the original photograph, video, or model files, are included in this directory.

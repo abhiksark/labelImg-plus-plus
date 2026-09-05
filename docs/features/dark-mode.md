@@ -17,15 +17,17 @@ The theme preference is automatically saved and will persist across application 
 
 ### Screenshots
 
-> **Note:** Screenshot images are pending. The following visual examples will be added soon.
-
 **Light Mode**
-![Light Mode Interface](../screenshots/light-mode.png)
-*The classic light theme with high contrast and clear visibility*
+![Light Mode Interface](../screenshots/readme/workspace-light.png)
+*The annotation workspace in the light theme*
 
 **Dark Mode**
-![Dark Mode Interface](../screenshots/dark-mode.png)
-*The modern dark theme reducing eye strain in low-light environments*
+![Dark Mode Interface](../screenshots/readme/workspace-dark.png)
+*The same annotation workspace in the dark theme*
+
+Screenshot photograph: Alvesgaspar, **Cat November 2010-1a**, CC BY-SA 3.0.
+These annotated screenshot adaptations use the same license; see
+[media sources and licenses](../screenshots/readme/LICENSE.txt).
 
 ### Visual Differences
 

@@ -6,8 +6,9 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtWidgets import QAction, QApplication, QMenu
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QApplication, QMenu
 
 from libs.widgets.commandBar import CommandBar
 from libs.utils.styles import Theme
@@ -120,21 +121,21 @@ def test_command_bar_focus_and_responsive_overflow():
     assert not bar.primary_button.isHidden()
     assert not bar.format_button.isHidden()
     assert bar.application_button.toolButtonStyle() == \
-        Qt.ToolButtonTextBesideIcon
+        Qt.ToolButtonStyle.ToolButtonTextBesideIcon
 
     bar.resize(600, bar.height())
     QApplication.processEvents()
     assert bar.position_label.isHidden()
     assert bar.verify_button.isHidden()
     assert bar.format_button.isHidden()
-    assert bar.application_button.toolButtonStyle() == Qt.ToolButtonIconOnly
+    assert bar.application_button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
     assert not bar.overflow_button.isHidden()
     assert actions['verify'] in bar.overflow_menu.actions()
     assert actions['format'] in bar.overflow_menu.actions()
     for button in (
             bar.application_button, bar.open_button, bar.previous_button,
             bar.next_button, bar.save_button, bar.overflow_button):
-        assert button.focusPolicy() == Qt.StrongFocus
+        assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
 
 
 def test_command_bar_document_and_dirty_state():

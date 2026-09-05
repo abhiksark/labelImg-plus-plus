@@ -3,10 +3,10 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PyQt5.QtCore import QPointF, Qt
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QMessageBox, QPushButton
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QMessageBox, QPushButton
 
 from labelImgPlusPlus import get_main_app
 from libs.core.sam_types import SamResult
@@ -19,8 +19,8 @@ def _prepare_image(window, tmp_path):
     window.single_class_mode.setChecked(False)
     window.use_default_label_checkbox.setChecked(False)
     image_path = str(tmp_path / 'picker.png')
-    image = QImage(160, 120, QImage.Format_RGB32)
-    image.fill(Qt.white)
+    image = QImage(160, 120, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
     assert image.save(image_path)
     window.file_path = image_path
     window.image = image
@@ -46,7 +46,7 @@ def _finalise_rectangle(window, x=10, y=10):
 
 def _enter_class(window, text):
     window.class_picker.edit.setText(text)
-    QTest.keyClick(window.class_picker.edit, Qt.Key_Return)
+    QTest.keyClick(window.class_picker.edit, Qt.Key.Key_Return)
 
 
 def _stage_smart_select(window, result=None):
@@ -61,7 +61,7 @@ def _stage_smart_select(window, result=None):
 def _approve_outline(window):
     button = window.class_picker.findChild(
         QPushButton, 'useOutlineButton')
-    QTest.keyClick(button, Qt.Key_Return)
+    QTest.keyClick(button, Qt.Key.Key_Return)
 
 
 def test_image_geometry_is_provisional_until_enter_and_undo_is_single_step(
@@ -212,7 +212,7 @@ def test_escape_discards_provisional_shape_without_document_mutation(tmp_path):
     try:
         _prepare_image(window, tmp_path)
         _finalise_rectangle(window)
-        QTest.keyClick(window.class_picker.edit, Qt.Key_Escape)
+        QTest.keyClick(window.class_picker.edit, Qt.Key.Key_Escape)
         app.processEvents()
 
         assert window.canvas.provisional_shape is None
@@ -271,8 +271,8 @@ def test_provisional_object_blocks_destructive_image_transitions(
         _prepare_image(window, tmp_path)
         current_path = window.file_path
         next_path = str(tmp_path / 'next.png')
-        next_image = QImage(160, 120, QImage.Format_RGB32)
-        next_image.fill(Qt.black)
+        next_image = QImage(160, 120, QImage.Format.Format_RGB32)
+        next_image.fill(Qt.GlobalColor.black)
         assert next_image.save(next_path)
         window.m_img_list = [current_path, next_path]
         window._path_to_idx = {current_path: 0, next_path: 1}
@@ -347,7 +347,7 @@ def test_delete_rechecks_provisional_state_after_confirmation(tmp_path):
 
         def confirm(*_args, **_kwargs):
             _stage_smart_select(window)
-            return QMessageBox.Yes
+            return QMessageBox.StandardButton.Yes
 
         with patch(
                 'labelImgPlusPlus.QMessageBox.warning', side_effect=confirm), \
@@ -439,7 +439,7 @@ def test_sam_try_again_discards_result_without_mutation(tmp_path):
 
         try_again = window.class_picker.findChild(
             QPushButton, 'tryAgainButton')
-        QTest.mouseClick(try_again, Qt.LeftButton)
+        QTest.mouseClick(try_again, Qt.MouseButton.LeftButton)
         app.processEvents()
         assert window.canvas.provisional_shape is None
         assert window.canvas.shapes == []
@@ -478,7 +478,7 @@ def test_smart_select_approval_enters_class_stage_and_escape_discards(
             window.string_bundle.get_string('provisionalPending')
         assert window.class_picker.edit.hasFocus()
 
-        QTest.keyClick(window.class_picker.edit, Qt.Key_Escape)
+        QTest.keyClick(window.class_picker.edit, Qt.Key.Key_Escape)
         app.processEvents()
         assert window.canvas.provisional_shape is None
         assert window.canvas.shapes == []
@@ -505,7 +505,7 @@ def test_smart_select_class_click_commits_and_rearms_next_point(tmp_path):
 
         item = window.class_picker.list_widget.item(0)
         QTest.mouseClick(
-            window.class_picker.list_widget.viewport(), Qt.LeftButton,
+            window.class_picker.list_widget.viewport(), Qt.MouseButton.LeftButton,
             pos=window.class_picker.list_widget.visualItemRect(item).center())
         app.processEvents()
         assert window.canvas.shapes == [first]

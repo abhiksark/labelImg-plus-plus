@@ -9,7 +9,7 @@ bounds. QPointF is used only to reuse the shared Douglas-Peucker simplifier.
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QPointF
+from PyQt6.QtCore import QPointF
 
 from libs.core.sam_types import SamResult
 from libs.core.shape import MAX_POLYGON_POINTS

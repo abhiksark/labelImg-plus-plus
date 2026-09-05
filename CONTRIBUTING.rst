@@ -12,10 +12,9 @@ Getting Started
     git clone https://github.com/YOUR_USERNAME/labelImg-plus-plus.git
     cd labelImg-plus-plus
 
-3. Install dependencies::
+3. Use Python 3.10 or newer and install the project with test dependencies::
 
-    pip install -r requirements/requirements-linux-python3.txt
-    make qt5py3
+    python3 -m pip install -e . pytest
 
 4. Run the application::
 
@@ -28,40 +27,40 @@ We use the following branch structure::
 
     master           <- stable releases only
       │
-      ├── develop    <- integration branch
+      ├── dev        <- integration branch
       │     │
-      │     └── feature/*   <- your features
+      │     └── feature/*, fix/*, chore/*   <- proposed changes
       │
       └── release/*  <- release preparation
 
 **Branch Rules:**
 
 - ``master`` - Production-ready code only. Never commit directly.
-- ``develop`` - Integration branch. All features merge here first.
-- ``feature/*`` - Individual feature branches (e.g., ``feature/dark-mode``)
-- ``release/*`` - Release stabilization (e.g., ``release/v2.1.0``)
+- ``dev`` - Integration branch. Feature, fix, and chore PRs target this branch.
+- ``feature/*``, ``fix/*``, ``chore/*`` - Reviewable change branches
+- ``release/*`` - Release stabilization (e.g., ``release/v4.0.0``)
 
 Making Changes
 --------------
 
-1. Start from develop::
+1. Start from ``dev``::
 
-    git checkout develop
-    git pull origin develop
+    git checkout dev
+    git pull origin dev
     git checkout -b feature/your-feature-name
 
 2. Make your changes
 3. Test your changes
-4. Commit with a clear message::
+4. Commit with a Conventional Commit subject::
 
-    git commit -m "Add: description of your change"
+    git commit -m "feat(scope): add the change"
 
-5. Push and create a Pull Request **to develop branch**::
+5. Push and create a Pull Request **to the dev branch**::
 
     git push origin feature/your-feature-name
-    # Create PR: feature/your-feature-name -> develop
+    # Create PR: feature/your-feature-name -> dev
 
-**Important:** Always target ``develop`` branch for feature PRs, not ``master``.
+**Important:** Target ``dev`` for feature, fix, and chore PRs, not ``master``.
 
 Code Style
 ----------

@@ -12,8 +12,8 @@ so the UI never blocks: a click on an unloaded backend shows "Loading SAM…" an
 the model is built off the main thread.
 """
 
-from PyQt5.QtCore import QObject, QPointF, QRunnable, QThreadPool, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import QObject, QPointF, QRunnable, QThreadPool, pyqtSignal
+from PyQt6.QtWidgets import QMessageBox
 
 from libs.core.profiling import recorder as trace_recorder
 

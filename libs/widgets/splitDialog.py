@@ -3,8 +3,8 @@
 
 import os
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
     QProgressBar, QPushButton, QRadioButton, QSpinBox, QVBoxLayout,
 )

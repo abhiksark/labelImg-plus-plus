@@ -1,7 +1,7 @@
 # tests/widgets/test_inline_class_picker.py
-from PyQt5.QtCore import QPoint, QRect, Qt
-from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from libs.widgets.inlineClassPicker import InlineClassPicker
 
@@ -22,8 +22,8 @@ def test_picker_filters_and_accepts_keyboard_selection():
         assert not picker.list_widget.item(0).isHidden()
         assert not picker.list_widget.item(1).isHidden()
         assert picker.list_widget.item(2).isHidden()
-        QTest.keyClick(picker.edit, Qt.Key_Down)
-        QTest.keyClick(picker.edit, Qt.Key_Return)
+        QTest.keyClick(picker.edit, Qt.Key.Key_Down)
+        QTest.keyClick(picker.edit, Qt.Key.Key_Return)
         QApplication.processEvents()
         assert accepted == ['car']
         assert not picker.isVisible()
@@ -39,12 +39,12 @@ def test_picker_accepts_valid_new_class_and_escape_cancels():
     picker.cancelled.connect(lambda: cancelled.append(True))
     try:
         picker.edit.setText('delivery van')
-        QTest.keyClick(picker.edit, Qt.Key_Return)
+        QTest.keyClick(picker.edit, Qt.Key.Key_Return)
         QApplication.processEvents()
         assert accepted == ['delivery van']
 
         picker.open_at(['car'], '', QPoint(20, 20))
-        QTest.keyClick(picker.edit, Qt.Key_Escape)
+        QTest.keyClick(picker.edit, Qt.Key.Key_Escape)
         QApplication.processEvents()
         assert cancelled == [True]
     finally:
@@ -106,13 +106,13 @@ def test_review_stage_accepts_enter_and_escape_discards():
         assert use_outline.accessibleName() == 'Use outline'
         assert picker.try_again_button.accessibleName() == 'Try again'
 
-        QTest.keyClick(use_outline, Qt.Key_Return)
+        QTest.keyClick(use_outline, Qt.Key.Key_Return)
         QApplication.processEvents()
         assert accepted == [True]
         assert cancelled == []
 
         picker.open_review_at(QPoint(20, 20))
-        QTest.keyClick(use_outline, Qt.Key_Escape)
+        QTest.keyClick(use_outline, Qt.Key.Key_Escape)
         QApplication.processEvents()
         assert cancelled == [True]
     finally:
@@ -128,7 +128,7 @@ def test_class_stage_click_commits_existing_class_immediately():
         assert discard_hint.text() == 'Esc · discard'
         item = picker.list_widget.item(2)
         QTest.mouseClick(
-            picker.list_widget.viewport(), Qt.LeftButton,
+            picker.list_widget.viewport(), Qt.MouseButton.LeftButton,
             pos=picker.list_widget.visualItemRect(item).center())
         QApplication.processEvents()
 

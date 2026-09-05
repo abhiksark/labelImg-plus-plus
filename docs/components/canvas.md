@@ -341,17 +341,18 @@ def bounded_move_vertex(self, pos):
 def keyPressEvent(self, ev):
     key = ev.key()
 
-    if key == Qt.Key_Escape:
+    if key == Qt.Key.Key_Escape:
         # Two-stage: cancel whatever is in flight (drag-draw, freehand,
         # in-progress polygon, keypoint step); once nothing is left to
         # cancel, return the canvas to EDIT.
         self.cancel_to_edit()
 
-    elif key == Qt.Key_Return and self.can_close_shape():
+    elif key == Qt.Key.Key_Return and self.can_close_shape():
         # Finalize current shape
         self.finalise()
 
-    elif key in [Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down]:
+    elif key in [Qt.Key.Key_Left, Qt.Key.Key_Right,
+                 Qt.Key.Key_Up, Qt.Key.Key_Down]:
         # Move selected shape by 1 pixel
         if self.selected_shape:
             self.move_one_pixel(direction)
@@ -365,17 +366,18 @@ def keyPressEvent(self, ev):
 def wheelEvent(self, ev):
     mods = ev.modifiers()
 
-    if Qt.ControlModifier | Qt.ShiftModifier == mods:
+    if (Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier) == mods:
         # Ctrl+Shift+Wheel: brightness
         self.lightRequest.emit(v_delta)
 
-    elif Qt.ControlModifier == mods:
+    elif Qt.KeyboardModifier.ControlModifier == mods:
         # Ctrl+Wheel: zoom
         self.zoomRequest.emit(v_delta)
 
     else:
-        # Regular wheel: scroll
-        self.scrollRequest.emit(v_delta, Qt.Vertical)
+        # Regular wheel: scroll. The signal retains integer orientation values.
+        self.scrollRequest.emit(v_delta, Qt.Orientation.Vertical.value)
 ```
 
 ### Pan Implementation
@@ -387,19 +389,19 @@ it is not available as a pan modifier.
 ```python
 # In mousePressEvent, before the _locked guard so panning stays available
 # while the canvas is locked during video propagation:
-if ev.button() == Qt.MiddleButton:
+if ev.button() == Qt.MouseButton.MiddleButton:
+    event_pos = ev.position().toPoint()
     self._panning = True
-    self.pan_initial_pos = ev.pos()
+    self.pan_initial_pos = event_pos
     self._pre_pan_cursor = self._cursor
     self.override_cursor(CURSOR_MOVE)
     return
 
-# In mouseMoveEvent. The delta is cumulative from the press point on
-# purpose: scroll_request divides by 120 and truncates, so incremental
-# deltas would round to zero and panning would stall.
-delta = ev.pos() - self.pan_initial_pos
-self.scrollRequest.emit(delta.x(), Qt.Horizontal)
-self.scrollRequest.emit(delta.y(), Qt.Vertical)
+# In mouseMoveEvent. Convert QPointF once before integer hit-testing/signals.
+event_pos = ev.position().toPoint()
+delta = event_pos - self.pan_initial_pos
+self.scrollRequest.emit(delta.x(), Qt.Orientation.Horizontal.value)
+self.scrollRequest.emit(delta.y(), Qt.Orientation.Vertical.value)
 ```
 
 ### Draw-first (EDIT-mode drag-to-draw)

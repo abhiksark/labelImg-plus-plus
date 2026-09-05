@@ -78,7 +78,7 @@ def new_action(parent, text, slot=None, shortcut=None, icon=None,
 
 ### Step 1: Add String Resources
 
-Edit `resources/strings/strings.properties`:
+Edit `libs/assets/strings/strings.properties`:
 
 ```properties
 myFeature=My Feature
@@ -159,20 +159,17 @@ add_actions(self.tools, (
 
 ### Step 6: Add Icon (Optional)
 
-1. Create icon: `resources/icons/my-icon.png` (recommended: 24x24 or 32x32)
-2. Update `resources.qrc`:
-
-```xml
-<qresource prefix="/">
-    <file>icons/my-icon.png</file>
-</qresource>
-```
-
-3. Rebuild resources:
+1. Add the icon under `libs/assets/icons/` (SVG preferred).
+2. Add its semantic alias and relative path to `ICON_FILES` in
+   `libs/utils/assets.py`.
+3. Run the packaged-data diagnostic:
 
 ```bash
-pyrcc5 -o libs/resources.py resources.qrc
+python3 labelImgPlusPlus.py --verify-assets
 ```
+
+Icons are ordinary package data. Do not add an RCC file or generated Python
+resource module.
 
 ## Adding a Toggle Feature
 
@@ -239,7 +236,7 @@ For drawing or interaction features:
 
 ### Step 1: Add Mode Constant
 
-Edit `libs/canvas.py`:
+Edit `libs/widgets/canvas.py`:
 
 ```python
 # Add to mode constants at top of file
@@ -251,10 +248,13 @@ CREATE, EDIT, MY_MODE = list(range(3))
 In `Canvas` class:
 
 ```python
+from PyQt6.QtCore import Qt
+
+
 def enter_my_mode(self):
     """Enter my custom mode."""
     self.mode = MY_MODE
-    self.setCursor(Qt.CrossCursor)  # Set appropriate cursor
+    self.setCursor(Qt.CursorShape.CrossCursor)
 
 def handle_my_mode_click(self, pos):
     """Handle click in my mode."""
@@ -268,9 +268,10 @@ In `Canvas.mousePressEvent()`:
 
 ```python
 def mousePressEvent(self, ev):
-    pos = self.transform_pos(ev.pos())
+    event_pos = ev.position().toPoint()
+    pos = self.transform_pos(event_pos)
 
-    if ev.button() == Qt.LeftButton:
+    if ev.button() == Qt.MouseButton.LeftButton:
         if self.mode == MY_MODE:
             self.handle_my_mode_click(pos)
             return
@@ -308,8 +309,9 @@ For features requiring user input:
 Create `libs/myDialog.py`:
 
 ```python
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, \
-    QDialogButtonBox
+from PyQt6.QtWidgets import (
+    QDialog, QDialogButtonBox, QLabel, QLineEdit, QVBoxLayout,
+)
 
 
 class MyDialog(QDialog):
@@ -332,7 +334,8 @@ class MyDialog(QDialog):
 
         # Add buttons
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -352,8 +355,8 @@ def get_my_value(parent=None, initial=''):
         Tuple of (value, accepted)
     """
     dialog = MyDialog(parent, initial)
-    result = dialog.exec_()
-    if result == QDialog.Accepted:
+    result = dialog.exec()
+    if result == QDialog.DialogCode.Accepted:
         return dialog.get_value(), True
     return None, False
 ```
@@ -436,7 +439,7 @@ def export_statistics(self):
             stats[os.path.basename(img_path)] = count
 
     # Get save path
-    from PyQt5.QtWidgets import QFileDialog
+    from PyQt6.QtWidgets import QFileDialog
     save_path, _ = QFileDialog.getSaveFileName(
         self, 'Save Statistics', '', 'CSV Files (*.csv)'
     )
@@ -484,22 +487,26 @@ def batch_operation(self):
 
 ### Undo Support
 
-labelImg++ doesn't have built-in undo, but you can implement simple undo for your feature:
+Annotation mutations must use the existing `Command`/`UndoStack` path; never
+maintain a second feature-local history. Capture the before/after state in a
+command, push it once for the user-visible operation, then mark the document
+dirty. Video mutations use `VideoModelCommand` followed by
+`_on_video_model_mutation()`.
 
 ```python
-def __init__(self):
-    self.undo_stack = []
+from libs.core.commands import Command
 
-def my_feature_with_undo(self):
-    # Save state
-    self.undo_stack.append(self.get_current_state())
-    # Make change
-    self.do_change()
 
-def undo_my_feature(self):
-    if self.undo_stack:
-        state = self.undo_stack.pop()
-        self.restore_state(state)
+class MyFeatureCommand(Command):
+    def execute(self):
+        self.apply_after_state()
+
+    def undo(self):
+        self.apply_before_state()
+
+
+self.undo_stack.push(MyFeatureCommand(...))
+self.set_dirty()
 ```
 
 ## Checklist
@@ -510,7 +517,7 @@ def undo_my_feature(self):
 - [ ] Added to appropriate menu
 - [ ] Added to toolbar (if applicable)
 - [ ] Created icon (if needed)
-- [ ] Rebuilt resources (`make qt5py3`)
+- [ ] Added and verified packaged assets (`--verify-assets`)
 - [ ] Added settings persistence (if toggle)
 - [ ] Handled enable/disable states
 - [ ] Tested feature

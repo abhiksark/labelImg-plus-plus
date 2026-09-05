@@ -11,7 +11,7 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 dir_name = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(dir_name, '..', '..'))
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 from libs.widgets.statsWidget import StatsWidget
 
 

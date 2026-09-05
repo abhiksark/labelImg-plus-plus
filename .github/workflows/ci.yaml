@@ -7,6 +7,7 @@ on:
       - 'v*'
   pull_request:
     branches: [master, main, dev]
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   test:
@@ -14,10 +15,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -34,12 +40,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyqt5 lxml pytest
+          pip install . pytest wheel 'setuptools>=61.0,<69.0'
 
-      - name: Build and verify Qt resources
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
 
       - name: Verify base startup stays optional-feature-free
         env:
@@ -58,10 +60,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -78,7 +85,7 @@ jobs:
       - name: Install plugin test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyqt5 lxml pytest wheel
+          pip install . pytest wheel
 
       - name: Run plugin compatibility, packaging, and performance gates
         env:
@@ -98,10 +105,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.13']
+        python-version: ['3.10', '3.13']
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -120,10 +132,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install '.[sam]' pytest
 
-      - name: Build and verify Qt resources
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
 
       - name: Run focused SAM tests
         env:
@@ -143,10 +151,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -165,10 +178,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install '.[video]' pytest
 
-      - name: Build and verify Qt resources
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
 
       - name: Run focused video tests
         env:
@@ -180,10 +189,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.13']
+        python-version: ['3.10', '3.13']
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -202,10 +216,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install '.[sam,video]' pytest
 
-      - name: Build and verify Qt resources
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
 
       - name: Run combined feature tests
         env:
@@ -230,6 +240,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -252,11 +267,18 @@ jobs:
   build-release:
     needs: [test, plugin-test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'release-candidate'))
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -265,6 +287,7 @@ jobs:
           python-version: '3.13'
 
       - name: Validate release tag and branch ancestry
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           set -euo pipefail
@@ -283,23 +306,122 @@ jobs:
           git fetch --no-tags origin master
           tag_commit=$(git rev-parse "${GITHUB_REF}^{commit}")
           git merge-base --is-ancestor "${tag_commit}" origin/master
+      - name: Validate release candidate source
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse HEAD)
+          test "${actual_sha}" = "${EXPECTED_SHA}"
+          package_version=$(python - <<'PY'
+          import pathlib
+          import re
+
+          text = pathlib.Path('pyproject.toml').read_text(encoding='utf-8')
+          match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+          if match is None:
+              raise SystemExit('package version not found')
+          version = match.group(1)
+          if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:a|b|rc)[0-9]+',
+                          version) is None:
+              raise SystemExit(
+                  f'release-candidate label requires a prerelease: {version}')
+          print(version)
+          PY
+          )
+          printf 'Release candidate %s at %s\n' \
+            "${package_version}" "${actual_sha}"
+
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 x11-utils libegl1-mesa-dev
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build twine pyqt5 lxml
+          pip install build twine
 
-      - name: Build and verify Qt resources
+      - name: Build and check original distributions
         run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
+          python -m build --sdist --wheel
+          python -m twine check dist/*
 
-      - name: Build and check distributions
+      - name: Inspect distribution members
         run: |
-          python -m build
-          twine check dist/*
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+          import zipfile
 
-      - name: Upload tested distributions
+          required = (
+              "libs/assets/icons/app.icns",
+              "libs/assets/strings/strings.properties",
+              "libs/assets/licenses/feather.txt",
+              "libs/data/predefined_classes.txt",
+          )
+          blocked = (
+              "resources.qrc",
+              "libs/resources.py",
+              "scripts/build_qt_resources.py",
+              "scripts/verify_qt_resources.py",
+          )
+          for artifact in Path("dist").iterdir():
+              if artifact.suffix == ".whl":
+                  with zipfile.ZipFile(artifact) as archive:
+                      names = archive.namelist()
+              elif artifact.name.endswith(".tar.gz"):
+                  with tarfile.open(artifact) as archive:
+                      names = archive.getnames()
+              else:
+                  continue
+              assert all(any(name.endswith(item) for name in names)
+                         for item in required), artifact
+              assert not any(
+                  name.endswith(".qrc")
+                  or any(name.endswith(item) for item in blocked)
+                  for name in names
+              ), artifact
+          PY
+
+      - name: Rebuild wheel from sdist
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdist-wheel"
+          python -m pip wheel --no-deps \
+            --wheel-dir "$RUNNER_TEMP/sdist-wheel" dist/*.tar.gz
+
+      - name: Verify direct and sdist-derived wheels outside checkout
+        shell: bash
+        env:
+          LABELIMGPP_DISABLE_PLUGINS: '1'
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          index=0
+          for wheel in dist/*.whl "$RUNNER_TEMP"/sdist-wheel/*.whl; do
+            index=$((index + 1))
+            envdir="$RUNNER_TEMP/distribution-env-$index"
+            workdir="$RUNNER_TEMP/distribution-work-$index"
+            python -m venv "$envdir"
+            "$envdir/bin/python" -m pip install --upgrade pip
+            "$envdir/bin/python" -m pip install "$wheel"
+            mkdir -p "$workdir"
+            (
+              cd "$workdir"
+              "$envdir/bin/labelimgpp" --verify-assets
+              "$envdir/bin/labelimgplusplus" --verify-assets
+              "$envdir/bin/labelImgPlusPlus" --verify-assets
+              "$envdir/bin/python" -c \
+                "import sys, labelImgPlusPlus; assert 'PyQt6' in sys.modules; assert not {'PyQt4', 'PyQt5', 'av', 'cv2', 'numpy', 'onnxruntime', 'torch', 'torchvision', 'sam2'} & sys.modules.keys()"
+            )
+            python scripts/smoke_frozen_app.py \
+              "$envdir/bin/labelimgpp" --seconds 5
+          done
+
+      - name: Upload tested original distributions
         uses: actions/upload-artifact@v4
         with:
           name: python-distributions
@@ -309,9 +431,19 @@ jobs:
   package-macos:
     needs: [test, plugin-test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: macos-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'release-candidate'))
+    env:
+      QT_API: pyqt6
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -319,25 +451,41 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyqt5 lxml pyinstaller
-      - name: Build and verify Qt resources
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
+          pip install . pyinstaller
       - name: Package
-        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
+        run: python -m PyInstaller --clean --noconfirm build-tools/labelImgPlusPlus.spec
+      - name: Verify artifact outside checkout
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LABELIMGPP_DISABLE_PLUGINS: '1'
+        run: |
+          artifact="$RUNNER_TEMP/labelImgPlusPlus"
+          cp dist/labelImgPlusPlus "$artifact"
+          chmod +x "$artifact"
+          "$artifact" --verify-assets
+          python scripts/smoke_frozen_app.py "$artifact" --seconds 5
       - uses: actions/upload-artifact@v4
         with:
           name: macOS-artifact
-          path: dist/labelImgPlusPlus
+          path: ${{ runner.temp }}/labelImgPlusPlus
           if-no-files-found: error
 
   package-windows:
     needs: [test, plugin-test, sam-test, video-test, sam-video-test, video-platform-smoke]
     runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'release-candidate'))
+    env:
+      QT_API: pyqt6
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -345,53 +493,71 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyqt5 lxml pyinstaller
-      - name: Build and verify Qt resources
-        shell: bash
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
+          pip install . pyinstaller
       - name: Package
-        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Windows-artifact
-          path: dist/labelImgPlusPlus.exe
-          if-no-files-found: error
-
-  package-linux:
-    needs: [test, plugin-test, sam-test, video-test, sam-video-test, video-platform-smoke]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyqt5 lxml pyinstaller
-      - name: Build and verify Qt resources
-        run: |
-          pyrcc5 -o libs/resources.py resources.qrc
-          python scripts/verify_qt_resources.py
-      - name: Package
-        run: pyinstaller --hidden-import=pyqt5 --hidden-import=lxml -F -n "labelImgPlusPlus" -c labelImgPlusPlus.py -p ./libs -p ./
-      - name: Verify base artifact boots without plugins
+        run: python -m PyInstaller --clean --noconfirm build-tools/labelImgPlusPlus.spec
+      - name: Verify artifact outside checkout
+        shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
           LABELIMGPP_DISABLE_PLUGINS: '1'
         run: |
-          set +e
-          timeout 5s ./dist/labelImgPlusPlus
-          status=$?
-          test "$status" -eq 124
+          $artifact = Join-Path $env:RUNNER_TEMP "labelImgPlusPlus.exe"
+          Copy-Item "dist/labelImgPlusPlus.exe" $artifact
+          & $artifact --verify-assets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/smoke_frozen_app.py $artifact --seconds 5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-artifact
+          path: ${{ runner.temp }}/labelImgPlusPlus.exe
+          if-no-files-found: error
+
+  package-linux:
+    needs: [test, plugin-test, sam-test, video-test, sam-video-test, video-platform-smoke]
+    runs-on: ubuntu-22.04
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'release-candidate'))
+    env:
+      QT_API: pyqt6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' &&
+                contains(github.event.pull_request.labels.*.name, 'release-candidate') &&
+                github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 x11-utils libegl1-mesa-dev
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+      - name: Package
+        run: python -m PyInstaller --clean --noconfirm build-tools/labelImgPlusPlus.spec
+      - name: Verify artifact outside checkout
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LABELIMGPP_DISABLE_PLUGINS: '1'
+        run: |
+          artifact="$RUNNER_TEMP/labelImgPlusPlus"
+          cp dist/labelImgPlusPlus "$artifact"
+          chmod +x "$artifact"
+          "$artifact" --verify-assets
+          python scripts/smoke_frozen_app.py "$artifact" --seconds 5
       - uses: actions/upload-artifact@v4
         with:
           name: Linux-artifact
-          path: dist/labelImgPlusPlus
+          path: ${{ runner.temp }}/labelImgPlusPlus
           if-no-files-found: error
 
   publish:

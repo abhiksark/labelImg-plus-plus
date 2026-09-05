@@ -1,0 +1,17 @@
+[
+  {
+    "image": "sample.jpg",
+    "verified": true,
+    "annotations": [
+      {
+        "label": "car",
+        "coordinates": {
+          "x": 50,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        }
+      }
+    ]
+  }
+]

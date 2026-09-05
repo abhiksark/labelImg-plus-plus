@@ -5,12 +5,12 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
 pytest.importorskip("numpy")
 
-from PyQt5.QtGui import QImage, qRgb
+from PyQt6.QtGui import QImage, qRgb
 from libs.integrations.image_convert import qimage_to_rgb
 
 
 def _solid(width, height, r, g, b):
-    img = QImage(width, height, QImage.Format_RGB32)
+    img = QImage(width, height, QImage.Format.Format_RGB32)
     img.fill(qRgb(r, g, b))
     return img
 

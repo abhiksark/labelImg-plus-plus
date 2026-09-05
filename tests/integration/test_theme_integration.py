@@ -12,8 +12,8 @@ if 'QT_QPA_PLATFORM' not in os.environ:
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication, QMessageBox
 import labelImgPlusPlus as application_module
 from labelImgPlusPlus import MainWindow
 from libs.core.settings import Settings

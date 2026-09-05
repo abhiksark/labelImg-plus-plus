@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Optional
 import weakref
 
-from PyQt5.QtCore import QObject, Qt, pyqtSlot
+from PyQt6.QtCore import QObject, Qt, pyqtSlot
 
 from labelimgplusplus.plugins import CommandSpec
 from libs.core.task_coordinator import JobCancelled, JobPriority
@@ -433,12 +433,12 @@ class PluginTaskServiceImpl:
                     self._release(previous)
                 self._latest_by_key[namespaced_key] = facade
             self._bridges[facade] = bridge
-            coordinator_handle.result.connect(bridge.result, Qt.QueuedConnection)
-            coordinator_handle.error.connect(bridge.error, Qt.QueuedConnection)
+            coordinator_handle.result.connect(bridge.result, Qt.ConnectionType.QueuedConnection)
+            coordinator_handle.error.connect(bridge.error, Qt.ConnectionType.QueuedConnection)
             coordinator_handle.progress.connect(
-                bridge.progress, Qt.QueuedConnection)
+                bridge.progress, Qt.ConnectionType.QueuedConnection)
             coordinator_handle.finished.connect(
-                bridge.finished, Qt.QueuedConnection)
+                bridge.finished, Qt.ConnectionType.QueuedConnection)
         except Exception:
             facade.cancel()
             self._release(facade, bridge)

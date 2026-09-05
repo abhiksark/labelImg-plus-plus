@@ -5,7 +5,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QPoint, QRect, QSize  # noqa: E402
+from PyQt6.QtCore import QPoint, QRect, QSize  # noqa: E402
 
 from libs.utils import dpi  # noqa: E402
 from libs.utils.window_geometry import (  # noqa: E402

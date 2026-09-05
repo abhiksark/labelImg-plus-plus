@@ -3,8 +3,8 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import pytest
-from PyQt5.QtCore import QPointF
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.sam_controller import SamController
 from libs.core.sam_types import SamResult
@@ -175,11 +175,11 @@ def test_first_click_loads_model_in_worker(monkeypatch):
     # (so the UI never blocks), then segment and store the loaded backend.
     pytest.importorskip("numpy")
     pytest.importorskip("cv2")
-    from PyQt5.QtGui import QImage
+    from PyQt6.QtGui import QImage
     from libs.integrations import segmentation
 
     mw = _FakeMain()
-    mw.image = QImage(64, 64, QImage.Format_RGB888)
+    mw.image = QImage(64, 64, QImage.Format.Format_RGB888)
     mw.image.fill(0)
     fake = _FakeBackend()
     monkeypatch.setattr(segmentation, "load_backend", lambda settings: (fake, None))

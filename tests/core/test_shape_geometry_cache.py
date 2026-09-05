@@ -2,8 +2,8 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QPointF
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF
+from PyQt6.QtWidgets import QApplication
 
 from libs.core.shape import Shape
 from libs.widgets.canvas import _ShapeSpatialGrid

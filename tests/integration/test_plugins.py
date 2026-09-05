@@ -2,9 +2,9 @@ import json
 import threading
 import time
 
-from PyQt5.QtCore import QCoreApplication, QThread, Qt
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication, QMainWindow, QMenu
+from PyQt6.QtCore import QCoreApplication, QThread, Qt
+from PyQt6.QtGui import QImage
+from PyQt6.QtWidgets import QApplication, QMainWindow, QMenu
 
 import labelImgPlusPlus as application_module
 from labelimgplusplus.plugins import (
@@ -150,7 +150,7 @@ def test_mainwindow_owns_actions_and_publishes_documents_on_gui_thread(
         assert window.shortcut_config.get(command_id) == "Ctrl+Alt+I"
 
         image_path = str(tmp_path / "document.png")
-        image = QImage(32, 24, QImage.Format_RGB32)
+        image = QImage(32, 24, QImage.Format.Format_RGB32)
         image.fill(0xFFFFFFFF)
         assert image.save(image_path)
         assert window.load_file(image_path)
@@ -211,7 +211,7 @@ def test_manager_enablement_is_saved_but_does_not_hot_load(
         assert dialog.table.item(0, 4).text() == "Unknown until enabled"
 
         enabled_item = dialog.table.item(0, 6)
-        enabled_item.setCheckState(Qt.Checked)
+        enabled_item.setCheckState(Qt.CheckState.Checked)
         QCoreApplication.processEvents()
         assert record.enabled is True
         assert record.state == PluginState.DISABLED

@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: labelimgplusplus
-Version: 4.0.0rc0
+Version: 4.0.0rc1
 Summary: labelImg++ is an enhanced graphical image annotation tool with Gallery Mode for browsing and labeling images
 Author-email: Abhik Sarkar <abhiksark@gmail.com>
 License: Copyright (c) <2015-Present> Tzutalin
@@ -21,26 +21,22 @@ Classifier: Intended Audience :: Developers
 Classifier: Intended Audience :: Science/Research
 Classifier: Natural Language :: English
 Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: Python :: 3.8
-Classifier: Programming Language :: Python :: 3.9
 Classifier: Programming Language :: Python :: 3.10
 Classifier: Programming Language :: Python :: 3.11
 Classifier: Programming Language :: Python :: 3.12
 Classifier: Programming Language :: Python :: 3.13
 Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
 Classifier: Topic :: Scientific/Engineering :: Image Recognition
-Requires-Python: >=3.8
+Requires-Python: >=3.10
 Description-Content-Type: text/x-rst
 License-File: LICENSE
-Requires-Dist: pyqt5
+Requires-Dist: PyQt6<6.12,>=6.11
 Requires-Dist: lxml
 Provides-Extra: sam
 Requires-Dist: onnxruntime; extra == "sam"
 Requires-Dist: numpy; extra == "sam"
 Requires-Dist: opencv-python-headless<6,>=4.8; extra == "sam"
 Provides-Extra: video
-Requires-Dist: av<13,>=12.3; python_version == "3.8" and extra == "video"
-Requires-Dist: av<16,>=15.1; python_version == "3.9" and extra == "video"
 Requires-Dist: av<18,>=17.1; python_version == "3.10" and extra == "video"
 Requires-Dist: av<19,>=18; python_version >= "3.11" and extra == "video"
 Requires-Dist: numpy; extra == "video"
@@ -50,464 +46,611 @@ Requires-Dist: psutil; extra == "profile"
 Requires-Dist: py-spy; extra == "profile"
 Requires-Dist: pytest-benchmark; extra == "profile"
 
-============
+==========
 labelImg++
-============
+==========
 
-*A modern, enhanced image annotation tool for machine learning*
+*Image and video annotation for machine learning*
 
 .. image:: https://img.shields.io/pypi/v/labelImgPlusPlus.svg
-        :target: https://pypi.org/project/labelImgPlusPlus/
-
-.. image:: https://img.shields.io/pypi/dm/labelImgPlusPlus.svg
-        :target: https://pypi.org/project/labelImgPlusPlus/
+   :target: https://pypi.org/project/labelImgPlusPlus/
+   :alt: Latest stable PyPI version
 
 .. image:: https://github.com/abhiksark/labelImg-plus-plus/actions/workflows/ci.yaml/badge.svg
-        :target: https://github.com/abhiksark/labelImg-plus-plus/actions
+   :target: https://github.com/abhiksark/labelImg-plus-plus/actions
+   :alt: CI status
 
-.. image:: https://img.shields.io/badge/python-3.8%2B-blue.svg
-        :target: https://www.python.org/downloads/
+.. image:: https://img.shields.io/badge/python-3.10%2B-blue.svg
+   :target: https://www.python.org/downloads/
+   :alt: Candidate requires Python 3.10 or newer
 
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
-        :target: https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE
+   :target: https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/LICENSE
+   :alt: MIT application license
 
-----
+**labelImg++** annotates bounding boxes, polygons, and keypoints on images and
+video. Draw and label objects without leaving the canvas, use optional
+single-click Smart Select, or propagate video tracks and review suggestions
+before exporting a dataset. It builds on the original LabelImg by Tzutalin.
 
-**labelImg++** is a graphical image annotation tool for bounding boxes,
-polygons, and keypoints, designed for machine learning and computer vision
-projects. It is forked from the original LabelImg with significant
-enhancements.
+**4.0.0rc1 — PyQt6 release candidate.** Use Python 3.10–3.13 and
+``PyQt6>=6.11,<6.12``. Select this candidate with an explicit version pin;
+a normal stable PyPI install does not select prereleases. The historical
+``4.0.0rc0`` prerelease uses PyQt5; Python 3.8/3.9 users need the older 3.5.x line.
 
-    **Version 4.0.0rc0 (release candidate).** Install with
-    ``pip install labelimgplusplus``.
+Annotation formats and coordinates, settings encodings, video sidecars,
+shortcut IDs, and plugin API major 1 remain compatible. Plugins used with this
+candidate must not load PyQt5 alongside PyQt6.
 
-.. image:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/c7fbd5fc08a561206b210706143a50023c82a782/resources/demo/demo.gif
-     :alt: labelImg++ demo - gallery, bounding boxes, dark theme, polygons, keypoints and save
-     :align: center
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/workspace-dark.png
+   :alt: Cat bounding-box annotation in the dark workspace, with the Objects inspector and completion action
+   :width: 100%
+   :align: center
 
-Features
---------
+   The current workspace keeps annotation tools, object editing, and completion
+   beside the image. See `Media credits`_ for screenshot sources and licensing.
 
-Core Annotation Features
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-- **Five annotation formats**: PASCAL VOC, YOLO bbox, CreateML,
-  COCO, and YOLO-seg
-- **Bounding box and polygon annotation** with interactive editing
-- **Keypoint annotation** with COCO 17-point human pose and 5-point face
-  templates; COCO preserves keypoints on export
-- **Auto-save mode** for uninterrupted workflow
-- **Predefined class labels** with customizable list
-- **Verification system** to mark completed annotations
-
-Workflow and Interface
-~~~~~~~~~~~~~~~~~~~~~~
-
-**Undo/Redo Support**
-    Full undo/redo for annotation actions. Press **Ctrl+Z** to undo and
-    **Ctrl+Shift+Z** to redo.
-
-**Balanced Modern Workspace**
-    A fixed annotation-tool rail, compact command bar, unified Objects/Files
-    inspector, integrated video timeline, and visible document status keep the
-    active canvas uncluttered. Gallery Mode is embedded in the same workspace,
-    so the annotation tools, inspector, and status remain available while
-    browsing thumbnail previews across all five annotation formats.
-
-    - Colored borders indicate status: Gray (no labels), Blue (has labels), Green (verified)
-    - Bounding boxes use compact corner markers; polygons use outline previews
-    - Quick size presets (S/M/L/XL) plus slider for fine control
-    - Smart selection: click on nested boxes selects the inner box
-    - Press **Ctrl+G** to toggle gallery mode
-
-**Modern UI with Feather Icons**
-    Official Feather icons provide a consistent, accessible tool vocabulary.
-
-**Responsive DPI Scaling**
-    Icons and UI elements scale properly on high-DPI displays (4K, Retina).
-
-**Unified Object Inspector**
-    Search and edit rectangles, polygons, keypoints, and video tracks in one
-    Objects view. The Files view keeps the compact file list, thumbnails, and
-    annotation-status filter close at hand, and the inspector can be collapsed
-    when maximum canvas space is needed. Its top card follows the active tool
-    or selected object, keeping image edit commands, selected-track
-    propagation, and pending-review decisions in context.
-
-**Faster Class Confirmation**
-    New boxes, polygons, Smart Select results, and video geometry remain
-    provisional while a non-modal class picker opens beside the annotation.
-    Filter or enter a class, press **Enter** to commit one undoable annotation,
-    or press **Escape** to discard it without changing the document. Default
-    labels and established single-class sessions bypass the picker. Box,
-    Polygon, and Smart Select stay active after confirmation so repeated
-    annotation does not require re-arming the tool; choose Select or press
-    **Escape** while idle to end the session. The canvas chrome and status strip
-    always state what the next gesture will do.
-
-**One Completion Action**
-    The command bar derives one primary action from the current document:
-    **Done & Next** saves, marks an image verified, and only then advances;
-    **Browse video** opens the track/frame overview; and **Review queue** opens
-    the next pending suggestion directly on the canvas. Press **E** to complete
-    an image. A failed or superseded save never navigates away, and explicit
-    Save and Verify
-    commands remain available from the application menu.
-
-**Smart Select Output Modes**
-    While Smart Select is active, choose **Box** or **Polygon** from the compact
-    canvas control. The choice persists between sessions, and either result
-    follows the same provisional class-confirmation and undo workflow.
-
-**Portable Whole-Video Propagation**
-    Select a manual anchor to propagate that object from its contextual card;
-    the card's **More** menu also exposes whole-frame scope. The integrated
-    timeline shows elapsed time, the Anchor → Propagate → Review → Export
-    stage, and cancellable progress. The portable OpenCV backend
-    processes rectangles, polygons, and associated keypoints together, shows
-    preview-only progress, protects later manual anchors, and commits generated
-    observations as pending tracker suggestions with explicit gap records in
-    one atomic undo step. Suggestions must be accepted before export.
-    Editing generated geometry creates a manual correction first, then
-    regenerates only the bounded neighboring segments as a separate undoable
-    change.
-
-**Video Overview**
-    Gallery Mode becomes a lane/frame overview for video. Its Distinct filter
-    shows frames whose stored geometry changes, and a bounded background pixel
-    pass may add material visual changes. Annotated and Pending continue to
-    expose every stored or awaiting-review frame, and selecting a lane narrows
-    the answer to that track.
-    The overview states how many suggestions still need review and how many
-    accepted frames the default annotated export currently includes.
-
-**Continuous Video Review**
-    **Review queue** keeps the affected frame and track selected. **Accept &
-    Next** and **Reject** update one observation in one undo step and advance
-    to the next live pending issue; **Previous** wraps through the same queue.
-    ``Shift+Enter`` accepts, ``Backspace`` rejects, and the canvas keeps focus.
-    Full-run review remains available from **More**. Pending and rejected
-    suggestions are never included in accepted-frame export.
-
-**Optional SAM 2 Video Backend**
-    Whole-video propagation can use an official, source-installed SAM 2 on
-    Linux/CUDA. Auto is the default selection, and OpenCV remains the portable
-    fallback. Open
-    **Tools → SAM Settings…** to choose Auto, OpenCV, or SAM 2 and select a
-    local checkpoint and its matching config file. Auto selects SAM 2 only
-    with Python 3.10+, compatible CUDA-enabled PyTorch/torchvision and SAM 2,
-    and both valid files; otherwise it uses OpenCV. An explicitly selected but
-    unavailable SAM 2 reports the missing requirement and never silently falls
-    back. labelImg++ does not download or bundle Torch, SAM 2, checkpoints, or
-    configs, and none are added to its optional extras.
-
-**Direct Ultralytics Dataset Export**
-    Choose **Tools → Export Ultralytics Dataset…** to create a ready-to-train
-    YOLO detection dataset with ``images/{train,val,test}``, matching
-    ``labels/{train,val,test}``, and ``data.yaml``. Configure deterministic
-    split ratios and either copy images or create absolute local symlinks. The
-    destination must be new or empty, and it is published only after the full
-    export succeeds. See the `Ultralytics Export Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/ultralytics-export.md>`_.
-
-**Installed Python Plugins**
-    Add trusted command plugins from separately installed Python distributions
-    without editing labelImg++ source. Review and enable them under
-    **Tools → Plugins…**; changes take effect after restart. Plugins use a
-    versioned public API with host-owned actions, namespaced shortcuts and
-    settings, bounded background work, read-only document state, diagnostics,
-    and ``LABELIMGPP_DISABLE_PLUGINS=1`` recovery. See the
-    `Plugin Authoring Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/guides/plugin-authoring.md>`_.
-
-**Brightness Adjustment**
-    Adjust image brightness on-the-fly to better see annotations on dark or light images.
-
-**Dark Mode Theme**
-    Choose between light and dark themes for comfortable annotation in any lighting condition.
-
-    - Press **Ctrl+Shift+T** to toggle between themes
-    - Theme preference automatically saved
-    - All UI components (canvas, gallery, dialogs) respect the active theme
-    - See `Dark Mode Documentation <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/dark-mode.md>`_ for detailed information
-
-**SAM-Assisted Segmentation** (optional)
-    Click once on an object to auto-generate a polygon, traced from a
-    Segment-Anything mask. Install the optional extra and toggle **SAM Segment**:
-
-    .. code:: shell
-
-        pip install labelimgplusplus[sam]
-
-    Runs the lightweight MobileSAM model on ONNX Runtime as a CPU-friendly
-    extra with no PyTorch dependency. The default model pair is downloaded and
-    checksum-verified on first use. Point **Tools → SAM Settings…** at your own
-    exported encoder/decoder pair to use a different SAM variant. Without the
-    extra installed, the action stays disabled (with an install hint) and
-    nothing else changes.
-
-**Smart Video Annotation** (optional)
-    Open local MP4, MOV, MKV, and AVI video, annotate on exact presentation
-    timestamps, interpolate keyframes, and propagate rectangles, polygons, and
-    associated keypoints across the video. Propagation streams preview-only
-    results and commits pending suggestions and gaps atomically for review; the
-    legacy optical-flow suggestion workflow remains available separately.
-    Video work is stored in a sibling
-    ``<video>.labelimgpp.sqlite`` project; existing image annotations and
-    formats are unchanged.
-
-    .. code:: shell
-
-        pip install labelimgplusplus[video]
-
-    The timeline supports frame stepping, exact timecode seeks, variable-rate
-    media, playback without audio, track markers, and verified-frame markers.
-    Accepted frames export to VOC, YOLO, YOLO-seg, COCO, or CreateML. See the
-    `Smart Video Annotation Guide <https://github.com/abhiksark/labelImg-plus-plus/blob/master/docs/features/smart-video-annotation.md>`_
-    for propagation setup, the project workflow, and export behavior.
+.. contents:: On this page
+   :local:
+   :depth: 1
 
 Installation
 ------------
 
-labelImg++ requires Python 3.8 or newer.
-
-From PyPI (Recommended)
-~~~~~~~~~~~~~~~~~~~~~~~
-
-**Note:** The command was renamed from ``labelImgPlusPlus`` to ``labelimgpp`` in v2.1.1. The old command still works but shows a deprecation warning.
-
-.. code:: shell
-
-    pip3 install labelimgplusplus
-    labelimgpp
-
-Or use the full command name:
-
-.. code:: shell
-
-    labelimgplusplus
-
-With a specific image or directory:
-
-.. code:: shell
-
-    labelimgpp [IMAGE_PATH] [PRE-DEFINED CLASS FILE] [SAVE_DIR]
-
-The first positional path can also be a local video or a
-``.labelimgpp.sqlite`` video project. Optional features can be combined:
-
-.. code:: shell
-
-    pip install labelimgplusplus[sam,video]
-
-Build from Source
+Release candidate
 ~~~~~~~~~~~~~~~~~
 
-**Ubuntu/Linux:**
+Use a separate virtual environment for the candidate. Once ``4.0.0rc1`` is
+published on PyPI, install that exact version:
 
 .. code:: shell
 
-    sudo apt-get install pyqt5-dev-tools
-    pip3 install -r requirements/requirements-linux-python3.txt
-    make qt5py3
-    python3 labelImgPlusPlus.py
+   python -m pip install "labelimgplusplus==4.0.0rc1"
+   labelimgpp
 
-**macOS:**
+``labelimgplusplus`` is an equivalent command. The older ``labelImgPlusPlus``
+command still works but emits a deprecation warning. The explicit version pin
+selects this prerelease without ``--pre``. Before publication, use the candidate
+checkout or a matching CI wheel instead; an unpublished version cannot be
+installed from PyPI.
 
-.. code:: shell
-
-    pip3 install pyqt5 lxml
-    make qt5py3
-    python3 labelImgPlusPlus.py
-
-**Windows:**
+Optional features can be installed together:
 
 .. code:: shell
 
-    pip install pyqt5 lxml
-    pyrcc5 -o libs/resources.py resources.qrc
-    python labelImgPlusPlus.py
+   python -m pip install "labelimgplusplus[sam,video]==4.0.0rc1"
 
-Quick Start
------------
+For the latest **stable** release instead, use a separate environment and
+``python -m pip install labelimgplusplus``. Its behavior and Python/Qt baseline
+follow that stable version, not this candidate.
 
-1. **Open images**: Click the file dropdown button or press **Ctrl+U** to load a directory
-2. **Create annotations**: Press **W** or click **Create RectBox**, then draw a box
-3. **Label objects**: Confirm a class beside the box, then continue drawing; Box stays active
-4. **Complete**: Press **E** for **Done & Next** to save, verify, and advance
-5. **Navigate manually**: Use **D** (next) and **A** (previous) when needed
-6. **Review**: Press **Ctrl+G** for gallery mode to review all annotations
+PyQt6 candidate from source
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For video, press **Ctrl+Alt+V**, draw a rectangle or polygon on the paused
-frame, then use the contextual **Objects** inspector to propagate the selected
-anchor. **Review queue** advances through pending suggestions, **Browse video**
-shows lanes/frames plus export readiness, and the integrated timeline keeps the
-four-stage workflow visible.
+Clone the immutable ``v4.0.0rc1`` tag and run the install from the repository
+root. Git and Python 3.10–3.13 are required. Before the tag is published, use
+the existing candidate checkout or a matching CI artifact; the tag-based
+commands below become available at release time.
 
-Supported Annotation Formats
+**Linux and macOS:**
+
+.. code:: shell
+
+   git clone --branch v4.0.0rc1 https://github.com/abhiksark/labelImg-plus-plus.git
+   cd labelImg-plus-plus
+   python3 -m venv .venv
+   . .venv/bin/activate
+   python -m pip install -e .
+   labelimgpp
+
+**Windows PowerShell, using Python 3.13:**
+
+.. code:: powershell
+
+   git clone --branch v4.0.0rc1 https://github.com/abhiksark/labelImg-plus-plus.git
+   Set-Location labelImg-plus-plus
+   py -3.13 -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -e .
+   .\.venv\Scripts\labelimgpp.exe
+
+Using the virtual environment's executables directly avoids changing
+PowerShell's script execution policy.
+
+From the checkout, install optional features with the same environment's
+Python so the installed extras and application come from the same source:
+
+.. code:: shell
+
+   python -m pip install -e ".[sam]"        # Smart Select
+   python -m pip install -e ".[video]"      # Smart Video
+   python -m pip install -e ".[sam,video]"  # Both
+
+On Windows, substitute ``.\.venv\Scripts\python.exe`` for ``python`` unless the
+environment is activated. Both extras share headless OpenCV. The base
+application leaves optional inference and video libraries unloaded until
+needed. See the `optional-dependency guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/guides/optional-dependencies.md>`_
+for supported versions and separately managed SAM 2 dependencies.
+
+Qt and asset troubleshooting
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pip installs PyQt6 automatically; Qt development tools and an RCC resource
+compiler are not required. Icons, translations, and licenses are ordinary
+package data under ``libs/assets``.
+
+Linux still needs a desktop session and Qt's runtime system libraries. On a
+minimal Ubuntu/Debian installation, an ``xcb`` platform-plugin error may mean
+missing X11/xcb libraries, including ``libxcb-cursor0``. Follow Qt's
+`Linux runtime requirements <https://doc.qt.io/qt-6/linux-requirements.html>`_
+for your distribution. ``QT_DEBUG_PLUGINS=1 labelimgpp`` exposes the actual
+missing library; do not install a second OpenCV distribution to repair Qt.
+
+Check packaged assets without opening the annotation workspace:
+
+.. code:: shell
+
+   labelimgpp --verify-assets
+
+Expected output: ``Verified 44 icons, 4 string bundles, and 1 license.``
+From source, ``python3 labelImgPlusPlus.py --verify-assets`` performs the same
+check. The command aliases also support it.
+
+Native executables
+~~~~~~~~~~~~~~~~~~
+
+Candidate CI builds Linux x86-64, Windows x86-64, and macOS arm64 executables
+from one PyInstaller definition. Linux uses Ubuntu 22.04 as its glibc baseline.
+Each build checks packaged assets and startup outside the checkout.
+
+Published candidate downloads belong to the `v4.0.0rc1 GitHub prerelease
+<https://github.com/abhiksark/labelImg-plus-plus/releases/tag/v4.0.0rc1>`_.
+Before publication, open the successful candidate run for the exact commit
+under `GitHub Actions
+<https://github.com/abhiksark/labelImg-plus-plus/actions/workflows/ci.yaml>`_
+and select the matching platform artifact; GitHub may require sign-in.
+Extract the complete artifact before launching it. A CI artifact is not a
+published release, and one artifact's architecture is not a claim of universal
+platform support.
+
+Native builds include base annotation and the plugin host, **not** SAM/video
+dependencies or third-party plugins. Use the Python package with extras for
+those features. See the `build and candidate-qualification guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/build-tools/README.md>`_.
+
+Image quick start
+-----------------
+
+1. **Open a directory** with **Ctrl+U**, or one image with **Ctrl+O**. Choose
+   the annotation format in the command bar; **Ctrl+R** selects a save directory
+   if labels should not live beside the images.
+2. **Draw a box immediately:** in Select, drag empty image space around an
+   object. A drag that starts on an existing annotation moves it instead.
+3. **Name it:** filter or enter a class in the inline picker, then press
+   **Enter**. **Escape** discards the provisional shape. A confirmed annotation
+   is one undo step.
+4. **Keep drawing:** draw-first returns to Select. For a continuous creation
+   session, choose **Box (W)** or **Polygon (P)** explicitly. These tools stay
+   active after class confirmation; choose Select or press Escape while idle
+   to end the session.
+5. **Complete the image:** **E** runs the contextual completion action.
+   **Done & Next** saves, marks an unverified image complete, and advances only
+   after that save succeeds. The last image shows **Mark done**. Previously
+   completed images show **Next image**, **Save & Next**, or a final completion
+   action as appropriate. Failed or superseded saves never navigate away.
+6. **Browse and review:** **A/D** select the previous/next image; **Ctrl+G**
+   opens Gallery. Use **Ctrl+Z / Ctrl+Shift+Z** for undo/redo.
+
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/inline-class.png
+   :alt: A provisional cat box with the inline class picker beside the object
+   :width: 100%
+
+   Geometry stays provisional until its class is confirmed; Escape discards it
+   without adding an annotation.
+
+**Saving:** Save on Navigate is enabled by default. **View → Timed Auto-save**
+is a separate, opt-in setting with 30-second, 1-, 2-, or 5-minute intervals.
+Explicit Save and Verify remain available. Completion/verification persistence
+depends on the annotation format; see `Supported annotation formats`_.
+
+**Mouse navigation:** middle-drag pans, the wheel scrolls, and **Ctrl+wheel**
+zooms. Arrow keys nudge the selected annotation, including polygons.
+
+**Keypoints:** select a rectangle labeled ``person`` (17-point pose) or ``face``
+(5-point landmarks), then press **K**. Left-click visible points and right-click
+occluded points; Escape skips an unplaced point and Ctrl+Z clears the previous
+point while placing keypoints. Other labels and polygon selections do not
+activate these templates. COCO is the format that preserves keypoints.
+
+Video quick start
+-----------------
+
+Install the ``video`` extra first, then follow **Anchor → Propagate → Review →
+Export**:
+
+1. **Open** a local MP4, MOV, MKV, or AVI with **Ctrl+Alt+V**. Existing
+   ``.labelimgpp.sqlite`` projects can also be opened. Video work lives in a
+   sibling ``<video>.labelimgpp.sqlite`` file, separate from image annotations.
+2. **Anchor:** pause on the desired frame, draw a rectangle or polygon, and
+   confirm its class. Use **A/D** for exact frame stepping, the timecode for
+   seeking, and **Ctrl+Space** for playback without audio.
+3. **Propagate:** select an accepted manual anchor and use its Objects card.
+   **T/Shift+T** request forward/backward propagation with an endpoint. The
+   **More → Propagate across video** command uses qualifying manual anchors on
+   the current frame and asks for confirmation before spanning the clip.
+4. **Review:** propagation creates pending suggestions, not accepted labels.
+   **Review queue**, **Accept & Next**, and **Reject** keep the current issue
+   selected and advance through pending observations. **Shift+Enter** accepts;
+   **Backspace** rejects. Full-run review is available from **More**.
+5. **Export:** choose frames and an annotation format. The default **Annotated**
+   selection uses stored timestamps with present, accepted observations.
+   **Current**, **Verified**, and **Range** offer other frame selections. Only
+   accepted annotations are written; selected frames can have no annotations.
+
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/video-review.png
+   :alt: A real video track with a pending propagated suggestion, review controls, and the integrated timeline
+   :width: 100%
+
+   Review generated observations before they become exportable annotations.
+
+Frames are addressed by stream presentation timestamps and time base, not an
+inferred frame number. **Rectangle** tracks interpolate between accepted
+manual anchors; polygons do not interpolate. Keypoint interpolation requires
+compatible layouts. Propagation is a separate operation that can generate
+rectangles, polygons, and associated keypoints.
+
+Accepting a suggestion does **not** promote it to a manual anchor. Use
+**Shift+K** or edit geometry to make a manual correction before seeding another
+run. Pending and rejected suggestions are excluded from exported annotations.
+See the `Smart Video guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/smart-video-annotation.md>`_
+for project recovery, propagation, interpolation, and export details.
+
+Smart Select and video backends
+--------------------------------
+
+Single-click Box or Polygon
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Install the ``sam`` extra, then choose **Smart Select (S)** on the rail or
+**Tools → SAM Segment**. MobileSAM runs through ONNX Runtime without requiring
+PyTorch. Enabling it with an image loaded starts preparation; the default
+encoder/decoder pair is downloaded if absent and SHA256-verified. Further
+clicks on that image reuse its embedding.
+
+Choose an output in the canvas control:
+
+- **Box:** tight pixel bounds of the largest selected mask component.
+- **Polygon:** an editable, simplified contour of that component.
+
+Both currently use the same mask-processing path. A usable polygon is still
+required internally even for Box output; **a direct, polygon-free Box pipeline
+is not implemented**. Box bounds come from the full component, not the
+simplified polygon's vertices.
+
+Review every provisional result with **Use outline (Enter)** or discard it
+with **Try again (Esc)**. Then choose a class if needed. Fixed/default labels
+and established repeat-class sessions skip class entry, **not outline review**.
+The confirmed result is one undo step; Smart Select stays active and the
+output choice persists between sessions.
+
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/smart-select-box.png
+   :alt: MobileSAM-generated cat bounding box awaiting outline approval
+   :width: 100%
+
+   Box output still requires explicit outline approval before class confirmation.
+
+The `Smart Select guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/sam-assisted-polygon.md>`_
+shows Polygon output and model configuration. Custom encoder/decoder files
+must be a compatible matched MobileSAM ONNX export, not arbitrary SAM models.
+Only load models from trusted sources. In video documents, Smart Select works
+on the paused frame; it is not temporal tracking.
+
+Portable propagation and optional SAM 2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The OpenCV backend propagates rectangles, polygons, and associated keypoints.
+It displays cancellable preview-only progress, protects manual anchors
+encountered in either direction, and commits pending tracker observations and
+explicit gaps in one atomic undo step. Editing generated geometry creates a
+manual correction; bounded neighboring regeneration is a separate undoable
+change.
+
+**Tools → SAM Settings…** selects **Auto**, **OpenCV**, or **SAM 2**. Auto uses
+SAM 2 only when its Linux/CUDA environment, compatible Torch/torchvision,
+source-installed SAM 2, checkpoint, and matching configuration are available;
+otherwise it uses OpenCV. The config must reside inside the installed
+``sam2`` package directory. Explicitly selecting unavailable SAM 2 reports the
+missing requirement rather than silently falling back.
+
+labelImg++ does not bundle or download Torch, SAM 2, checkpoints, or configs.
+They are not part of its extras. Follow the optional-dependency and Smart Video
+guides rather than installing them into the base environment indiscriminately.
+
+Workspace and dataset tools
+---------------------------
+
+Gallery and Objects inspector
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The fixed tool rail, compact command bar, and collapsible Objects/Files
+inspector keep editing beside the canvas. Search, rename, select, or hide
+annotations in one Objects view; its context card follows the active tool,
+selected object, or pending video review. Clicking nested annotations selects
+the smallest containing shape.
+
+Image Gallery is embedded in the workspace and previews all five annotation
+formats. Gray borders mean no labels, blue means labeled, and green means
+verified where the format preserves that state. Boxes use corner markers;
+polygons use outlines. S/M/L/XL presets and a slider control thumbnail size.
+
+Video Gallery becomes a track/frame overview. **Distinct** retains manual,
+verified, boundary, and transition events and samples ordinary frames at most
+twice per second, with bounded visual-change refinement. **Annotated** and
+**Pending** expose stored annotations and outstanding review work. Selecting a
+track narrows the overview; export readiness and pending counts remain visible.
+
+Themes, display, and editing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Light and dark themes, Feather icons, and high-DPI scaling serve the same
+workspace. **Ctrl+Shift+T** toggles themes and persists the choice. Brightness
+controls help inspect dark or light images without changing source media.
+See the `theme guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/dark-mode.md>`_
+for light/dark screenshots. Annotation creation and editing support undo/redo.
+
+Ultralytics export
+~~~~~~~~~~~~~~~~~~
+
+**Tools → Export Ultralytics Dataset…** builds a YOLO **detection** dataset
+with ``images/{train,val,test}``, matching labels, and ``data.yaml``. Choose
+deterministic split ratios and image copies or absolute local symlinks. The
+destination must be new or empty; it is published only after export succeeds.
+Polygons become enclosing boxes; this is not a segmentation or pose export.
+See the `Ultralytics export guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/ultralytics-export.md>`_
+for layout and data-preservation limits.
+
+Installed Python plugins
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Install trusted command plugins as separate Python distributions, then review
+and enable them in **Tools → Plugins…** and restart. The versioned public API
+provides host-owned actions, namespaced shortcuts/settings, bounded background
+work, read-only document access, and diagnostics. Plugins do not need changes
+to labelImg++ source.
+
+``LABELIMGPP_DISABLE_PLUGINS=1`` disables plugins for recovery. Reset All also
+clears plugin enablement and configuration; see `Configuration and recovery`_.
+The `plugin authoring guide
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/guides/plugin-authoring.md>`_
+describes the public API and PyQt6 compatibility boundary.
+
+Supported annotation formats
 ----------------------------
 
-.. list-table::
+.. list-table:: What survives saving and reopening
    :header-rows: 1
-   :widths: 18 12 70
+   :widths: 19 43 19 19
 
    * - Format
-     - Extension
-     - Annotation support
-   * - PASCAL VOC
-     - ``.xml``
-     - Bounding boxes and the labelImg++ polygon extension
-   * - YOLO (bbox)
-     - ``.txt``
-     - Normalized bounding boxes, with ``classes.txt`` for class names
-   * - CreateML
-     - ``.json``
-     - Bounding boxes in Apple's CreateML annotation format
-   * - COCO
-     - ``.json``
-     - Bounding boxes, polygon segmentation, and keypoints
-   * - YOLO-seg
-     - ``.txt``
-     - Normalized polygons; rectangles are written as four-point polygons
+     - Geometry
+     - Verified state
+     - Difficult flag
+   * - PASCAL VOC (``.xml``)
+     - Boxes; labelImg++ polygon extension
+     - Yes
+     - Yes
+   * - YOLO bbox (``.txt``)
+     - Normalized boxes; ``classes.txt`` names
+     - No
+     - No
+   * - CreateML (``.json``)
+     - Bounding boxes
+     - Yes
+     - No
+   * - COCO (``.json``)
+     - Boxes, polygons, keypoints
+     - No
+     - Yes
+   * - YOLO-seg (``.txt``)
+     - Normalized polygons; boxes become four-point polygons
+     - No
+     - No
 
-Polygon drawing and editing are available in the application. Saving polygons
-as YOLO bounding boxes or CreateML warns before converting each polygon to its
-enclosing box. Keypoints are preserved by COCO; the other formats do not encode
-them.
+Saving polygons as YOLO bbox or CreateML shows one conversion warning for the
+save, then converts affected polygons to enclosing boxes. Only COCO preserves
+keypoints. Image completion/green Gallery status does not survive reopening
+formats that cannot encode verification. Video review and anchor state live in
+the SQLite project, not in these exported image formats.
 
-Keyboard Shortcuts
-------------------
+Keyboard and mouse controls
+---------------------------
 
-These are the defaults. They can be changed from **Help → Keyboard Shortcuts**.
+These are default bindings. **Help → Keyboard Shortcuts** customizes the
+configurable actions; arrow nudges, mouse gestures, and the theme toggle below
+are fixed bindings outside that dialog.
 
-**File Operations**
+.. list-table:: Files and navigation
+   :header-rows: 1
+   :widths: 30 70
 
-+--------------------+--------------------------------------------+
-| Ctrl + O           | Open file                                  |
-+--------------------+--------------------------------------------+
-| Ctrl + Alt + V     | Open video or video project                |
-+--------------------+--------------------------------------------+
-| Ctrl + U           | Open directory                             |
-+--------------------+--------------------------------------------+
-| Ctrl + R           | Change save directory                      |
-+--------------------+--------------------------------------------+
-| Ctrl + S           | Save current annotation                    |
-+--------------------+--------------------------------------------+
-| Ctrl + Y           | Cycle annotation format                    |
-+--------------------+--------------------------------------------+
-| Ctrl + Shift + S   | Save as                                    |
-+--------------------+--------------------------------------------+
+   * - Shortcut
+     - Action
+   * - Ctrl+O / Ctrl+U
+     - Open image / image directory
+   * - Ctrl+Alt+V
+     - Open video or video project
+   * - Ctrl+R
+     - Change annotation save directory
+   * - Ctrl+S / Ctrl+Shift+S
+     - Save / Save As
+   * - Ctrl+Y
+     - Cycle annotation format
+   * - A / D
+     - Previous / next image; exact frame stepping in video
+   * - Ctrl+G
+     - Toggle Gallery / video overview
+   * - E
+     - Contextual completion, browse, or review action
+   * - Space
+     - Verify current image or video frame
+   * - Ctrl+Space
+     - Play/pause video without audio
 
-**Navigation**
+.. list-table:: Annotation and review
+   :header-rows: 1
+   :widths: 30 70
 
-+--------------------+--------------------------------------------+
-| D                  | Next image                                 |
-+--------------------+--------------------------------------------+
-| A                  | Previous image                             |
-+--------------------+--------------------------------------------+
-| Ctrl + G           | Toggle Gallery Mode                        |
-+--------------------+--------------------------------------------+
+   * - Shortcut
+     - Action
+   * - W / P / S
+     - Continuous Box / Polygon / optional Smart Select
+   * - Ctrl+J
+     - Select/edit tool
+   * - K
+     - Keypoint placement on selected eligible template rectangle
+   * - Enter / Escape
+     - Confirm / discard provisional geometry or class stage
+   * - Ctrl+Z / Ctrl+Shift+Z
+     - Undo / redo; keypoint placement has its own previous-point undo
+   * - Ctrl+D / Delete
+     - Duplicate / delete selected annotation
+   * - Shift+K
+     - Add a manual keyframe to the selected video track
+   * - T / Shift+T
+     - Propagate forward / backward from a qualifying manual anchor
+   * - Shift+Enter / Backspace
+     - Accept / reject selected pending video observation
+   * - Ctrl+Shift+Enter / Ctrl+Shift+Backspace
+     - Accept / reject a propagation run
 
-In video mode, **A/D** step exact frames, **Ctrl+Space** toggles playback,
-**Shift+K** adds a keyframe to the selected track, **T/Shift+T** track forward
-or backward, and **Shift+Enter/Backspace** accept or reject the current
-suggestion. **Space** continues to verify the current frame.
+.. list-table:: View and pointer gestures
+   :header-rows: 1
+   :widths: 30 70
 
-**Annotation**
+   * - Control
+     - Action
+   * - Ctrl++ / Ctrl+-
+     - Zoom in / out
+   * - Ctrl+F / Ctrl+Shift+F
+     - Fit window / fit width
+   * - Ctrl+Shift+T (fixed)
+     - Toggle dark/light theme
+   * - Arrow keys (fixed)
+     - Nudge selected annotation
+   * - Left-drag empty pixels in Select
+     - Draw a box; dragging an existing annotation moves it
+   * - Middle-drag / wheel
+     - Pan / scroll
+   * - Ctrl+wheel
+     - Zoom
 
-+--------------------+--------------------------------------------+
-| W                  | Create bounding box                        |
-+--------------------+--------------------------------------------+
-| P                  | Create polygon                             |
-+--------------------+--------------------------------------------+
-| K                  | Enter keypoint mode                        |
-+--------------------+--------------------------------------------+
-| Ctrl + Z           | Undo                                       |
-+--------------------+--------------------------------------------+
-| Ctrl + Shift + Z   | Redo                                       |
-+--------------------+--------------------------------------------+
-| Ctrl + D           | Duplicate selected box                     |
-+--------------------+--------------------------------------------+
-| Del                | Delete selected box                        |
-+--------------------+--------------------------------------------+
-| Space              | Mark image as verified                     |
-+--------------------+--------------------------------------------+
-| Arrow keys         | Move selected box                          |
-+--------------------+--------------------------------------------+
+Single Class Mode remains available through the existing View menu and class
+strategy controls; it does not share Save As's Ctrl+Shift+S binding.
 
-**View**
+Configuration and recovery
+--------------------------
 
-+--------------------+--------------------------------------------+
-| Ctrl + +           | Zoom in                                    |
-+--------------------+--------------------------------------------+
-| Ctrl + -           | Zoom out                                   |
-+--------------------+--------------------------------------------+
-| Ctrl + F           | Fit window                                 |
-+--------------------+--------------------------------------------+
-| Ctrl + Shift + F   | Fit width                                  |
-+--------------------+--------------------------------------------+
-| Ctrl + Shift + T   | Toggle dark mode theme                     |
-+--------------------+--------------------------------------------+
+Classes and command-line paths
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Configuration
--------------
+The bundled defaults are in ``libs/data/predefined_classes.txt``. Keep custom
+labels in a separate UTF-8 file, one class per line:
 
-**Predefined Classes**
+.. code:: text
 
-Edit ``data/predefined_classes.txt`` to customize the label options:
+   cat
+   dog
+   person
+   car
+   bicycle
 
-.. code::
-
-    dog
-    cat
-    person
-    car
-    bicycle
-
-**Reset Settings**
-
-If you encounter issues, reset the settings:
+Pass an image/directory, optional class file, and optional save directory:
 
 .. code:: shell
 
-    rm ~/.labelImgSettings.json
+   labelimgpp /path/to/images /path/to/classes.txt /path/to/labels
 
-Or use **Menu > File > Reset All**
+The first path can also be a video or ``.labelimgpp.sqlite`` project. Default
+labels and repeat-last-class controls reduce repeated class entry; they do not
+skip Smart Select outline review.
 
-Release History
----------------
+Reset settings
+~~~~~~~~~~~~~~
 
-This source tree identifies itself as **4.0.0rc0**, a release candidate for 4.0. Install it with ``pip install --pre labelimgplusplus``. See
-the `release history
-<https://github.com/abhiksark/labelImg-plus-plus/blob/master/HISTORY.rst>`__ for
-version-by-version changes and `GitHub Releases
-<https://github.com/abhiksark/labelImg-plus-plus/releases>`__ for published
-artifacts.
+**Application menu → File → Reset All** asks for confirmation, clears
+preferences, and restarts the application. It removes the save directory,
+format, theme, recents, layout, shortcut overrides, and plugin
+activation/configuration settings—not annotation files. Back up settings first
+if you need to retain those choices.
 
-Contributing
-------------
+For manual recovery, **quit the application first** so closing it cannot
+rewrite the settings you removed. On Linux/macOS:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+.. code:: shell
 
-1. Fork the repository
-2. Create your feature branch (``git checkout -b feature/amazing-feature``)
-3. Commit your changes (``git commit -m 'Add amazing feature'``)
-4. Push to the branch (``git push origin feature/amazing-feature``)
-5. Open a Pull Request
+   rm ~/.labelImgSettings.json
 
-License
--------
+On Windows PowerShell:
 
-`MIT License <https://github.com/abhiksark/labelImg-plus-plus/blob/master/LICENSE>`_
+.. code:: powershell
 
-Based on LabelImg by Tzutalin.
+   Remove-Item "$HOME\.labelImgSettings.json"
 
-Author
-------
+Upgrading and recovery
+----------------------
 
-Maintained by `Abhik Sarkar <https://abhik.ai>`__
+Close labelImg++ before backing up annotations, video project sidecars, and
+``~/.labelImgSettings.json``. Keep those backups and the previous environment
+until you have opened, edited, saved, and reopened representative files in the
+candidate. Use copies of production datasets for qualification.
 
-Acknowledgments
----------------
+Install the candidate in a fresh virtual environment rather than mixing Qt
+bindings and plugin dependencies into an existing installation. API-major-1
+plugins must not import PyQt5 into the PyQt6 host. Video projects may have
+undergone schema migrations in earlier releases; rollback means restoring
+compatible backups, not assuming that an older application can reverse them.
 
-- Original LabelImg by Tzutalin
-- `Feather Icons <https://feathericons.com/>`__ for modern iconography
-- All contributors and users of labelImg++
+Release history and contributing
+--------------------------------
+
+This source tree describes the **4.0.0rc1 PyQt6 release candidate**, not a stable
+4.0.0 release. Its `release history
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/HISTORY.rst>`_
+separates changes since the PyQt5-based **4.0.0rc0** from earlier features.
+Tag-aligned links and published downloads become available when the release is
+cut; a checkout or CI artifact alone does not publish a release.
+
+Create ``feature/*``, ``fix/*``, or ``chore/*`` branches from an up-to-date
+``dev`` and open pull requests targeting ``dev``. Use Conventional Commit
+subjects such as ``fix(shortcuts): restore save as keyboard dispatch``. Keep
+changes focused and run the applicable repository checks before submitting.
+
+License and credits
+-------------------
+
+The application is under the `MIT License
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/LICENSE>`_. It is
+based on LabelImg by Tzutalin and maintained by `Abhik Sarkar <https://abhik.ai>`_.
+Thanks to the original LabelImg contributors, `Feather Icons
+<https://feathericons.com/>`_, and all labelImg++ contributors and users.
+
+Media credits
+~~~~~~~~~~~~~
+
+The cat photograph is `Cat November 2010-1a
+<https://commons.wikimedia.org/wiki/File:Cat_November_2010-1a.jpg>`_ by
+Alvesgaspar, licensed `CC BY-SA 3.0
+<https://creativecommons.org/licenses/by-sa/3.0/>`_. The workspace, inline-class,
+and Smart Select screenshots resize that photograph and add annotation/UI
+overlays; those screenshot adaptations are also distributed under CC BY-SA
+3.0. This does not change the application's MIT license.
+
+The video screenshot uses `Samplelib's 10-second MP4 sample
+<https://samplelib.com/sample-mp4.html>`_, offered there without license
+restrictions, with annotations and review controls added by labelImg++.
+Screenshots demonstrate actual application states, not detection or tracking
+accuracy benchmarks.

@@ -1,33 +1,27 @@
 # libs/widgets/annotationInspector.py
 """Unified, geometry-free projection for image shapes and video tracks."""
 
-try:
-    from PyQt5.QtCore import (
-        QAbstractListModel, QModelIndex, QSortFilterProxyModel, Qt, pyqtSignal,
-    )
-    from PyQt5.QtGui import QColor
-    from PyQt5.QtWidgets import QListView
-except ImportError:
-    from PyQt4.QtCore import (
-        QAbstractListModel, QModelIndex, QSortFilterProxyModel, Qt, pyqtSignal,
-    )
-    from PyQt4.QtGui import QColor, QListView
+from PyQt6.QtCore import (
+    QAbstractListModel, QModelIndex, QSortFilterProxyModel, Qt, pyqtSignal,
+)
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QListView
 
 
 class AnnotationRoles(object):
-    Identity = Qt.UserRole + 1
-    Type = Qt.UserRole + 2
-    Class = Qt.UserRole + 3
-    Color = Qt.UserRole + 4
-    Visible = Qt.UserRole + 5
-    Difficult = Qt.UserRole + 6
-    Selected = Qt.UserRole + 7
-    Provenance = Qt.UserRole + 8
-    VideoSpan = Qt.UserRole + 9
-    CurrentRenderState = Qt.UserRole + 10
-    PendingReview = Qt.UserRole + 11
-    Keyframe = Qt.UserRole + 12
-    Object = Qt.UserRole + 13
+    Identity = Qt.ItemDataRole.UserRole.value + 1
+    Type = Qt.ItemDataRole.UserRole.value + 2
+    Class = Qt.ItemDataRole.UserRole.value + 3
+    Color = Qt.ItemDataRole.UserRole.value + 4
+    Visible = Qt.ItemDataRole.UserRole.value + 5
+    Difficult = Qt.ItemDataRole.UserRole.value + 6
+    Selected = Qt.ItemDataRole.UserRole.value + 7
+    Provenance = Qt.ItemDataRole.UserRole.value + 8
+    VideoSpan = Qt.ItemDataRole.UserRole.value + 9
+    CurrentRenderState = Qt.ItemDataRole.UserRole.value + 10
+    PendingReview = Qt.ItemDataRole.UserRole.value + 11
+    Keyframe = Qt.ItemDataRole.UserRole.value + 12
+    Object = Qt.ItemDataRole.UserRole.value + 13
 
 
 class AnnotationListModel(QAbstractListModel):
@@ -176,7 +170,7 @@ class AnnotationListModel(QAbstractListModel):
         pending = any(item.review_state == 'pending' for item in observations)
         return track, span, render_state, provenance, pending, keyframe
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self._rows):
             return None
         identity = self.identity_at(index)
@@ -213,11 +207,11 @@ class AnnotationListModel(QAbstractListModel):
             tooltip = None
             object_value = shape
         values = {
-            Qt.DisplayRole: display,
-            Qt.ToolTipRole: tooltip,
-            Qt.EditRole: class_name,
-            Qt.CheckStateRole: (Qt.Checked if self._visibility.get(
-                identity, True) else Qt.Unchecked),
+            Qt.ItemDataRole.DisplayRole: display,
+            Qt.ItemDataRole.ToolTipRole: tooltip,
+            Qt.ItemDataRole.EditRole: class_name,
+            Qt.ItemDataRole.CheckStateRole: (Qt.CheckState.Checked if self._visibility.get(
+                identity, True) else Qt.CheckState.Unchecked),
             # Row text uses the theme's own foreground. Painting it in the
             # shape colour capped contrast at 3.7:1 (dark) / 2.8:1 (light),
             # because every shape colour carries alpha and composites toward
@@ -241,24 +235,24 @@ class AnnotationListModel(QAbstractListModel):
 
     def flags(self, index):
         if not index.isValid():
-            return Qt.NoItemFlags
-        return (Qt.ItemIsEnabled | Qt.ItemIsSelectable |
-                Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+            return Qt.ItemFlag.NoItemFlags
+        return (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
+                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable)
 
-    def setData(self, index, value, role=Qt.EditRole):
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
         identity = self.identity_at(index)
         if identity is None:
             return False
-        if role == Qt.CheckStateRole:
-            visible = value == Qt.Checked
+        if role == Qt.ItemDataRole.CheckStateRole:
+            visible = value == Qt.CheckState.Checked
             if self._visibility.get(identity, True) == visible:
                 return False
             self._visibility[identity] = visible
             self.dataChanged.emit(index, index, [
-                Qt.CheckStateRole, AnnotationRoles.Visible])
+                Qt.ItemDataRole.CheckStateRole, AnnotationRoles.Visible])
             self.visibilityChangeRequested.emit(identity, visible)
             return True
-        if role == Qt.EditRole:
+        if role == Qt.ItemDataRole.EditRole:
             label = str(value).strip()
             if not label or label == self.data(index, AnnotationRoles.Class):
                 return False

@@ -1,10 +1,9 @@
 # libs/core/settings.py
 import json
 import os
-from enum import Enum
 
-from PyQt5.QtCore import QByteArray, QPoint, QSize
-from PyQt5.QtGui import QColor
+from PyQt6.QtCore import QByteArray, QPoint, QSize
+from PyQt6.QtGui import QColor
 
 # Settings are persisted as JSON rather than pickle: pickle.load executes
 # arbitrary code embedded in the file, and ~/.labelImgSettings is a
@@ -37,8 +36,11 @@ def _encode(obj):
     if isinstance(obj, QByteArray):
         return {_TYPE_TAG: 'QByteArray',
                 'b64': bytes(obj.toBase64()).decode('ascii')}
-    if isinstance(obj, Enum):
-        return {_TYPE_TAG: 'Enum', 'cls': type(obj).__name__, 'value': obj.value}
+    for class_name, enum_class in _enum_classes().items():
+        if isinstance(obj, enum_class):
+            return {
+                _TYPE_TAG: 'Enum', 'cls': class_name, 'value': obj.value,
+            }
     raise TypeError('Object of type %s is not JSON serializable'
                     % type(obj).__name__)
 

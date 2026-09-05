@@ -10,7 +10,7 @@ that stop that.
 import time
 from unittest.mock import MagicMock, patch
 
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_types import ObservationRecord
@@ -52,7 +52,7 @@ def test_a_sweeping_run_asks_before_it_starts(tmp_path, make_video):
     try:
         _seed(window)
         with patch.object(QMessageBox, 'question',
-                          return_value=QMessageBox.Cancel) as ask:
+                          return_value=QMessageBox.StandardButton.Cancel) as ask:
             handle = window.propagate_across_video()
         assert ask.called, 'a sweeping run must confirm its scope'
         assert handle is None
@@ -69,7 +69,7 @@ def test_the_confirmation_states_the_real_scope(tmp_path, make_video):
     try:
         _seed(window)
         with patch.object(QMessageBox, 'question',
-                          return_value=QMessageBox.Cancel) as ask:
+                          return_value=QMessageBox.StandardButton.Cancel) as ask:
             window.propagate_across_video()
         message = ask.call_args[0][2]
         assert '1 track' in message
@@ -185,14 +185,14 @@ def test_full_run_review_confirms_multi_item_scope_and_stays_one_undo_step(
         baseline_undo = len(window.undo_stack)
 
         with patch.object(QMessageBox, 'question',
-                          return_value=QMessageBox.Cancel) as ask:
+                          return_value=QMessageBox.StandardButton.Cancel) as ask:
             assert not window.review_full_propagation('accepted')
         assert ask.called
         assert all(window.video_model.observations[key].review_state ==
                    'pending' for key in keys)
 
         with patch.object(QMessageBox, 'question',
-                          return_value=QMessageBox.Yes):
+                          return_value=QMessageBox.StandardButton.Yes):
             assert window.review_full_propagation('accepted')
         assert all(window.video_model.observations[key].review_state ==
                    'accepted' for key in keys)

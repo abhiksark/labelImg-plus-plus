@@ -3,11 +3,8 @@ include HISTORY.rst
 include LICENSE
 include README.rst
 
-include resources.qrc
-include resources/icons/feather/LICENSE.txt
 
 recursive-include data *
-recursive-include icons *
 recursive-include libs *
 
 recursive-exclude build-tools *

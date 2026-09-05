@@ -1,9 +1,9 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QPointF, QEvent, Qt
-from PyQt5.QtGui import QPixmap, QMouseEvent
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF, QEvent, Qt
+from PyQt6.QtGui import QPixmap, QMouseEvent
+from PyQt6.QtWidgets import QApplication
 
 from libs.widgets.canvas import Canvas
 from libs.core.shape import ShapeType
@@ -59,8 +59,8 @@ def test_left_click_in_sam_mode_emits_samclicked_in_image_coords():
     got = []
     c.samClicked.connect(lambda p: got.append((p.x(), p.y())))
     c.set_sam_mode(True)
-    ev = QMouseEvent(QEvent.MouseButtonPress, QPointF(30, 40),
-                     Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    ev = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(30, 40),
+                     Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
     c.mousePressEvent(ev)
     assert len(got) == 1
     # The signal must carry image-space coords (transform_pos), not widget coords.

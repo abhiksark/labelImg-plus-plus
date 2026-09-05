@@ -2,8 +2,8 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from PyQt5.QtCore import QPointF, Qt
-from PyQt5.QtWidgets import QInputDialog, QMessageBox
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
 from labelImgPlusPlus import get_main_app
 from libs.core.video_project import load_project
@@ -53,7 +53,7 @@ def test_unified_inspector_materializes_shape_and_renames_globally(
         shape = window.canvas.shapes[0]
         assert shape.video_track_id == 'track-1'
         index = window.annotation_model.index_for_identity('track-1')
-        window.annotation_model.setData(index, 'vehicle', Qt.EditRole)
+        window.annotation_model.setData(index, 'vehicle', Qt.ItemDataRole.EditRole)
         assert window.video_model.tracks['track-1'].label == 'vehicle'
         assert window.canvas.shapes[0].label == 'vehicle'
     finally:
@@ -76,13 +76,13 @@ def test_unified_rows_include_tracks_absent_from_current_frame(
         assert window.annotation_model.rowCount() == 2
         assert len(window.canvas.shapes) == 1
         index = window.annotation_model.index_for_identity('track-absent')
-        assert window.annotation_model.data(index, Qt.DisplayRole).startswith(
+        assert window.annotation_model.data(index, Qt.ItemDataRole.DisplayRole).startswith(
             'person')
         window._select_annotation_identity('track-absent')
         assert window.current_shape() is None
         assert window.actions.edit.isEnabled()
         assert window.annotation_model.setData(
-            index, 'pedestrian', Qt.EditRole)
+            index, 'pedestrian', Qt.ItemDataRole.EditRole)
         assert window.video_model.tracks['track-absent'].label == 'pedestrian'
     finally:
         window.dirty = False
@@ -287,7 +287,7 @@ def test_close_with_save_ignores_first_event_until_async_commit_finishes(
         _seed_track(window)
         with patch.object(
                 window, 'discard_changes_dialog',
-                return_value=QMessageBox.Yes), patch(
+                return_value=QMessageBox.StandardButton.Yes), patch(
                 'labelImgPlusPlus.save_project_delta', delayed), patch.object(
                 window, 'close', return_value=True) as close:
             window.closeEvent(event)

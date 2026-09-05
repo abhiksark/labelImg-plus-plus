@@ -4,9 +4,9 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QPointF, Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QApplication
 
 from labelImgPlusPlus import MainWindow
 from libs.core.shape import Shape, ShapeType
@@ -69,7 +69,7 @@ def test_image_edits_visibility_and_undo_use_canonical_shape(
         index = window.annotation_model.index_for_identity(identity)
         window._select_annotation_identity(identity)
 
-        assert window.annotation_model.setData(index, 'vehicle', Qt.EditRole)
+        assert window.annotation_model.setData(index, 'vehicle', Qt.ItemDataRole.EditRole)
         assert shape.label == 'vehicle'
         window.undo_action()
         assert shape.label == 'car'
@@ -80,7 +80,7 @@ def test_image_edits_visibility_and_undo_use_canonical_shape(
         assert shape.difficult is False
 
         assert window.annotation_model.setData(
-            index, Qt.Unchecked, Qt.CheckStateRole)
+            index, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         assert window.canvas.isVisible(shape) is False
 
         old_color = shape.line_color

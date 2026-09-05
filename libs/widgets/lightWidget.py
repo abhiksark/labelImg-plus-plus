@@ -1,28 +1,24 @@
-try:
-    from PyQt5.QtGui import QColor, QFontMetrics
-    from PyQt5.QtCore import Qt, QSize
-    from PyQt5.QtWidgets import QSpinBox, QAbstractSpinBox
-except ImportError:
-    from PyQt4.QtGui import QColor, QFontMetrics, QSpinBox, QAbstractSpinBox
-    from PyQt4.QtCore import Qt, QSize
+from PyQt6.QtGui import QColor, QFontMetrics
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtWidgets import QSpinBox, QAbstractSpinBox
 
 
 class LightWidget(QSpinBox):
 
     def __init__(self, title, value=50):
         super(LightWidget, self).__init__()
-        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.setRange(0, 100)
         self.setSuffix(' %')
         self.setValue(value)
         self.setToolTip(title)
         self.setStatusTip(self.toolTip())
-        self.setAlignment(Qt.AlignCenter)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def minimumSizeHint(self):
         height = super(LightWidget, self).minimumSizeHint().height()
         fm = QFontMetrics(self.font())
-        width = fm.width(str(self.maximum()))
+        width = fm.horizontalAdvance(str(self.maximum()))
         return QSize(width, height)
 
     def color(self):
