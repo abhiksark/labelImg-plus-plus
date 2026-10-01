@@ -418,6 +418,8 @@ def test_sam_try_again_discards_result_without_mutation(tmp_path):
     try:
         _prepare_image(window, tmp_path)
         window.sam_output_mode = 'polygon'
+        window.use_default_label_checkbox.setChecked(True)
+        window.default_label = 'dog'
         _stage_smart_select(window)
         assert window.canvas.provisional_shape is not None
         assert window.class_picker.isVisible()
@@ -456,16 +458,16 @@ def test_sam_try_again_discards_result_without_mutation(tmp_path):
         app.processEvents()
 
 
-def test_smart_select_approval_enters_class_stage_and_escape_discards(
+def test_smart_select_opens_class_stage_directly_and_escape_discards(
         tmp_path):
     app, window = get_main_app()
     try:
         _prepare_image(window, tmp_path)
         _stage_smart_select(window)
 
-        _approve_outline(window)
         app.processEvents()
         assert window.canvas.provisional_shape is not None
+        assert window.class_picker.review_actions.isHidden()
         assert window.class_picker.prompt.text() == 'Choose a class'
         assert window.class_picker.edit.hasFocus()
         assert window.workspace_pages.canvas_chrome.annotation_session_hint \
@@ -500,7 +502,6 @@ def test_smart_select_class_click_commits_and_rearms_next_point(tmp_path):
         window.label_hist = ['vehicle']
         _stage_smart_select(window)
         first = window.canvas.provisional_shape
-        _approve_outline(window)
         app.processEvents()
 
         item = window.class_picker.list_widget.item(0)
@@ -517,9 +518,77 @@ def test_smart_select_class_click_commits_and_rearms_next_point(tmp_path):
             polygon=((20.0, 20.0), (90.0, 20.0), (90.0, 70.0)),
             bounds=(20.0, 20.0, 91.0, 71.0)))
         assert window.canvas.provisional_shape is not None
-        assert window.class_picker.prompt.text() == 'Use this outline?'
+        assert window.class_picker.prompt.text() == 'Choose a class'
         assert window.canvas.shapes == [first]
     finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_smart_select_classifies_in_one_step_and_escape_discards(tmp_path):
+    """One picker interaction commits a Smart Select shape; Escape drops it."""
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        _stage_smart_select(window)
+        first = window.canvas.provisional_shape
+        app.processEvents()
+        assert first is not None
+        assert window.canvas.shapes == []
+        assert window.class_picker.prompt.text() == 'Choose a class'
+        assert window.class_picker.edit.hasFocus()
+
+        _enter_class(window, 'vehicle')
+        app.processEvents()
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.shapes == [first]
+        assert first.label == 'vehicle'
+        assert not window.class_picker.isVisible()
+        assert window.canvas.mode == window.canvas.CREATE_SAM
+
+        _stage_smart_select(window, SamResult(
+            polygon=((20.0, 20.0), (90.0, 20.0), (90.0, 70.0)),
+            bounds=(20.0, 20.0, 91.0, 71.0)))
+        app.processEvents()
+        assert window.canvas.provisional_shape is not None
+        QTest.keyClick(window.class_picker.edit, Qt.Key.Key_Escape)
+        app.processEvents()
+        assert window.canvas.provisional_shape is None
+        assert window.canvas.shapes == [first]
+        assert window.annotation_model.rowCount() == 1
+        assert not window.class_picker.isVisible()
+        assert window.canvas.mode == window.canvas.CREATE_SAM
+        assert window.canvas.hasFocus()
+
+        window.undo_action()
+        assert window.canvas.shapes == []
+        assert not window.undo_stack.can_undo()
+    finally:
+        window.dirty = False
+        window.close()
+        app.processEvents()
+        app.processEvents()
+
+
+def test_smart_select_repeat_without_a_class_opens_the_class_picker(
+        tmp_path):
+    """No class is preset yet, so there is nothing to confirm the outline as."""
+    app, window = get_main_app()
+    try:
+        _prepare_image(window, tmp_path)
+        window.single_class_mode.setChecked(True)
+        window._session_last_class = None
+        _stage_smart_select(window)
+        app.processEvents()
+
+        assert window.canvas.provisional_shape is not None
+        assert window.class_picker.prompt.text() == 'Choose a class'
+        assert window.class_picker.review_actions.isHidden()
+        assert window.class_picker.edit.hasFocus()
+    finally:
+        window._cancel_provisional_shape()
         window.dirty = False
         window.close()
         app.processEvents()

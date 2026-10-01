@@ -281,17 +281,21 @@ required internally even for Box output; **a direct, polygon-free Box pipeline
 is not implemented**. Box bounds come from the full component, not the
 simplified polygon's vertices.
 
-Review every provisional result with **Use outline (Enter)** or discard it
-with **Try again (Esc)**. Then choose a class if needed. Fixed/default labels
-and established repeat-class sessions skip class entry, **not outline review**.
+Every provisional result takes one confirmation. The class picker opens beside
+the outline: choose or type a class and press **Enter** to keep the result, or
+press **Esc** to discard it and try another point. Fixed/default labels and
+established repeat-class sessions have no class to enter, so they confirm the
+outline instead, for example with **Use outline as car (Enter)**, or discard it
+with **Try again (Esc)**; they do **not** skip that confirmation.
 The confirmed result is one undo step; Smart Select stays active and the
 output choice persists between sessions.
 
 .. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/smart-select-box.png
-   :alt: MobileSAM-generated cat bounding box awaiting outline approval
+   :alt: MobileSAM-generated cat bounding box awaiting outline confirmation
    :width: 100%
 
-   Box output still requires explicit outline approval before class confirmation.
+   Outline confirmation for a fixed or repeat-class session. Other sessions
+   show the class picker in its place.
 
 The `Smart Select guide
 <https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/sam-assisted-polygon.md>`_
@@ -531,7 +535,7 @@ Pass an image/directory, optional class file, and optional save directory:
 
 The first path can also be a video or ``.labelimgpp.sqlite`` project. Default
 labels and repeat-last-class controls reduce repeated class entry; they do not
-skip Smart Select outline review.
+skip Smart Select outline confirmation.
 
 Reset settings
 ~~~~~~~~~~~~~~

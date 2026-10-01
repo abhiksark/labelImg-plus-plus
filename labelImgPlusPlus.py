@@ -3914,8 +3914,16 @@ class MainWindow(QMainWindow, WindowMixin):
                 and self._pending_provisional_shape is not shape):
             self._dismiss_class_picker(discard=False)
         self._pending_provisional_shape = shape
+        # Smart Select geometry is model output. It keeps a separate outline
+        # confirmation only when a preset class would commit it unseen;
+        # otherwise the class picker is that confirmation, in one step.
+        preset_class = (
+            self.use_default_label_checkbox.isChecked()
+            or (self.single_class_mode.isChecked()
+                and bool(self._session_last_class)))
         self._provisional_phase = (
-            'review' if self.canvas.mode == self.canvas.CREATE_SAM else 'class')
+            'review' if preset_class
+            and self.canvas.mode == self.canvas.CREATE_SAM else 'class')
         self.update_save_status(saved=not self.dirty)
         self._update_annotation_session_hint()
         self._sync_command_bar()
