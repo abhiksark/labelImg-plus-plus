@@ -62,7 +62,7 @@ from libs.core.settings import Settings
 from libs.core.commands import (
     UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand,
     EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
-    EditShapeAttributesCommand, VideoModelCommand,
+    EditShapeAttributesCommand, SetClassColorCommand, VideoModelCommand,
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
@@ -130,7 +130,7 @@ from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
-    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
+    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED, SETTING_CLASS_COLORS,
     SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
     SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
@@ -148,7 +148,8 @@ from libs.utils.constants import (
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
-    generate_color_by_text, natural_sort
+    generate_color_by_text, natural_sort, class_color,
+    class_color_overrides, set_class_color, set_class_colors,
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.window_geometry import default_window_size, fit_to_available
@@ -1389,6 +1390,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # modern splitter restores only its validated workspace settings.
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
         Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
+        set_class_colors(settings.get(SETTING_CLASS_COLORS))
         self.canvas.set_drawing_color(self.line_color)
         # Add chris
         Shape.difficult = self.difficult
@@ -3598,12 +3600,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 if line_color:
                     shape.line_color = QColor(*line_color)
                 else:
-                    shape.line_color = generate_color_by_text(label)
+                    shape.line_color = class_color(label)
 
                 if fill_color:
                     shape.fill_color = QColor(*fill_color)
                 else:
-                    shape.fill_color = generate_color_by_text(label)
+                    shape.fill_color = class_color(label)
 
                 self.add_label(shape, refresh=False)
         for action in self.actions.onShapesPresent:
@@ -3884,7 +3886,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         old_label = shape.label
         shape.label = label
-        shape.line_color = generate_color_by_text(label)
+        shape.line_color = class_color(label)
         self.undo_stack.push(EditLabelCommand(
             self, shape, old_label, label))
         self.annotation_model.notify_identity_changed(identity)
@@ -4006,7 +4008,7 @@ class MainWindow(QMainWindow, WindowMixin):
         video_before = (self.video_model.snapshot_state()
                         if self.document_kind == DocumentKind.VIDEO else None)
         shape = self.canvas.commit_provisional_shape(
-            text, generate_color_by_text(text))
+            text, class_color(text))
         self._pending_provisional_shape = None
         self._provisional_phase = None
         self.update_save_status(saved=not self.dirty)
@@ -7017,6 +7019,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Preserve obsolete window/state bytes verbatim for downgrade use.
         settings[SETTING_LINE_COLOR] = self.line_color
         settings[SETTING_FILL_COLOR] = self.fill_color
+        settings[SETTING_CLASS_COLORS] = class_color_overrides()
         settings[SETTING_RECENT_FILES] = self.recent_files
         settings[SETTING_GALLERY_MODE] = self.gallery_mode_enabled
         if self.default_save_dir and os.path.exists(self.default_save_dir):
@@ -8406,37 +8409,79 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.redo.setToolTip("Redo")
 
     def choose_shape_line_color(self):
-        if (self.document_kind == DocumentKind.VIDEO
-                and not self._ensure_video_editable()):
+        if self.document_kind != DocumentKind.VIDEO:
+            # An image shape is coloured by its class; a video track keeps its
+            # own colour in the project.
+            self._choose_class_color()
+            return
+        if not self._ensure_video_editable():
             return
         color = self.color_dialog.getColor(self.line_color, u'Choose Line Color',
                                            default=DEFAULT_LINE_COLOR)
         if color:
-            if self.document_kind == DocumentKind.VIDEO:
-                track_id = self.current_annotation_identity()
-                if track_id is None:
-                    return
-                before = self.video_model.snapshot_state()
-                self.video_model.update_track(track_id, color=color.getRgb())
-                after = self.video_model.snapshot_state()
-                self.undo_stack.push(VideoModelCommand(
-                    self, before, after, 'Change video track color'))
-                self._on_video_model_mutation()
-                self._materialize_video_frame(
-                    self.current_video_frame_ref.pts)
+            track_id = self.current_annotation_identity()
+            if track_id is None:
                 return
-            shape = self.canvas.selected_shape
-            if shape is None:
-                return
-            old_color = shape.line_color
+            before = self.video_model.snapshot_state()
+            self.video_model.update_track(track_id, color=color.getRgb())
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Change video track color'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(
+                self.current_video_frame_ref.pts)
+
+    def _choose_class_color(self):
+        """Pick the colour for the class of the selected image shape.
+
+        The colour belongs to the label text. It is applied to every shape of
+        that class in the current image and kept in the application settings,
+        so it survives reloads, relabels and restarts. Choosing the generated
+        colour again (the dialog's Restore Defaults) drops the override.
+        """
+        shape = self.canvas.selected_shape
+        if shape is None or not shape.label:
+            return
+        label = shape.label
+        generated = generate_color_by_text(label)
+        color = self.color_dialog.getColor(
+            shape.line_color, u"Choose Color for Class '%s'" % label,
+            default=generated)
+        if not color:
+            return
+        shapes = [other for other in self.canvas.shapes
+                  if other.label == label]
+        before = (class_color_overrides().get(label),
+                  [(other, other.line_color) for other in shapes])
+        after = (None if color == generated else color,
+                 [(other, color) for other in shapes])
+        command = SetClassColorCommand(self, label, before, after)
+        command.execute()
+        self.undo_stack.push(command)
+        self.set_dirty()
+
+    def _apply_class_color(self, label, override, shape_colors):
+        """Remember (or forget) a class colour and repaint the given shapes.
+
+        Args:
+            label: Class label the colour belongs to.
+            override: QColor to keep for the class, or None to go back to the
+                generated colour.
+            shape_colors: (shape, line colour) pairs to apply.
+        """
+        set_class_color(label, override)
+        self.settings[SETTING_CLASS_COLORS] = class_color_overrides()
+        self.settings.save()
+        for shape, color in shape_colors:
             shape.line_color = color
-            self.undo_stack.push(EditShapeAttributesCommand(
-                self, shape, {'line_color': old_color},
-                {'line_color': color}, 'Change shape line color'))
             self.annotation_model.notify_identity_changed(
                 self.annotation_model.identity_for_shape(shape))
-            self.canvas.update()
-            self.set_dirty()
+        self.canvas.update()
+        # Thumbnails bake the class colour into their overlay.
+        for gallery in (self.gallery_widget,
+                        getattr(self, 'full_gallery', None)):
+            if gallery is not None:
+                gallery.reload_thumbnails()
 
     def choose_shape_fill_color(self):
         if (self.document_kind == DocumentKind.VIDEO

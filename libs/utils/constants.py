@@ -5,6 +5,7 @@ SETTING_WIN_POSE = 'window/position'
 SETTING_WIN_GEOMETRY = 'window/geometry'
 SETTING_LINE_COLOR = 'line/color'
 SETTING_FILL_COLOR = 'fill/color'
+SETTING_CLASS_COLORS = 'class/colors'  # {label: QColor} user overrides
 SETTING_ADVANCE_MODE = 'advanced'
 SETTING_WIN_STATE = 'window/state'
 SETTING_SAVE_DIR = 'savedir'

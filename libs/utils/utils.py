@@ -133,6 +133,47 @@ def generate_color_by_text(text):
     return QColor(r, g, b, 100)
 
 
+# User-chosen colours keyed by class label. Process-wide rather than owned by
+# the main window because the gallery thumbnail worker and the undo commands
+# resolve colours without a window handle.
+_class_colors = {}
+
+
+def class_color(text):
+    """Return a class colour: the user's choice, else the generated one."""
+    override = _class_colors.get(text)
+    if override is not None:
+        return QColor(override)
+    return generate_color_by_text(text)
+
+
+def set_class_color(text, color):
+    """Set the colour for one class; ``None`` restores the generated colour."""
+    if color is None:
+        _class_colors.pop(text, None)
+    else:
+        _class_colors[text] = QColor(color)
+
+
+def class_color_overrides():
+    """Return a copy of the user-chosen ``{label: QColor}`` map."""
+    return dict(_class_colors)
+
+
+def set_class_colors(data):
+    """Replace every user-chosen class colour with persisted ``data``.
+
+    Non-dict input and entries that are not a label mapped to a valid colour
+    are ignored, so a corrupt settings value can never crash the load; those
+    classes simply keep their generated colour.
+    """
+    _class_colors.clear()
+    if not isinstance(data, dict):
+        return
+    for label, color in data.items():
+        if (isinstance(label, str) and label
+                and isinstance(color, QColor) and color.isValid()):
+            _class_colors[label] = QColor(color)
 
 
 def natural_sort(list, key=lambda s:s):
