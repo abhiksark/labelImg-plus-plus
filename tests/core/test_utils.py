@@ -1,6 +1,7 @@
 """Tests for utility functions in libs/utils.py."""
 import os
 import sys
+import tempfile
 import unittest
 
 # Set offscreen platform for headless testing
@@ -13,10 +14,14 @@ sys.path.insert(0, os.path.join(dir_name, '..', '..', 'libs'))
 
 from PyQt6.QtWidgets import QApplication, QMenu, QToolBar, QWidget
 from PyQt6.QtCore import QPointF
+from PyQt6.QtGui import QColor
 
+from libs.core.settings import Settings
+from libs.utils.constants import SETTING_CLASS_COLORS
 from libs.utils.utils import (
     Struct, new_action, new_icon, add_actions, format_shortcut,
-    generate_color_by_text, natural_sort, distance, trimmed
+    generate_color_by_text, natural_sort, distance, trimmed,
+    class_color, class_color_overrides, set_class_color, set_class_colors
 )
 from libs.utils.assets import ICON_FILES
 
@@ -93,6 +98,62 @@ class TestGenerateColorByText(unittest.TestCase):
         res = generate_color_by_text('')
 
         self.assertIsNotNone(res)
+
+
+class TestClassColor(unittest.TestCase):
+    """User-chosen class colours override the generated ones."""
+
+    def setUp(self):
+        set_class_colors(None)
+        self.addCleanup(set_class_colors, None)
+
+    def test_override_wins_and_clearing_restores_generated_color(self):
+        red = QColor(255, 0, 0, 200)
+        set_class_color('person', red)
+
+        self.assertEqual(class_color('person'), red)
+        self.assertEqual(class_color('car'), generate_color_by_text('car'))
+
+        set_class_color('person', None)
+        self.assertEqual(
+            class_color('person'), generate_color_by_text('person'))
+
+    def test_overrides_round_trip_through_settings(self):
+        red = QColor(255, 0, 0, 200)
+        set_class_color('person', red)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings()
+            settings.path = os.path.join(temp_dir, 'settings.json')
+            settings[SETTING_CLASS_COLORS] = class_color_overrides()
+            self.assertTrue(settings.save())
+
+            set_class_colors(None)
+            loaded = Settings()
+            loaded.path = settings.path
+            self.assertTrue(loaded.load())
+            set_class_colors(loaded.get(SETTING_CLASS_COLORS))
+
+        self.assertEqual(class_color_overrides(), {'person': red})
+
+    def test_corrupt_settings_values_fall_back_to_generated_color(self):
+        for corrupt in (None, 'red', ['person', QColor(1, 2, 3)], 7):
+            set_class_colors(corrupt)
+            self.assertEqual(class_color_overrides(), {})
+
+        blue = QColor(0, 0, 255)
+        set_class_colors({
+            'car': blue,
+            'person': 'red',
+            'dog': [255, 0, 0, 255],
+            'cat': None,
+            'bus': QColor(),
+            '': QColor(1, 2, 3),
+            5: QColor(1, 2, 3),
+        })
+
+        self.assertEqual(class_color_overrides(), {'car': blue})
+        self.assertEqual(
+            class_color('person'), generate_color_by_text('person'))
 
 
 class TestNaturalSort(unittest.TestCase):

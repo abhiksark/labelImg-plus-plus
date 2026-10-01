@@ -253,8 +253,8 @@ class EditLabelCommand(Command):
         if self.shape in self.main_window.shapes_to_items:
             item = self.main_window.shapes_to_items[self.shape]
             item.setText(self.shape.label)
-            from libs.utils.utils import generate_color_by_text
-            item.setBackground(generate_color_by_text(self.shape.label))
+            from libs.utils.utils import class_color
+            item.setBackground(class_color(self.shape.label))
 
     @property
     def description(self):
@@ -288,6 +288,31 @@ class EditShapeAttributesCommand(Command):
     @property
     def description(self):
         return self._description
+
+
+class SetClassColorCommand(Command):
+    """Undo a class colour choice together with the shapes it repainted.
+
+    ``before`` and ``after`` are ``(override, shape_colors)`` pairs as taken by
+    ``MainWindow._apply_class_color``: the colour kept for the class (``None``
+    for the generated one) and the line colour to give each shape.
+    """
+
+    def __init__(self, main_window, label, before, after):
+        self.main_window = main_window
+        self.label = label
+        self.before = before
+        self.after = after
+
+    def execute(self):
+        self.main_window._apply_class_color(self.label, *self.after)
+
+    def undo(self):
+        self.main_window._apply_class_color(self.label, *self.before)
+
+    @property
+    def description(self):
+        return f"Change color of class '{self.label}'"
 
 
 class EditPolygonVerticesCommand(Command):
