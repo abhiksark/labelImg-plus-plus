@@ -161,6 +161,10 @@ from libs.utils.ustr import ustr
 
 __appname__ = 'labelImgPlusPlus'
 
+# An image load covers the view with the loading veil only once it has been
+# pending this long. A shorter load would only flash the veil over the image.
+LOADING_VEIL_DELAY_MS = 200
+
 
 class WindowMixin(object):
 
@@ -309,7 +313,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_distinctness_debounce.timeout.connect(
             self._start_video_distinctness_refinement)
         self._load_request_id = 0
+        self._load_handle = None
         self._pending_navigation_index = None
+        # Request id and generation of the navigation load in flight, plus
+        # the newest target that key repeats asked for while it was decoding.
+        self._navigation_request = None
+        self._deferred_navigation_index = None
         self._prefetch_handles = {}
         self._navigation_direction = 0
         self._navigation_streak = 0
@@ -320,6 +329,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self._save_failure = None
         self._fit_scroll_reset_id = 0
         self._loading_veil = None
+        self._loading_veil_text = ''
+        self._loading_veil_timer = QTimer(self)
+        self._loading_veil_timer.setSingleShot(True)
+        self._loading_veil_timer.setInterval(LOADING_VEIL_DELAY_MS)
+        self._loading_veil_timer.timeout.connect(self._show_slow_load_veil)
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -6410,16 +6424,24 @@ class MainWindow(QMainWindow, WindowMixin):
         self._load_request_id += 1
         request_id = self._load_request_id
         generation = self._dataset_generation
+        # This request is now the only valid one, so nothing recorded for an
+        # older request may outlive it.
+        self._load_handle = None
+        self._navigation_request = None
+        self._deferred_navigation_index = None
         cached = (None if replacement_snapshot is not None
                   else self.frame_cache.get(file_path))
         self.canvas.setEnabled(False)
-        self._show_loading_veil('Loading %s…' % os.path.basename(file_path))
         if cached is not None:
+            # A cache hit commits on the next event-loop turn; no veil.
+            self._loading_veil_timer.stop()
             QTimer.singleShot(
                 0, lambda: self._on_image_result(
                     cached, request_id, generation,
                     replacement_snapshot))
             return None
+        self._show_loading_veil_if_slow(
+            'Loading %s…' % os.path.basename(file_path))
 
         resolver = (replacement_snapshot.resolver
                     if replacement_snapshot is not None
@@ -6442,6 +6464,7 @@ class MainWindow(QMainWindow, WindowMixin):
         handle = self.task_coordinator.submit(
             'interactive', load, priority=JobPriority.IMAGE_LOAD,
             key='image-load', latest=True, generation=generation)
+        self._load_handle = handle
         handle.result.connect(
             lambda result, rid=request_id, gen=generation:
             self._on_image_result(
@@ -6457,6 +6480,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if (request_id != self._load_request_id
                 or generation != self._dataset_generation):
             return
+        deferred = self._take_deferred_navigation()
         self._pending_navigation_index = None
         self.canvas.setEnabled(bool(self.file_path))
         self._hide_loading_veil()
@@ -6466,24 +6490,32 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.dataset_snapshot.image_paths:
                 self.annotation_catalog.start(self.dataset_snapshot)
         self.status('Error reading image: ' + message)
+        # Key repeats that arrived during the failed decode still name a
+        # target, so an unreadable image does not end a held navigation.
+        self._resume_deferred_navigation(deferred)
 
     def _on_image_result(self, result, request_id, generation,
                          replacement_snapshot=None):
         if (result is None or request_id != self._load_request_id
                 or generation != self._dataset_generation):
             return
+        deferred = self._take_deferred_navigation()
         if (replacement_snapshot is not None
                 and not self._commit_dataset_snapshot(replacement_snapshot)):
             self.canvas.setEnabled(bool(self.file_path))
             self._hide_loading_veil()
             return
         if not self._commit_image_result(result):
+            # The current image stays, so the next step starts from it.
+            self._pending_navigation_index = None
             self.canvas.setEnabled(bool(self.file_path))
             self._hide_loading_veil()
             return
         self.frame_cache.put(result)
-        self._pending_navigation_index = None
         self._hide_loading_veil()
+        if self._resume_deferred_navigation(deferred):
+            # The next decode is already running; prefetch once it commits.
+            return
         self._schedule_prefetch(result.path)
 
     def _commit_image_result(self, result):
@@ -6585,7 +6617,52 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             self._navigation_direction = direction
             self._navigation_streak = 1
-        return self.request_load_file(self.m_img_list[target])
+        if self._navigation_load_in_flight():
+            # Key auto-repeat can outrun a full-size decode. Superseding the
+            # in-flight load on every repeat would never let one commit, so
+            # it is left to finish and only the newest target is remembered.
+            self._deferred_navigation_index = target
+            return None
+        return self._start_navigation_load(target)
+
+    def _start_navigation_load(self, target):
+        """Load a navigation target and mark its request as coalescing."""
+        request_id = self._load_request_id
+        handle = self.request_load_file(self.m_img_list[target])
+        if self._load_request_id != request_id:
+            self._navigation_request = (
+                self._load_request_id, self._dataset_generation)
+        return handle
+
+    def _navigation_load_in_flight(self):
+        """Return whether a navigation load is still going to report back."""
+        if self._navigation_request != (
+                self._load_request_id, self._dataset_generation):
+            return False
+        # A cache hit has no handle; it commits on the next event-loop turn.
+        return (self._load_handle is None
+                or not self._load_handle.is_cancelled())
+
+    def _take_deferred_navigation(self):
+        """Close the current load and return the target queued behind it."""
+        target = self._deferred_navigation_index
+        self._load_handle = None
+        self._navigation_request = None
+        self._deferred_navigation_index = None
+        return target
+
+    def _resume_deferred_navigation(self, target):
+        """Start the newest deferred target; return whether a load began."""
+        if (target is None or not 0 <= target < len(self.m_img_list)
+                or self.m_img_list[target] == self.file_path):
+            self._pending_navigation_index = None
+            return False
+        self._pending_navigation_index = target
+        self._start_navigation_load(target)
+        if self._navigation_request is None:
+            self._pending_navigation_index = None
+            return False
+        return True
 
     def _schedule_prefetch(self, current_path):
         if current_path not in self._path_to_idx:
@@ -7624,7 +7701,22 @@ class MainWindow(QMainWindow, WindowMixin):
                 args={'images': len(snapshot.image_paths)})
         return True
 
+    def _show_loading_veil_if_slow(self, text):
+        """Cover the view only if the image load is still pending later."""
+        self._loading_veil_text = text
+        if self._loading_veil is not None and not self._loading_veil.isHidden():
+            self._loading_veil.setText(text)
+        elif not self._loading_veil_timer.isActive():
+            self._loading_veil_timer.start()
+
+    def _show_slow_load_veil(self):
+        handle = self._load_handle
+        if handle is None or handle.is_cancelled():
+            return
+        self._show_loading_veil(self._loading_veil_text)
+
     def _show_loading_veil(self, text):
+        self._loading_veil_timer.stop()
         if self._loading_veil is None:
             self._loading_veil = QLabel(self.centralWidget())
             self._loading_veil.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -7637,6 +7729,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._loading_veil.raise_()
 
     def _hide_loading_veil(self):
+        self._loading_veil_timer.stop()
         if self._loading_veil is not None:
             self._loading_veil.hide()
 
