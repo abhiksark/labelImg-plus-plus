@@ -205,8 +205,9 @@ is a separate, opt-in setting with 30-second, 1-, 2-, or 5-minute intervals.
 Explicit Save and Verify remain available. Completion/verification persistence
 depends on the annotation format; see `Supported annotation formats`_.
 
-**Mouse navigation:** middle-drag pans, the wheel scrolls, and **Ctrl+wheel**
-zooms. Arrow keys nudge the selected annotation, including polygons.
+**Mouse navigation:** middle-drag pans, as does **Ctrl+left-drag** on empty
+image pixels in Select; the wheel scrolls, and **Ctrl+wheel** zooms. Arrow keys
+nudge the selected annotation, including polygons.
 
 **Keypoints:** select a rectangle labeled ``person`` (17-point pose) or ``face``
 (5-point landmarks), then press **K**. Left-click visible points and right-click
@@ -495,6 +496,8 @@ are fixed bindings outside that dialog.
      - Nudge selected annotation
    * - Left-drag empty pixels in Select
      - Draw a box; dragging an existing annotation moves it
+   * - Ctrl+left-drag empty pixels in Select
+     - Pan
    * - Middle-drag / wheel
      - Pan / scroll
    * - Ctrl+wheel
