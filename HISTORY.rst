@@ -38,6 +38,13 @@ Navigation
   and never for a cached image, so its file name no longer flashes over the
   canvas during fast navigation.
 
+Stability
+~~~~~~~~~
+
+* Fix a rare crash on exit. A save that completed while its window was closing
+  ran its follow-up action after shutdown, which aborted the process. The
+  annotation was already written at that point.
+
 Upgrade Notes
 ~~~~~~~~~~~~~
 
