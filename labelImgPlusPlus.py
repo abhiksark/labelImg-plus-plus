@@ -7993,8 +7993,10 @@ class MainWindow(QMainWindow, WindowMixin):
         # Navigation/completion callbacks are part of the exact save request.
         # If the user edited while that request was in flight, its older
         # revision may be safely written but must never move them away from
-        # the newer unsaved document.
-        if callable(on_success) and current_revision:
+        # the newer unsaved document. A save past its commit fence also
+        # survives shutdown, and its callback must not start work after it.
+        if (callable(on_success) and current_revision
+                and not self.task_coordinator.is_shutting_down):
             on_success()
 
     def _on_save_error(self, message, request=None, on_success=None,
