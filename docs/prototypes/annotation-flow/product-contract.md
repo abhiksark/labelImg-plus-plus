@@ -3,7 +3,7 @@
 Status: 4.0.0rc0 PyQt5 baseline, implemented and visually verified
 
 Scope: historical 4.0.0rc0 image/video annotation contract retained for
-migration comparison; current 4.0.0rc1 PyQt6 support is documented in the
+migration comparison; current 4.0.0rc2 PyQt6 support is documented in the
 active architecture, component, and testing guides
 
 ## Product promise

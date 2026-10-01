@@ -17,7 +17,7 @@ labelImg++
    :alt: Candidate requires Python 3.10 or newer
 
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
-   :target: https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/LICENSE
+   :target: https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/LICENSE
    :alt: MIT application license
 
 **labelImg++** annotates bounding boxes, polygons, and keypoints on images and
@@ -25,7 +25,7 @@ video. Draw and label objects without leaving the canvas, use optional
 single-click Smart Select, or propagate video tracks and review suggestions
 before exporting a dataset. It builds on the original LabelImg by Tzutalin.
 
-**4.0.0rc1 — PyQt6 release candidate.** Use Python 3.10–3.13 and
+**4.0.0rc2 — PyQt6 release candidate.** Use Python 3.10–3.13 and
 ``PyQt6>=6.11,<6.12``. Select this candidate with an explicit version pin;
 a normal stable PyPI install does not select prereleases. The historical
 ``4.0.0rc0`` prerelease uses PyQt5; Python 3.8/3.9 users need the older 3.5.x line.
@@ -34,7 +34,7 @@ Annotation formats and coordinates, settings encodings, video sidecars,
 shortcut IDs, and plugin API major 1 remain compatible. Plugins used with this
 candidate must not load PyQt5 alongside PyQt6.
 
-.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/workspace-dark.png
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc2/docs/screenshots/readme/workspace-dark.png
    :alt: Cat bounding-box annotation in the dark workspace, with the Objects inspector and completion action
    :width: 100%
    :align: center
@@ -52,12 +52,12 @@ Installation
 Release candidate
 ~~~~~~~~~~~~~~~~~
 
-Use a separate virtual environment for the candidate. Once ``4.0.0rc1`` is
+Use a separate virtual environment for the candidate. Once ``4.0.0rc2`` is
 published on PyPI, install that exact version:
 
 .. code:: shell
 
-   python -m pip install "labelimgplusplus==4.0.0rc1"
+   python -m pip install "labelimgplusplus==4.0.0rc2"
    labelimgpp
 
 ``labelimgplusplus`` is an equivalent command. The older ``labelImgPlusPlus``
@@ -70,7 +70,7 @@ Optional features can be installed together:
 
 .. code:: shell
 
-   python -m pip install "labelimgplusplus[sam,video]==4.0.0rc1"
+   python -m pip install "labelimgplusplus[sam,video]==4.0.0rc2"
 
 For the latest **stable** release instead, use a separate environment and
 ``python -m pip install labelimgplusplus``. Its behavior and Python/Qt baseline
@@ -79,7 +79,7 @@ follow that stable version, not this candidate.
 PyQt6 candidate from source
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Clone the immutable ``v4.0.0rc1`` tag and run the install from the repository
+Clone the immutable ``v4.0.0rc2`` tag and run the install from the repository
 root. Git and Python 3.10–3.13 are required. Before the tag is published, use
 the existing candidate checkout or a matching CI artifact; the tag-based
 commands below become available at release time.
@@ -88,7 +88,7 @@ commands below become available at release time.
 
 .. code:: shell
 
-   git clone --branch v4.0.0rc1 https://github.com/abhiksark/labelImg-plus-plus.git
+   git clone --branch v4.0.0rc2 https://github.com/abhiksark/labelImg-plus-plus.git
    cd labelImg-plus-plus
    python3 -m venv .venv
    . .venv/bin/activate
@@ -99,7 +99,7 @@ commands below become available at release time.
 
 .. code:: powershell
 
-   git clone --branch v4.0.0rc1 https://github.com/abhiksark/labelImg-plus-plus.git
+   git clone --branch v4.0.0rc2 https://github.com/abhiksark/labelImg-plus-plus.git
    Set-Location labelImg-plus-plus
    py -3.13 -m venv .venv
    .\.venv\Scripts\python.exe -m pip install -e .
@@ -121,7 +121,7 @@ On Windows, substitute ``.\.venv\Scripts\python.exe`` for ``python`` unless the
 environment is activated. Both extras share headless OpenCV. The base
 application leaves optional inference and video libraries unloaded until
 needed. See the `optional-dependency guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/guides/optional-dependencies.md>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/docs/guides/optional-dependencies.md>`_
 for supported versions and separately managed SAM 2 dependencies.
 
 Qt and asset troubleshooting
@@ -155,8 +155,8 @@ Candidate CI builds Linux x86-64, Windows x86-64, and macOS arm64 executables
 from one PyInstaller definition. Linux uses Ubuntu 22.04 as its glibc baseline.
 Each build checks packaged assets and startup outside the checkout.
 
-Published candidate downloads belong to the `v4.0.0rc1 GitHub prerelease
-<https://github.com/abhiksark/labelImg-plus-plus/releases/tag/v4.0.0rc1>`_.
+Published candidate downloads belong to the `v4.0.0rc2 GitHub prerelease
+<https://github.com/abhiksark/labelImg-plus-plus/releases/tag/v4.0.0rc2>`_.
 Before publication, open the successful candidate run for the exact commit
 under `GitHub Actions
 <https://github.com/abhiksark/labelImg-plus-plus/actions/workflows/ci.yaml>`_
@@ -168,7 +168,7 @@ platform support.
 Native builds include base annotation and the plugin host, **not** SAM/video
 dependencies or third-party plugins. Use the Python package with extras for
 those features. See the `build and candidate-qualification guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/build-tools/README.md>`_.
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/build-tools/README.md>`_.
 
 Image quick start
 -----------------
@@ -193,7 +193,7 @@ Image quick start
 6. **Browse and review:** **A/D** select the previous/next image; **Ctrl+G**
    opens Gallery. Use **Ctrl+Z / Ctrl+Shift+Z** for undo/redo.
 
-.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/inline-class.png
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc2/docs/screenshots/readme/inline-class.png
    :alt: A provisional cat box with the inline class picker beside the object
    :width: 100%
 
@@ -240,7 +240,7 @@ Export**:
    **Current**, **Verified**, and **Range** offer other frame selections. Only
    accepted annotations are written; selected frames can have no annotations.
 
-.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/video-review.png
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc2/docs/screenshots/readme/video-review.png
    :alt: A real video track with a pending propagated suggestion, review controls, and the integrated timeline
    :width: 100%
 
@@ -256,7 +256,7 @@ Accepting a suggestion does **not** promote it to a manual anchor. Use
 **Shift+K** or edit geometry to make a manual correction before seeding another
 run. Pending and rejected suggestions are excluded from exported annotations.
 See the `Smart Video guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/smart-video-annotation.md>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/docs/features/smart-video-annotation.md>`_
 for project recovery, propagation, interpolation, and export details.
 
 Smart Select and video backends
@@ -290,7 +290,7 @@ with **Try again (Esc)**; they do **not** skip that confirmation.
 The confirmed result is one undo step; Smart Select stays active and the
 output choice persists between sessions.
 
-.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc1/docs/screenshots/readme/smart-select-box.png
+.. figure:: https://raw.githubusercontent.com/abhiksark/labelImg-plus-plus/v4.0.0rc2/docs/screenshots/readme/smart-select-box.png
    :alt: MobileSAM-generated cat bounding box awaiting outline confirmation
    :width: 100%
 
@@ -298,7 +298,7 @@ output choice persists between sessions.
    show the class picker in its place.
 
 The `Smart Select guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/sam-assisted-polygon.md>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/docs/features/sam-assisted-polygon.md>`_
 shows Polygon output and model configuration. Custom encoder/decoder files
 must be a compatible matched MobileSAM ONNX export, not arbitrary SAM models.
 Only load models from trusted sources. In video documents, Smart Select works
@@ -355,7 +355,7 @@ Light and dark themes, Feather icons, and high-DPI scaling serve the same
 workspace. **Ctrl+Shift+T** toggles themes and persists the choice. Brightness
 controls help inspect dark or light images without changing source media.
 See the `theme guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/dark-mode.md>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/docs/features/dark-mode.md>`_
 for light/dark screenshots. Annotation creation and editing support undo/redo.
 
 Ultralytics export
@@ -367,7 +367,7 @@ deterministic split ratios and image copies or absolute local symlinks. The
 destination must be new or empty; it is published only after export succeeds.
 Polygons become enclosing boxes; this is not a segmentation or pose export.
 See the `Ultralytics export guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/features/ultralytics-export.md>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/docs/features/ultralytics-export.md>`_
 for layout and data-preservation limits.
 
 Installed Python plugins
@@ -382,7 +382,7 @@ to labelImg++ source.
 ``LABELIMGPP_DISABLE_PLUGINS=1`` disables plugins for recovery. Reset All also
 clears plugin enablement and configuration; see `Configuration and recovery`_.
 The `plugin authoring guide
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/docs/guides/plugin-authoring.md>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/docs/guides/plugin-authoring.md>`_
 describes the public API and PyQt6 compatibility boundary.
 
 Supported annotation formats
@@ -576,9 +576,9 @@ compatible backups, not assuming that an older application can reverse them.
 Release history and contributing
 --------------------------------
 
-This source tree describes the **4.0.0rc1 PyQt6 release candidate**, not a stable
+This source tree describes the **4.0.0rc2 PyQt6 release candidate**, not a stable
 4.0.0 release. Its `release history
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/HISTORY.rst>`_
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/HISTORY.rst>`_
 separates changes since the PyQt5-based **4.0.0rc0** from earlier features.
 Tag-aligned links and published downloads become available when the release is
 cut; a checkout or CI artifact alone does not publish a release.
@@ -592,7 +592,7 @@ License and credits
 -------------------
 
 The application is under the `MIT License
-<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc1/LICENSE>`_. It is
+<https://github.com/abhiksark/labelImg-plus-plus/blob/v4.0.0rc2/LICENSE>`_. It is
 based on LabelImg by Tzutalin and maintained by `Abhik Sarkar <https://abhik.ai>`_.
 Thanks to the original LabelImg contributors, `Feather Icons
 <https://feathericons.com/>`_, and all labelImg++ contributors and users.
