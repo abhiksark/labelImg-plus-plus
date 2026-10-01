@@ -193,6 +193,44 @@ def test_queued_statistics_refresh_is_inert_after_window_shutdown(tmp_path):
     assert window.task_coordinator.is_shutting_down
 
 
+def test_save_continuation_is_inert_after_window_shutdown(tmp_path):
+    app, window = get_main_app()
+    image_path = str(tmp_path / 'image.png')
+    _image(image_path, 0xFFFFFFFF)
+    window.default_save_dir = str(tmp_path)
+    window.label_file_format = LabelFileFormat.PASCAL_VOC
+    window.load_file(image_path)
+    window.set_dirty()
+    requests = []
+
+    def capture(request, cancelled=None, begin_commit=None):
+        requests.append(request)
+
+    with patch('labelImgPlusPlus.write_save_request', side_effect=capture):
+        window.request_save_file()
+        assert _wait(app, lambda: requests)
+    generation = window._dataset_generation
+    window.dirty = False
+    window.close()
+
+    # A save past its commit fence is not cancelled by shutdown, so its result
+    # can be delivered after closeEvent. Its continuation must not start new
+    # work then: submit() raises, and an exception escaping this PyQt slot
+    # aborts the interpreter instead of becoming an assertion failure.
+    continued = []
+
+    def continuation():
+        continued.append(True)
+        window.request_open_file(image_path, skip_prompt=True)
+
+    QTimer.singleShot(0, lambda: window._on_save_result(
+        str(tmp_path / 'image.xml'), requests[0], continuation, generation))
+    app.processEvents()
+    app.processEvents()
+    assert window.task_coordinator.is_shutting_down
+    assert continued == []
+
+
 def test_cancelled_standalone_open_does_not_advance_generation(tmp_path):
     _app, window = get_main_app()
     first = str(tmp_path / 'first.png')
