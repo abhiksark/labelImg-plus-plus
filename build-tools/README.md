@@ -12,8 +12,8 @@ the package version, point to a commit already on ``origin/master``, and be
 pushed only after the release pull request and ``master`` CI pass:
 
 ```bash
-git tag -a v4.0.0rc1 -m "labelImg++ 4.0.0rc1"
-git push origin v4.0.0rc1
+git tag -a v4.0.0rc2 -m "labelImg++ 4.0.0rc2"
+git push origin v4.0.0rc2
 ```
 
 The workflow tests Python 3.10 through 3.13, tests SAM and combined SAM/video

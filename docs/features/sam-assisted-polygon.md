@@ -7,11 +7,11 @@ require PyTorch.
 
 ## Install
 
-Use Python 3.10 or newer (tested through 3.13). Once the **4.0.0rc1**
+Use Python 3.10 or newer (tested through 3.13). Once the **4.0.0rc2**
 candidate is published on PyPI, install its pinned extra:
 
 ```bash
-python -m pip install "labelimgplusplus[sam]==4.0.0rc1"
+python -m pip install "labelimgplusplus[sam]==4.0.0rc2"
 ```
 
 Before publication, or when working from the candidate source, run from its

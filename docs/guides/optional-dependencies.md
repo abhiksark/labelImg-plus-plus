@@ -5,7 +5,7 @@ not import video, SAM, or profiling libraries during startup.
 
 ## Candidate, source, and stable installs
 
-These guides describe the **4.0.0rc1 PyQt6 release candidate**. Use Python 3.10
+These guides describe the **4.0.0rc2 PyQt6 release candidate**. Use Python 3.10
 or newer; the supported matrix is 3.10–3.13. The pinned PyPI commands below
 select this exact candidate once it is published, rather than the latest
 stable package.
@@ -20,7 +20,7 @@ python -m pip install -e ".[sam,video]"
 Use `".[sam]"`, `".[video]"`, or `".[video,profile]"` instead when only those
 extras are needed. The editable install follows this checkout.
 
-For the latest stable package instead, omit `==4.0.0rc1` in a separate
+For the latest stable package instead, omit `==4.0.0rc2` in a separate
 environment. An extra cannot add candidate features to an older release.
 Python 3.8/3.9 users need the older 3.5.x line; the historical 4.0.0rc0
 prerelease uses PyQt5, not this candidate's PyQt6.
@@ -31,7 +31,7 @@ Candidate requirements are defined in
 ## Smart video
 
 ```bash
-python -m pip install "labelimgplusplus[video]==4.0.0rc1"
+python -m pip install "labelimgplusplus[video]==4.0.0rc2"
 ```
 
 For the candidate, the extra installs the PyAV line selected by the active
@@ -44,7 +44,7 @@ are not part of the compatibility contract.
 ## SAM and smart video together
 
 ```bash
-python -m pip install "labelimgplusplus[sam,video]==4.0.0rc1"
+python -m pip install "labelimgplusplus[sam,video]==4.0.0rc2"
 ```
 
 Both extras resolve to the same `opencv-python-headless>=4.8,<6` distribution.
@@ -58,7 +58,7 @@ its own source installation, compatible CUDA runtime, checkpoint, and config.
 ## Profiling tools
 
 ```bash
-python -m pip install "labelimgplusplus[video,profile]==4.0.0rc1"
+python -m pip install "labelimgplusplus[video,profile]==4.0.0rc2"
 ```
 
 This adds process metrics and native sampling tools used by the local

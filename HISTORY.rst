@@ -1,6 +1,58 @@
 History
 =======
 
+4.0.0rc2 (2026-10-01)
+---------------------
+
+Second PyQt6 release candidate, not stable 4.0.0. The sections below describe
+changes since 4.0.0rc1. Package requirements, annotation formats, video project
+sidecars, shortcut identifiers, and the plugin API are unchanged.
+
+Annotation Workflow
+~~~~~~~~~~~~~~~~~~~
+
+* Pan with **Ctrl+left-drag** on empty image pixels in Select (#133). A plain
+  left-drag still draws a box and middle-drag still pans. Ctrl pressed after a
+  draw has started keeps its square constraint.
+* Confirm a Smart Select result in one step (#134). The class picker opens
+  beside the outline, as it does for a manually drawn box or polygon: choosing
+  a class keeps the result and Escape discards it. Fixed-class and established
+  repeat-class sessions keep their single outline confirmation, because they
+  have no class to enter. Smart Select on a paused video frame follows the same
+  flow.
+* Keep a colour per class (#131). **Shape Line Color** on an image shape now
+  sets the colour of that shape's class, repaints every shape of the class in
+  the image, and stores the choice in the application settings, so it survives
+  reloads, relabels, and restarts. **Restore Defaults** in the colour dialog
+  returns the class to its generated colour. Video track colours are unchanged.
+
+Navigation
+~~~~~~~~~~
+
+* Keep images advancing while Next or Previous is held (#135). Key repeat
+  faster than a full-size decode no longer cancels every load before it can be
+  shown: the load in flight is displayed and only the newest requested image is
+  queued behind it. When decoding is slower than key repeat, a hold skips
+  images and still ends on the requested position.
+* Show the image loading veil only when a load is still pending after 200 ms,
+  and never for a cached image, so its file name no longer flashes over the
+  canvas during fast navigation.
+
+Stability
+~~~~~~~~~
+
+* Fix a rare crash on exit. A save that completed while its window was closing
+  ran its follow-up action after shutdown, which aborted the process. The
+  annotation was already written at that point.
+
+Upgrade Notes
+~~~~~~~~~~~~~
+
+* The per-shape line colour for image shapes is replaced by the per-class
+  colour. The per-shape value was never saved, so no annotation data changes.
+* The held-navigation fix was measured on Linux with simulated key repeat. It
+  has not been confirmed on Windows or macOS with a physical key hold.
+
 4.0.0rc1 (2026-09-05)
 ---------------------
 
