@@ -16,7 +16,7 @@ from PyQt6.QtGui import QPixmap, QColor, QKeyEvent, QMouseEvent
 from PyQt6.QtWidgets import QApplication
 
 from libs.widgets.canvas import (
-    Canvas, CURSOR_DEFAULT, CURSOR_DRAW, CURSOR_GRAB)
+    Canvas, CURSOR_DEFAULT, CURSOR_DRAW, CURSOR_GRAB, CURSOR_MOVE)
 from libs.core.shape import Shape, ShapeType
 
 # Create QApplication for tests
@@ -735,19 +735,23 @@ class _DrawFirstBase(unittest.TestCase):
         self.canvas.modeChanged.connect(self.modes.append)
 
     @staticmethod
-    def _mouse(kind, x, y, button=Qt.MouseButton.LeftButton, buttons=Qt.MouseButton.LeftButton):
-        return QMouseEvent(
-            kind, QPointF(x, y), button, buttons, Qt.KeyboardModifier.NoModifier)
+    def _mouse(kind, x, y, button=Qt.MouseButton.LeftButton, buttons=Qt.MouseButton.LeftButton,
+               modifiers=Qt.KeyboardModifier.NoModifier):
+        return QMouseEvent(kind, QPointF(x, y), button, buttons, modifiers)
 
-    def _drag(self, x0, y0, x1, y1, button=Qt.MouseButton.LeftButton):
+    def _drag(self, x0, y0, x1, y1, button=Qt.MouseButton.LeftButton,
+              modifiers=Qt.KeyboardModifier.NoModifier):
         held = button
         self.canvas.mousePressEvent(
-            self._mouse(QEvent.Type.MouseButtonPress, x0, y0, button, held))
+            self._mouse(QEvent.Type.MouseButtonPress, x0, y0, button, held,
+                        modifiers))
         self.canvas.mouseMoveEvent(
-            self._mouse(QEvent.Type.MouseMove, x1, y1, Qt.MouseButton.NoButton, held))
+            self._mouse(QEvent.Type.MouseMove, x1, y1, Qt.MouseButton.NoButton, held,
+                        modifiers))
         self.canvas.mouseReleaseEvent(
             self._mouse(
-                QEvent.Type.MouseButtonRelease, x1, y1, button, Qt.MouseButton.NoButton))
+                QEvent.Type.MouseButtonRelease, x1, y1, button, Qt.MouseButton.NoButton,
+                modifiers))
 
     def _corners(self):
         shape = self.canvas.provisional_shape
@@ -937,7 +941,7 @@ class TestEditDragDraw(_DrawFirstBase):
 
 
 class TestCanvasPanning(_DrawFirstBase):
-    """Panning moved off left-drag so left-drag could draw."""
+    """Middle-drag and Ctrl+left-drag pan; a plain left-drag draws."""
 
     def setUp(self):
         super(TestCanvasPanning, self).setUp()
@@ -973,17 +977,128 @@ class TestCanvasPanning(_DrawFirstBase):
 
         self.assertEqual(self.scrolls, [])
 
+    def test_ctrl_left_drag_pans_instead_of_drawing(self):
+        ctrl = Qt.KeyboardModifier.ControlModifier
+
+        self._drag(10, 10, 60, 40, modifiers=ctrl)
+
+        self.assertEqual(
+            self.scrolls, [
+                (50, Qt.Orientation.Horizontal.value),
+                (30, Qt.Orientation.Vertical.value),
+            ])
+        self.assertEqual(self.log, [])
+        self.assertIsNone(self.canvas.provisional_shape)
+        self.assertIsNone(self.canvas.current)
+        self.assertIsNone(self.canvas._edit_draw_origin)
+        self.assertEqual(self.canvas.shapes, [])
+        self.assertFalse(self.canvas._panning)
+
+    def test_ctrl_left_pan_restores_the_cursor(self):
+        ctrl = Qt.KeyboardModifier.ControlModifier
+        before = self.canvas._cursor
+
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.Type.MouseButtonPress, 10, 10, modifiers=ctrl))
+        self.assertTrue(self.canvas._panning)
+        self.assertEqual(self.canvas._cursor, CURSOR_MOVE)
+
+        self.canvas.mouseReleaseEvent(
+            self._mouse(QEvent.Type.MouseButtonRelease, 10, 10,
+                        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, ctrl))
+        self.assertFalse(self.canvas._panning)
+        self.assertEqual(self.canvas._cursor, before)
+
+    def test_ctrl_left_drag_on_a_shape_still_moves_it(self):
+        shape = Shape(label='box')
+        for point in [(10, 10), (80, 10), (80, 80), (10, 80)]:
+            shape.add_point(QPointF(*point))
+        shape.close()
+        self.canvas.load_shapes([shape])
+
+        self._drag(40, 40, 70, 70,
+                   modifiers=Qt.KeyboardModifier.ControlModifier)
+
+        self.assertEqual(self.scrolls, [])
+        self.assertIs(self.canvas.selected_shape, shape)
+        self.assertNotEqual(
+            [(p.x(), p.y()) for p in shape.points][0], (10.0, 10.0))
+
+    def test_ctrl_left_drag_in_create_mode_still_draws(self):
+        # Explicit create mode keeps Ctrl for the square constraint.
+        self.canvas.set_editing(False)
+
+        self._drag(20, 20, 60, 50,
+                   modifiers=Qt.KeyboardModifier.ControlModifier)
+
+        self.assertEqual(self.scrolls, [])
+        self.assertIsNotNone(self.canvas.provisional_shape)
+
+    def test_ctrl_pressed_after_the_press_keeps_drawing(self):
+        # The pan is decided at press time, so Ctrl held later in a drag
+        # stays free to constrain the rectangle to a square.
+        ctrl = Qt.KeyboardModifier.ControlModifier
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.Type.MouseButtonPress, 20, 20))
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.Type.MouseMove, 60, 50, Qt.MouseButton.NoButton,
+                        Qt.MouseButton.LeftButton, ctrl))
+        self.canvas.mouseReleaseEvent(
+            self._mouse(QEvent.Type.MouseButtonRelease, 60, 50,
+                        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, ctrl))
+
+        self.assertEqual(self.scrolls, [])
+        self.assertIsNotNone(self.canvas.provisional_shape)
+
+    def test_middle_press_during_a_ctrl_left_pan_is_ignored(self):
+        ctrl = Qt.KeyboardModifier.ControlModifier
+        both = Qt.MouseButton.LeftButton | Qt.MouseButton.MiddleButton
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.Type.MouseButtonPress, 10, 10, modifiers=ctrl))
+
+        self.canvas.mousePressEvent(
+            self._mouse(QEvent.Type.MouseButtonPress, 30, 30,
+                        Qt.MouseButton.MiddleButton, both, ctrl))
+        self.canvas.mouseReleaseEvent(
+            self._mouse(QEvent.Type.MouseButtonRelease, 30, 30,
+                        Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton, ctrl))
+        self.assertTrue(self.canvas._panning)
+
+        self.canvas.mouseMoveEvent(
+            self._mouse(QEvent.Type.MouseMove, 60, 40, Qt.MouseButton.NoButton,
+                        Qt.MouseButton.LeftButton, ctrl))
+        self.assertEqual(
+            self.scrolls, [
+                (50, Qt.Orientation.Horizontal.value),
+                (30, Qt.Orientation.Vertical.value),
+            ])
+
 
 class TestCanvasHoverCursor(_DrawFirstBase):
     """The crosshair advertises exactly where a drag would draw."""
 
-    def _hover(self, x, y):
+    def _hover(self, x, y, modifiers=Qt.KeyboardModifier.NoModifier):
         self.canvas.mouseMoveEvent(
-            self._mouse(QEvent.Type.MouseMove, x, y, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton))
+            self._mouse(QEvent.Type.MouseMove, x, y, Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                        modifiers))
         return self.canvas._cursor
 
     def test_empty_pixels_offer_the_draw_cursor(self):
         self.assertEqual(self._hover(100, 100), CURSOR_DRAW)
+
+    def test_ctrl_over_empty_pixels_offers_the_pan_cursor(self):
+        ctrl = Qt.KeyboardModifier.ControlModifier
+
+        self.assertEqual(self._hover(100, 100, ctrl), CURSOR_GRAB)
+        # Releasing Ctrl goes back to advertising the draw.
+        self.assertEqual(self._hover(101, 100), CURSOR_DRAW)
+
+    def test_ctrl_over_the_letterbox_keeps_the_arrow(self):
+        self.canvas.resize(400, 400)
+
+        self.assertEqual(
+            self._hover(5, 5, Qt.KeyboardModifier.ControlModifier),
+            CURSOR_DEFAULT)
 
     def test_shape_body_keeps_the_grab_cursor(self):
         shape = Shape(label='box')
