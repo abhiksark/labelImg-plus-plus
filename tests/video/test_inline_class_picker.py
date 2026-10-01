@@ -1,7 +1,6 @@
 # tests/video/test_inline_class_picker.py
 from PyQt6.QtCore import QPointF, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QPushButton
 
 from labelImgPlusPlus import get_main_app
 from libs.core.sam_types import SamResult
@@ -77,12 +76,6 @@ def test_video_sam_box_is_provisional_then_commits_as_manual_anchor(
         assert provisional is not None
         assert provisional.shape_type == ShapeType.RECTANGLE
         assert window.video_model.tracks == {}
-        assert window.class_picker.prompt.text() == 'Use this outline?'
-
-        use_outline = window.class_picker.findChild(
-            QPushButton, 'useOutlineButton')
-        QTest.keyClick(use_outline, Qt.Key.Key_Return)
-        app.processEvents()
         assert window.class_picker.prompt.text() == 'Choose a class'
 
         window.class_picker.edit.setText('vehicle')
@@ -119,7 +112,7 @@ def test_video_smart_select_rejection_leaves_project_and_undo_unchanged(
         window.sam_controller._on_finished(
             window.sam_controller._gen, result, None)
         assert window.canvas.provisional_shape is not None
-        assert window.class_picker.prompt.text() == 'Use this outline?'
+        assert window.class_picker.prompt.text() == 'Choose a class'
 
         QTest.keyClick(window.class_picker, Qt.Key.Key_Escape)
         app.processEvents()

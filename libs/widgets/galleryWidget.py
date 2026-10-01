@@ -17,7 +17,7 @@ except ImportError:
     ElementTree = None
 
 from libs.utils.dpi import scale_px
-from libs.utils.utils import generate_color_by_text
+from libs.utils.utils import class_color
 from libs.utils.styles import Theme, get_slider_style, get_gallery_controls_style, get_gallery_list_style
 from libs.formats.annotation_paths import find_existing_annotation
 from libs.formats.coco_io import COCOReader
@@ -41,7 +41,7 @@ def overlay_color(text):
     thumbnail outline is 2px wide and needs full alpha and a legible value
     where the canvas fill wants alpha 100 and can afford to be dark.
     """
-    base = generate_color_by_text(text)
+    base = class_color(text)
     hue, saturation, value, _alpha = base.getHsv()
     return QColor.fromHsv(hue, max(saturation, 120), max(value, 180))
 
@@ -863,10 +863,7 @@ class GalleryWidget(QWidget):
         self._apply_icon_size()
         self._placeholder_icon_key = None
         # Clear cache and reload thumbnails at new size
-        self.thumbnail_cache.clear()
-        self._loading_paths.clear()
-        self._active_thumbnail_requests.clear()
-        self._reload_all_thumbnails()
+        self.reload_thumbnails()
 
     def _set_preset_size(self, size):
         """Set thumbnail size from preset button."""
@@ -915,6 +912,13 @@ class GalleryWidget(QWidget):
                 self._set_item_icon(item, cached, path)
             else:
                 item.setIcon(self._placeholder_icon())
+
+    def reload_thumbnails(self):
+        """Drop every cached thumbnail and render the visible ones again."""
+        self.thumbnail_cache.clear()
+        self._loading_paths.clear()
+        self._active_thumbnail_requests.clear()
+        self._reload_all_thumbnails()
 
     def _reload_all_thumbnails(self):
         """Reload all thumbnails at current size."""
@@ -1328,7 +1332,4 @@ class GalleryWidget(QWidget):
         if self._save_dir != save_dir:
             self._save_dir = save_dir
             # Clear cache so thumbnails reload with annotations
-            self.thumbnail_cache.clear()
-            self._loading_paths.clear()
-            self._active_thumbnail_requests.clear()
-            self._reload_all_thumbnails()
+            self.reload_thumbnails()

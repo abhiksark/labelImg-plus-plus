@@ -382,20 +382,26 @@ def wheelEvent(self, ev):
 
 ### Pan Implementation
 
-Panning is on the **middle button**. Left-drag on empty pixels draws a
+Panning is on the **middle button**, and on **Ctrl+left-drag** from pixels
+where a plain left-drag would draw. A plain left-drag on empty pixels draws a
 rectangle instead (see below), and `Space` is already bound to `verify`, so
-it is not available as a pan modifier.
+it is not available as a pan modifier. Ctrl is read at press time only: Ctrl
+pressed during a drag that is already drawing keeps its `draw_square` meaning,
+and Ctrl+left on a shape, in a create mode, or on a locked canvas behaves as
+it does without Ctrl.
 
 ```python
 # In mousePressEvent, before the _locked guard so panning stays available
 # while the canvas is locked during video propagation:
 if ev.button() == Qt.MouseButton.MiddleButton:
     event_pos = ev.position().toPoint()
-    self._panning = True
-    self.pan_initial_pos = event_pos
-    self._pre_pan_cursor = self._cursor
-    self.override_cursor(CURSOR_MOVE)
+    self._begin_pan(event_pos, ev.button())
     return
+
+# Later in mousePressEvent, at the draw-first arming site:
+if selection is None and self._can_edit_draw_at(pos):
+    if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        self._begin_pan(event_pos, ev.button())
 
 # In mouseMoveEvent. Convert QPointF once before integer hit-testing/signals.
 event_pos = ev.position().toPoint()

@@ -62,7 +62,7 @@ from libs.core.settings import Settings
 from libs.core.commands import (
     UndoStack, CreateShapeCommand, DeleteShapeCommand, MoveShapeCommand,
     EditLabelCommand, EditPolygonVerticesCommand, EditKeypointsCommand,
-    EditShapeAttributesCommand, VideoModelCommand,
+    EditShapeAttributesCommand, SetClassColorCommand, VideoModelCommand,
 )
 from libs.core.shortcut_config import ShortcutConfig
 from libs.core.workspace_settings import (
@@ -130,7 +130,7 @@ from libs.formats import format_metadata
 
 # Utils
 from libs.utils.constants import (
-    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED,
+    SETTING_AUTO_SAVE, SETTING_AUTO_SAVE_ENABLED, SETTING_CLASS_COLORS,
     SETTING_AUTO_SAVE_INTERVAL, SETTING_DARK_MODE, SETTING_DRAW_SQUARE,
     SETTING_EDGE_ALIGNMENT, SETTING_FILENAME, SETTING_FILL_COLOR,
     SETTING_GALLERY_MODE, SETTING_GRID_ENABLED, SETTING_GRID_SIZE,
@@ -148,7 +148,8 @@ from libs.utils.constants import (
 )
 from libs.utils.utils import (
     new_icon, themed_icon, new_action, add_actions, format_shortcut, Struct,
-    generate_color_by_text, natural_sort
+    generate_color_by_text, natural_sort, class_color,
+    class_color_overrides, set_class_color, set_class_colors,
 )
 from libs.utils.dpi import get_dpi_scale_factor, scale_px
 from libs.utils.window_geometry import default_window_size, fit_to_available
@@ -160,6 +161,10 @@ from libs.utils.ustr import ustr
 
 
 __appname__ = 'labelImgPlusPlus'
+
+# An image load covers the view with the loading veil only once it has been
+# pending this long. A shorter load would only flash the veil over the image.
+LOADING_VEIL_DELAY_MS = 200
 
 
 class WindowMixin(object):
@@ -309,7 +314,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self._video_distinctness_debounce.timeout.connect(
             self._start_video_distinctness_refinement)
         self._load_request_id = 0
+        self._load_handle = None
         self._pending_navigation_index = None
+        # Request id and generation of the navigation load in flight, plus
+        # the newest target that key repeats asked for while it was decoding.
+        self._navigation_request = None
+        self._deferred_navigation_index = None
         self._prefetch_handles = {}
         self._navigation_direction = 0
         self._navigation_streak = 0
@@ -320,6 +330,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self._save_failure = None
         self._fit_scroll_reset_id = 0
         self._loading_veil = None
+        self._loading_veil_text = ''
+        self._loading_veil_timer = QTimer(self)
+        self._loading_veil_timer.setSingleShot(True)
+        self._loading_veil_timer.setInterval(LOADING_VEIL_DELAY_MS)
+        self._loading_veil_timer.timeout.connect(self._show_slow_load_veil)
 
         # Memory optimization for large images (Issue #31)
         self._image_scale_factor = 1.0  # Display size / Original size
@@ -1375,6 +1390,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # modern splitter restores only its validated workspace settings.
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
         Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
+        set_class_colors(settings.get(SETTING_CLASS_COLORS))
         self.canvas.set_drawing_color(self.line_color)
         # Add chris
         Shape.difficult = self.difficult
@@ -3584,12 +3600,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 if line_color:
                     shape.line_color = QColor(*line_color)
                 else:
-                    shape.line_color = generate_color_by_text(label)
+                    shape.line_color = class_color(label)
 
                 if fill_color:
                     shape.fill_color = QColor(*fill_color)
                 else:
-                    shape.fill_color = generate_color_by_text(label)
+                    shape.fill_color = class_color(label)
 
                 self.add_label(shape, refresh=False)
         for action in self.actions.onShapesPresent:
@@ -3870,7 +3886,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         old_label = shape.label
         shape.label = label
-        shape.line_color = generate_color_by_text(label)
+        shape.line_color = class_color(label)
         self.undo_stack.push(EditLabelCommand(
             self, shape, old_label, label))
         self.annotation_model.notify_identity_changed(identity)
@@ -3900,8 +3916,16 @@ class MainWindow(QMainWindow, WindowMixin):
                 and self._pending_provisional_shape is not shape):
             self._dismiss_class_picker(discard=False)
         self._pending_provisional_shape = shape
+        # Smart Select geometry is model output. It keeps a separate outline
+        # confirmation only when a preset class would commit it unseen;
+        # otherwise the class picker is that confirmation, in one step.
+        preset_class = (
+            self.use_default_label_checkbox.isChecked()
+            or (self.single_class_mode.isChecked()
+                and bool(self._session_last_class)))
         self._provisional_phase = (
-            'review' if self.canvas.mode == self.canvas.CREATE_SAM else 'class')
+            'review' if preset_class
+            and self.canvas.mode == self.canvas.CREATE_SAM else 'class')
         self.update_save_status(saved=not self.dirty)
         self._update_annotation_session_hint()
         self._sync_command_bar()
@@ -3984,7 +4008,7 @@ class MainWindow(QMainWindow, WindowMixin):
         video_before = (self.video_model.snapshot_state()
                         if self.document_kind == DocumentKind.VIDEO else None)
         shape = self.canvas.commit_provisional_shape(
-            text, generate_color_by_text(text))
+            text, class_color(text))
         self._pending_provisional_shape = None
         self._provisional_phase = None
         self.update_save_status(saved=not self.dirty)
@@ -6410,16 +6434,24 @@ class MainWindow(QMainWindow, WindowMixin):
         self._load_request_id += 1
         request_id = self._load_request_id
         generation = self._dataset_generation
+        # This request is now the only valid one, so nothing recorded for an
+        # older request may outlive it.
+        self._load_handle = None
+        self._navigation_request = None
+        self._deferred_navigation_index = None
         cached = (None if replacement_snapshot is not None
                   else self.frame_cache.get(file_path))
         self.canvas.setEnabled(False)
-        self._show_loading_veil('Loading %s…' % os.path.basename(file_path))
         if cached is not None:
+            # A cache hit commits on the next event-loop turn; no veil.
+            self._loading_veil_timer.stop()
             QTimer.singleShot(
                 0, lambda: self._on_image_result(
                     cached, request_id, generation,
                     replacement_snapshot))
             return None
+        self._show_loading_veil_if_slow(
+            'Loading %s…' % os.path.basename(file_path))
 
         resolver = (replacement_snapshot.resolver
                     if replacement_snapshot is not None
@@ -6442,6 +6474,7 @@ class MainWindow(QMainWindow, WindowMixin):
         handle = self.task_coordinator.submit(
             'interactive', load, priority=JobPriority.IMAGE_LOAD,
             key='image-load', latest=True, generation=generation)
+        self._load_handle = handle
         handle.result.connect(
             lambda result, rid=request_id, gen=generation:
             self._on_image_result(
@@ -6457,6 +6490,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if (request_id != self._load_request_id
                 or generation != self._dataset_generation):
             return
+        deferred = self._take_deferred_navigation()
         self._pending_navigation_index = None
         self.canvas.setEnabled(bool(self.file_path))
         self._hide_loading_veil()
@@ -6466,24 +6500,32 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.dataset_snapshot.image_paths:
                 self.annotation_catalog.start(self.dataset_snapshot)
         self.status('Error reading image: ' + message)
+        # Key repeats that arrived during the failed decode still name a
+        # target, so an unreadable image does not end a held navigation.
+        self._resume_deferred_navigation(deferred)
 
     def _on_image_result(self, result, request_id, generation,
                          replacement_snapshot=None):
         if (result is None or request_id != self._load_request_id
                 or generation != self._dataset_generation):
             return
+        deferred = self._take_deferred_navigation()
         if (replacement_snapshot is not None
                 and not self._commit_dataset_snapshot(replacement_snapshot)):
             self.canvas.setEnabled(bool(self.file_path))
             self._hide_loading_veil()
             return
         if not self._commit_image_result(result):
+            # The current image stays, so the next step starts from it.
+            self._pending_navigation_index = None
             self.canvas.setEnabled(bool(self.file_path))
             self._hide_loading_veil()
             return
         self.frame_cache.put(result)
-        self._pending_navigation_index = None
         self._hide_loading_veil()
+        if self._resume_deferred_navigation(deferred):
+            # The next decode is already running; prefetch once it commits.
+            return
         self._schedule_prefetch(result.path)
 
     def _commit_image_result(self, result):
@@ -6585,7 +6627,52 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             self._navigation_direction = direction
             self._navigation_streak = 1
-        return self.request_load_file(self.m_img_list[target])
+        if self._navigation_load_in_flight():
+            # Key auto-repeat can outrun a full-size decode. Superseding the
+            # in-flight load on every repeat would never let one commit, so
+            # it is left to finish and only the newest target is remembered.
+            self._deferred_navigation_index = target
+            return None
+        return self._start_navigation_load(target)
+
+    def _start_navigation_load(self, target):
+        """Load a navigation target and mark its request as coalescing."""
+        request_id = self._load_request_id
+        handle = self.request_load_file(self.m_img_list[target])
+        if self._load_request_id != request_id:
+            self._navigation_request = (
+                self._load_request_id, self._dataset_generation)
+        return handle
+
+    def _navigation_load_in_flight(self):
+        """Return whether a navigation load is still going to report back."""
+        if self._navigation_request != (
+                self._load_request_id, self._dataset_generation):
+            return False
+        # A cache hit has no handle; it commits on the next event-loop turn.
+        return (self._load_handle is None
+                or not self._load_handle.is_cancelled())
+
+    def _take_deferred_navigation(self):
+        """Close the current load and return the target queued behind it."""
+        target = self._deferred_navigation_index
+        self._load_handle = None
+        self._navigation_request = None
+        self._deferred_navigation_index = None
+        return target
+
+    def _resume_deferred_navigation(self, target):
+        """Start the newest deferred target; return whether a load began."""
+        if (target is None or not 0 <= target < len(self.m_img_list)
+                or self.m_img_list[target] == self.file_path):
+            self._pending_navigation_index = None
+            return False
+        self._pending_navigation_index = target
+        self._start_navigation_load(target)
+        if self._navigation_request is None:
+            self._pending_navigation_index = None
+            return False
+        return True
 
     def _schedule_prefetch(self, current_path):
         if current_path not in self._path_to_idx:
@@ -6932,6 +7019,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Preserve obsolete window/state bytes verbatim for downgrade use.
         settings[SETTING_LINE_COLOR] = self.line_color
         settings[SETTING_FILL_COLOR] = self.fill_color
+        settings[SETTING_CLASS_COLORS] = class_color_overrides()
         settings[SETTING_RECENT_FILES] = self.recent_files
         settings[SETTING_GALLERY_MODE] = self.gallery_mode_enabled
         if self.default_save_dir and os.path.exists(self.default_save_dir):
@@ -7624,7 +7712,22 @@ class MainWindow(QMainWindow, WindowMixin):
                 args={'images': len(snapshot.image_paths)})
         return True
 
+    def _show_loading_veil_if_slow(self, text):
+        """Cover the view only if the image load is still pending later."""
+        self._loading_veil_text = text
+        if self._loading_veil is not None and not self._loading_veil.isHidden():
+            self._loading_veil.setText(text)
+        elif not self._loading_veil_timer.isActive():
+            self._loading_veil_timer.start()
+
+    def _show_slow_load_veil(self):
+        handle = self._load_handle
+        if handle is None or handle.is_cancelled():
+            return
+        self._show_loading_veil(self._loading_veil_text)
+
     def _show_loading_veil(self, text):
+        self._loading_veil_timer.stop()
         if self._loading_veil is None:
             self._loading_veil = QLabel(self.centralWidget())
             self._loading_veil.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -7637,6 +7740,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._loading_veil.raise_()
 
     def _hide_loading_veil(self):
+        self._loading_veil_timer.stop()
         if self._loading_veil is not None:
             self._loading_veil.hide()
 
@@ -7889,8 +7993,10 @@ class MainWindow(QMainWindow, WindowMixin):
         # Navigation/completion callbacks are part of the exact save request.
         # If the user edited while that request was in flight, its older
         # revision may be safely written but must never move them away from
-        # the newer unsaved document.
-        if callable(on_success) and current_revision:
+        # the newer unsaved document. A save past its commit fence also
+        # survives shutdown, and its callback must not start work after it.
+        if (callable(on_success) and current_revision
+                and not self.task_coordinator.is_shutting_down):
             on_success()
 
     def _on_save_error(self, message, request=None, on_success=None,
@@ -8305,37 +8411,79 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.redo.setToolTip("Redo")
 
     def choose_shape_line_color(self):
-        if (self.document_kind == DocumentKind.VIDEO
-                and not self._ensure_video_editable()):
+        if self.document_kind != DocumentKind.VIDEO:
+            # An image shape is coloured by its class; a video track keeps its
+            # own colour in the project.
+            self._choose_class_color()
+            return
+        if not self._ensure_video_editable():
             return
         color = self.color_dialog.getColor(self.line_color, u'Choose Line Color',
                                            default=DEFAULT_LINE_COLOR)
         if color:
-            if self.document_kind == DocumentKind.VIDEO:
-                track_id = self.current_annotation_identity()
-                if track_id is None:
-                    return
-                before = self.video_model.snapshot_state()
-                self.video_model.update_track(track_id, color=color.getRgb())
-                after = self.video_model.snapshot_state()
-                self.undo_stack.push(VideoModelCommand(
-                    self, before, after, 'Change video track color'))
-                self._on_video_model_mutation()
-                self._materialize_video_frame(
-                    self.current_video_frame_ref.pts)
+            track_id = self.current_annotation_identity()
+            if track_id is None:
                 return
-            shape = self.canvas.selected_shape
-            if shape is None:
-                return
-            old_color = shape.line_color
+            before = self.video_model.snapshot_state()
+            self.video_model.update_track(track_id, color=color.getRgb())
+            after = self.video_model.snapshot_state()
+            self.undo_stack.push(VideoModelCommand(
+                self, before, after, 'Change video track color'))
+            self._on_video_model_mutation()
+            self._materialize_video_frame(
+                self.current_video_frame_ref.pts)
+
+    def _choose_class_color(self):
+        """Pick the colour for the class of the selected image shape.
+
+        The colour belongs to the label text. It is applied to every shape of
+        that class in the current image and kept in the application settings,
+        so it survives reloads, relabels and restarts. Choosing the generated
+        colour again (the dialog's Restore Defaults) drops the override.
+        """
+        shape = self.canvas.selected_shape
+        if shape is None or not shape.label:
+            return
+        label = shape.label
+        generated = generate_color_by_text(label)
+        color = self.color_dialog.getColor(
+            shape.line_color, u"Choose Color for Class '%s'" % label,
+            default=generated)
+        if not color:
+            return
+        shapes = [other for other in self.canvas.shapes
+                  if other.label == label]
+        before = (class_color_overrides().get(label),
+                  [(other, other.line_color) for other in shapes])
+        after = (None if color == generated else color,
+                 [(other, color) for other in shapes])
+        command = SetClassColorCommand(self, label, before, after)
+        command.execute()
+        self.undo_stack.push(command)
+        self.set_dirty()
+
+    def _apply_class_color(self, label, override, shape_colors):
+        """Remember (or forget) a class colour and repaint the given shapes.
+
+        Args:
+            label: Class label the colour belongs to.
+            override: QColor to keep for the class, or None to go back to the
+                generated colour.
+            shape_colors: (shape, line colour) pairs to apply.
+        """
+        set_class_color(label, override)
+        self.settings[SETTING_CLASS_COLORS] = class_color_overrides()
+        self.settings.save()
+        for shape, color in shape_colors:
             shape.line_color = color
-            self.undo_stack.push(EditShapeAttributesCommand(
-                self, shape, {'line_color': old_color},
-                {'line_color': color}, 'Change shape line color'))
             self.annotation_model.notify_identity_changed(
                 self.annotation_model.identity_for_shape(shape))
-            self.canvas.update()
-            self.set_dirty()
+        self.canvas.update()
+        # Thumbnails bake the class colour into their overlay.
+        for gallery in (self.gallery_widget,
+                        getattr(self, 'full_gallery', None)):
+            if gallery is not None:
+                gallery.reload_thumbnails()
 
     def choose_shape_fill_color(self):
         if (self.document_kind == DocumentKind.VIDEO

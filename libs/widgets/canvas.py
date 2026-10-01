@@ -212,10 +212,12 @@ class Canvas(QWidget):
         self._coordinate_timer.setSingleShot(True)
         self._coordinate_timer.timeout.connect(self._flush_coordinate_text)
 
-        # Panning. Middle-drag only: left-drag on empty pixels draws a
-        # rectangle (see _can_edit_draw_at), and Space is taken by "verify".
+        # Panning. Middle-drag, or Ctrl+left-drag from pixels where a plain
+        # left-drag would draw a rectangle (see _can_edit_draw_at). Space is
+        # taken by "verify".
         self.pan_initial_pos = QPoint()
         self._panning = False
+        self._pan_button = Qt.MouseButton.NoButton
         self._pre_pan_cursor = None
 
         # Draw-first: rectangle drawing from a left-drag while still in EDIT.
@@ -463,6 +465,15 @@ class Canvas(QWidget):
         self.update()
         return True
 
+    def _begin_pan(self, event_pos, button):
+        if self._panning:
+            return
+        self._panning = True
+        self._pan_button = button
+        self.pan_initial_pos = event_pos
+        self._pre_pan_cursor = self._cursor
+        self.override_cursor(CURSOR_MOVE)
+
     def _end_pan(self):
         if not self._panning:
             return
@@ -526,7 +537,7 @@ class Canvas(QWidget):
         # deliberately cumulative from the press point: scroll_request divides
         # by 120 and truncates, so incremental deltas would round to zero.
         if self._panning:
-            if not (Qt.MouseButton.MiddleButton & ev.buttons()):
+            if not (self._pan_button & ev.buttons()):
                 self._end_pan()
             else:
                 delta = event_pos - self.pan_initial_pos
@@ -735,12 +746,16 @@ class Canvas(QWidget):
                     self.h_shape.highlight_clear()
                     self.update()
                 self.h_vertex, self.h_shape = None, None
-                # Advertise drag-to-draw over empty image pixels. The shared
-                # predicate keeps the cursor honest: the letterbox around the
-                # image keeps the arrow, because a drag there will not draw.
-                self.override_cursor(
-                    CURSOR_DRAW if self._can_edit_draw_at(pos)
-                    else CURSOR_DEFAULT)
+                # Advertise drag-to-draw over empty image pixels, or the pan
+                # that Ctrl turns it into. The shared predicate keeps the
+                # cursor honest: the letterbox around the image keeps the
+                # arrow, because a drag there will neither draw nor pan.
+                if not self._can_edit_draw_at(pos):
+                    self.override_cursor(CURSOR_DEFAULT)
+                elif ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    self.override_cursor(CURSOR_GRAB)
+                else:
+                    self.override_cursor(CURSOR_DRAW)
 
     def _keypoint_at(self, pos):
         """Index of the placed keypoint within hover range of image-space pos.
@@ -767,10 +782,7 @@ class Canvas(QWidget):
         # (whose return would otherwise swallow middle clicks).
         if ev.button() == Qt.MouseButton.MiddleButton:
             if not self._edit_drag_draw:
-                self._panning = True
-                self.pan_initial_pos = event_pos
-                self._pre_pan_cursor = self._cursor
-                self.override_cursor(CURSOR_MOVE)
+                self._begin_pan(event_pos, ev.button())
             return
 
         pos = self.transform_pos(event_pos)
@@ -883,10 +895,15 @@ class Canvas(QWidget):
                 # Nothing under the cursor: arm a rectangle instead of the
                 # pan this used to start. A press that never crosses the drag
                 # threshold stays a plain deselect -- select_shape_point has
-                # already done that unconditionally.
+                # already done that unconditionally. Ctrl held at press time
+                # pans instead; Ctrl pressed later in the drag still means
+                # draw_square, because the gesture is decided here.
                 if selection is None and self._can_edit_draw_at(pos):
-                    self._edit_draw_origin = event_pos
-                    self._edit_draw_origin_image = pos
+                    if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                        self._begin_pan(event_pos, ev.button())
+                    else:
+                        self._edit_draw_origin = event_pos
+                        self._edit_draw_origin_image = pos
 
         elif ev.button() == Qt.MouseButton.RightButton and self.editing():
             if self._edit_drag_draw or self._edit_draw_origin is not None:
@@ -903,8 +920,10 @@ class Canvas(QWidget):
 
     def mouseReleaseEvent(self, ev):
         event_pos = ev.position().toPoint()
-        if ev.button() == Qt.MouseButton.MiddleButton:
+        if self._panning and ev.button() == self._pan_button:
             self._end_pan()
+            return
+        if ev.button() == Qt.MouseButton.MiddleButton:
             return
 
         if self._freehand_active and ev.button() == Qt.MouseButton.LeftButton:

@@ -121,6 +121,7 @@ stays armed, so consecutive polygons do not need `P` re-pressed.
 | Left Drag on vertex | Resize shape |
 | Right Click + Drag | Copy and move shape |
 | Middle Drag | Pan the image |
+| Ctrl + Left Drag on empty image | Pan the image (Select mode) |
 | Scroll Wheel | Scroll canvas |
 | Ctrl + Scroll | Zoom in/out |
 | Ctrl+Shift + Scroll | Adjust brightness |
