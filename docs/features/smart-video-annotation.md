@@ -111,9 +111,10 @@ confirmation. Video mutations use the same undo stack as image annotations.
 
 [MobileSAM Smart Select](sam-assisted-polygon.md) can create a manual box or
 polygon observation on a paused video frame when both the `sam` and `video`
-extras are installed. Outline approval still comes before class confirmation;
-fixed/repeat class strategies skip only class entry. This single-frame helper
-is separate from SAM 2 temporal propagation.
+extras are installed. Class confirmation is the single step that keeps or
+discards the result; fixed/repeat class strategies confirm the outline instead
+of entering a class. This single-frame helper is separate from SAM 2 temporal
+propagation.
 
 ## Whole-video propagation
 

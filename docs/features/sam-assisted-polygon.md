@@ -1,8 +1,8 @@
 <!-- docs/features/sam-assisted-polygon.md -->
 # Smart Select (SAM-assisted Box and Polygon)
 
-Click an object to propose a box or polygon, review its outline, then assign
-its class. Smart Select uses a MobileSAM ONNX encoder/decoder pair; it does not
+Click an object to propose a box or polygon, then confirm it by assigning its
+class. Smart Select uses a MobileSAM ONNX encoder/decoder pair; it does not
 require PyTorch.
 
 ## Install
@@ -27,7 +27,7 @@ Smart Select is unavailable with an install hint; manual annotation still
 works. See [Optional dependencies](../guides/optional-dependencies.md) for
 combined image/video installs.
 
-## First use and outline review
+## First use and confirmation
 
 1. Open an image and activate **Smart Select** in the workspace tool rail
    (the corresponding menu action is **SAM Segment**).
@@ -36,18 +36,22 @@ combined image/video installs.
    download if needed; it does not wait for the first object click. Changing
    images while the tool stays enabled prepares the next image. Subsequent
    clicks on the same image reuse its embedding.
-3. Click inside an object. Review the provisional geometry beside the
-   **Use outline (Enter)** and **Try again (Esc)** controls. Press `Enter` to
-   use it, or `Escape` to discard it and try another point.
-4. After outline approval, choose or type a class in the inline picker and
-   confirm it. **Fixed class** or **Repeat last**, when a class is
-   available, skips only this class-entry stage—not outline review.
+3. Click inside an object. The inline class picker opens beside the
+   provisional geometry. Choose or type a class and press `Enter` to keep the
+   result, or press `Escape` to discard it and try another point. This is the
+   same single step as a manually drawn box or polygon.
+4. With **Fixed class** or **Repeat last**, when a class is available, there
+   is no class to enter. The picker instead names that class on its confirm
+   button, for example **Use outline as car (Enter)**, beside **Try again
+   (Esc)**, so the outline is still confirmed once before it is committed.
 5. Continue clicking objects; Smart Select stays active. Committed annotations
    can be edited and undone with `Ctrl+Z` like manually drawn shapes.
 
-![Smart Select Box outline review](../screenshots/readme/smart-select-box.png)
+The screenshots below show the outline confirmation from step 4.
 
-![Smart Select Polygon outline review](../screenshots/readme/smart-select-polygon.png)
+![Smart Select Box outline confirmation](../screenshots/readme/smart-select-box.png)
+
+![Smart Select Polygon outline confirmation](../screenshots/readme/smart-select-polygon.png)
 
 Screenshot photograph: Alvesgaspar, **Cat November 2010-1a**, CC BY-SA 3.0.
 These annotated screenshot adaptations use the same license; see
@@ -92,8 +96,8 @@ for arbitrary checkpoints.
 ## Video use
 
 With both `sam` and `video` extras installed, Smart Select can create a manual
-box or polygon observation on a paused video frame using the same outline and
-class review. This MobileSAM helper does not propagate masks through time.
+box or polygon observation on a paused video frame using the same single
+confirmation. This MobileSAM helper does not propagate masks through time.
 The separately configured **SAM 2** backend handles temporal propagation; see
 [Smart video annotation](smart-video-annotation.md#optional-sam-2-backend).
 
