@@ -10,6 +10,7 @@ import importlib.util
 from abc import ABC, abstractmethod
 
 _REQUIRED_MODULES = ("onnxruntime", "numpy", "cv2")
+_CPU_PROVIDERS = ("CPUExecutionProvider",)
 
 
 class SegmentationBackend(ABC):
@@ -48,19 +49,53 @@ class OnnxSamBackend(SegmentationBackend):
     The encoder graph embeds preprocessing (normalize + pad), so set_image
     only resizes the longest side to TARGET_SIDE. The decoder was exported
     with return_single_mask, so predict needs no score argmax.
+
+    get_available_providers() lists providers compiled into the installed
+    runtime, not providers whose native libraries load. With onnxruntime-gpu
+    but no cuDNN, sessions build on CUDA and the first Conv fails at run time,
+    so any accelerated-provider failure rebuilds both sessions on CPU.
     """
 
     TARGET_SIDE = 1024
 
     def __init__(self, encoder_path, decoder_path):
         import onnxruntime as ort
+        self._model_paths = (encoder_path, decoder_path)
         providers = ort.get_available_providers()
-        self._encoder = ort.InferenceSession(encoder_path, providers=providers)
-        self._decoder = ort.InferenceSession(decoder_path, providers=providers)
+        try:
+            self._create_sessions(providers)
+        except Exception:
+            if list(providers) == list(_CPU_PROVIDERS):
+                raise
+            self._create_sessions(_CPU_PROVIDERS)
         self._embeddings = None
         self._orig_size = None      # (h, w) of the original image
         self._scale = None          # (sx, sy): resized / original
         self._model_loaded = True
+
+    def _create_sessions(self, providers):
+        import onnxruntime as ort
+        encoder_path, decoder_path = self._model_paths
+        self._encoder = ort.InferenceSession(
+            encoder_path, providers=list(providers))
+        self._decoder = ort.InferenceSession(
+            decoder_path, providers=list(providers))
+
+    def _uses_accelerator(self):
+        return any(
+            provider not in _CPU_PROVIDERS
+            for session in (self._encoder, self._decoder)
+            for provider in session.get_providers()
+        )
+
+    def _run(self, session_attr, feeds):
+        try:
+            return getattr(self, session_attr).run(None, feeds)
+        except Exception:
+            if not self._uses_accelerator():
+                raise
+            self._create_sessions(_CPU_PROVIDERS)
+            return getattr(self, session_attr).run(None, feeds)
 
     def set_image(self, rgb):
         import cv2
@@ -73,8 +108,8 @@ class OnnxSamBackend(SegmentationBackend):
         new_h = max(1, round(h * scale))
         resized = cv2.resize(rgb, (new_w, new_h),
                              interpolation=cv2.INTER_LINEAR)
-        self._embeddings = self._encoder.run(
-            None, {"input_image": resized.astype(np.float32)})[0]
+        self._embeddings = self._run(
+            "_encoder", {"input_image": resized.astype(np.float32)})[0]
         self._orig_size = (h, w)
         self._scale = (new_w / w, new_h / h)
 
@@ -88,7 +123,7 @@ class OnnxSamBackend(SegmentationBackend):
         coords = [[x * sx, y * sy] for x, y in points] + [[0.0, 0.0]]
         marks = list(labels) + [-1]
         h, w = self._orig_size
-        masks, _, _ = self._decoder.run(None, {
+        masks, _, _ = self._run("_decoder", {
             "image_embeddings": self._embeddings,
             "point_coords": np.array([coords], dtype=np.float32),
             "point_labels": np.array([marks], dtype=np.float32),
